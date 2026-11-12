@@ -1,6 +1,7 @@
 # Winston: Initial Plan
 
-Status: **draft for Adam's sign-off** (2026-11-11). Nothing is built yet.
+Status: **all questions answered** (2026-11-12). Waiting for Adam's go to
+start M0. Nothing is built yet.
 
 Winston is a personal iOS and Mac app for talking to Adam's two Claude bots
 over Telegram. One bot runs on the daily-driver laptop, the other on the
@@ -375,7 +376,11 @@ never depends on it.
 - **Q8, coordinator instructions:** not now. iOS side only (see "Bot-side
   change (deferred)").
 
-### Open
+- **Q9, offline prompt:** not handled in v1. Adam: "don't worry about prompts
+  on the ib side". If the prompt shows up, Adam switches to text mode and
+  types `y`. The original question is kept below for reference.
+
+### Background on Q9 (not in v1)
 
 9. **Offline prompt.** When a message reaches a laptop whose coordinator
    isn't running, the bot drops that message and replies "The coordinator is
@@ -408,3 +413,5 @@ Also needed before M1: an `api_id` and `api_hash` from my.telegram.org.
 - Reaction emoji other than 👍, quote-replies, sending documents or voice
   notes, and multi-photo albums.
 - Any chats other than the two bot chats.
+- Special handling for the offline "(y/n)" prompt (Q9).
+- Any bot-side or itsybitsy changes.
