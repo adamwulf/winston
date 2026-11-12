@@ -375,9 +375,9 @@ never depends on it.
 - **Q8, coordinator instructions:** not now. iOS side only (see "Bot-side
   change (deferred)").
 
-- **Q9, offline prompt:** not handled in v1. Adam: "don't worry about prompts
-  on the ib side". If the prompt shows up, Adam switches to text mode and
-  types `y`. The original question is kept below for reference.
+- **Q9, offline prompt:** passed through like any other message: it's shown,
+  and spoken in voice mode, with no special handling. To answer it, Adam
+  types `y` in text mode. The original question is kept below for reference.
 
 ### Background on Q9 (not in v1)
 
