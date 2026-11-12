@@ -14,8 +14,25 @@ public struct Utterance: Sendable, Equatable {
 
     /// The Telegram message body: `🎙️ <text>`, plus ` (alt: …)` when the recognizer
     /// heard something different. Always a single message.
+    ///
+    /// At most two alternates are included, and only ones that differ from `text` (and from
+    /// each other) after trimming, ignoring case. Line breaks become spaces, so the message is
+    /// always one line.
     public var messageText: String {
-        // Implemented in the VoiceLoop work (see PLAN.md, "Voice mode").
-        "🎙️ " + text
+        let main = Self.singleLine(text)
+        var seen: Set<String> = [main.lowercased()]
+        var alternates: [String] = []
+        for alternative in alternatives where alternates.count < 2 {
+            let line = Self.singleLine(alternative)
+            guard !line.isEmpty, seen.insert(line.lowercased()).inserted else { continue }
+            alternates.append(line)
+        }
+        guard !alternates.isEmpty else { return "🎙️ " + main }
+        return "🎙️ \(main) (alt: \(alternates.joined(separator: "; ")))"
+    }
+
+    /// Trims `text` and collapses every run of whitespace, including line breaks, to one space.
+    static func singleLine(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 }
