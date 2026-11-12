@@ -48,6 +48,30 @@ public final class VoiceLoop {
     /// Stops speaking and clears the queue.
     public func stopSpeaking() {
     }
+
+    /// Installed voices for the current language, best quality first, for a settings picker.
+    public static func availableVoices() -> [VoiceOption] {
+        []
+    }
+}
+
+/// A text-to-speech voice the user can pick.
+public struct VoiceOption: Identifiable, Hashable, Sendable {
+    /// `AVSpeechSynthesisVoice.identifier`.
+    public let id: String
+    public let name: String
+    public let quality: Quality
+
+    public enum Quality: Int, Comparable, Sendable {
+        case standard, enhanced, premium
+        public static func < (lhs: Quality, rhs: Quality) -> Bool { lhs.rawValue < rhs.rawValue }
+    }
+
+    public init(id: String, name: String, quality: Quality) {
+        self.id = id
+        self.name = name
+        self.quality = quality
+    }
 }
 
 public enum VoiceLoopError: Error, Sendable, Equatable {
