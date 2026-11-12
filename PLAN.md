@@ -261,8 +261,7 @@ Inside it:
   needed.
 - **Incoming:** reactions the coordinator adds (`ib tgreact`) arrive as
   `updateMessageInteractionInfo` and show under the bubble. There is no
-  automatic 👀 "received" ack unless the coordinator's instructions ask for
-  one (see Q8).
+  automatic 👀 "received" ack, so the app never waits for one.
 
 ### Photos
 
@@ -301,7 +300,7 @@ Inside it:
   barge-in. Audio and echo cancellation can't be tested meaningfully in the
   Simulator.
 - **Integration facts to confirm live in M1:** reactions reaching the
-  coordinator in a private chat, photo delivery, and the offline y/n prompt.
+  coordinator in a private chat, and photo delivery.
   These come from reading the code, not from testing.
 
 ## Risks
