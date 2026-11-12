@@ -1,0 +1,8 @@
+// Build settings shared by every configuration of the Winston app target.
+
+// Telegram API credentials from https://my.telegram.org (API development tools).
+// Real values go in Secrets.xcconfig, which is gitignored. Copy Secrets.example.xcconfig to start.
+TG_API_ID = 0
+TG_API_HASH =
+
+#include? "Secrets.xcconfig"
