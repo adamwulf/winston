@@ -24,7 +24,13 @@ let package = Package(
             ]
         ),
         .target(name: "VoiceLoop"),
-        .testTarget(name: "TelegramLinkTests", dependencies: ["TelegramLink"]),
+        .testTarget(
+            name: "TelegramLinkTests",
+            dependencies: [
+                "TelegramLink",
+                .product(name: "TDLibKit", package: "TDLibKit"),
+            ]
+        ),
         .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop"]),
     ]
 )
