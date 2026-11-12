@@ -155,6 +155,7 @@ public enum ChatEvent: Sendable {
     case typing(chat: ChatID, isTyping: Bool)
     /// A pending outgoing message was accepted by the server and got its final ID.
     case sendSucceeded(chat: ChatID, oldID: MessageID, message: ChatMessage)
+    /// A pending outgoing message failed to send. `message` is its temporary (pending) ID.
     case sendFailed(chat: ChatID, message: MessageID, error: String)
 }
 
