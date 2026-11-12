@@ -24,13 +24,13 @@ config is listed separately at the end.
 
 ## Key decisions
 
-- **The app is a Telegram *user* client, not a bot.** The bots run the Claude
-  Code Telegram channel plugin, which long-polls `getUpdates` with the bot
-  token. Telegram allows exactly one `getUpdates` consumer per token (see the
-  comment above the PID-file handling in the plugin's `server.ts`). So the app
-  logs in as Adam once with TDLib: phone number, then a code, then the 2FA
-  password if one is set. To the app, each bot is just a private chat, the same
-  way Adam's Mac Telegram app sees it.
+- **The app is a Telegram *user* client, not a bot.** The bots already consume
+  their tokens' updates, and Telegram allows only one consumer per token: one
+  `getUpdates` poller or one webhook. The bots run itsybitsy's Telegram
+  integration, not the official Claude Code plugin; its details are being
+  confirmed. So the app logs in as Adam once with TDLib: phone number, then a
+  code, then the 2FA password if one is set. To the app, each bot is just a
+  private chat, the same way Adam's Mac Telegram app sees it.
 - **TDLibKit** (`github.com/Swiftgram/TDLibKit`) wraps Telegram's official
   TDLib for SPM. It is actively maintained: the latest release is
   `1.5.2-tdlib-1.8.69`, from 2026-11-11. It has an async/await API and supports
@@ -40,8 +40,11 @@ config is listed separately at the end.
   `Info.plist` as build settings, and the app reads them at runtime.
 - **Native multiplatform SwiftUI**: one app target for iOS and macOS, no
   Catalyst. TDLibKit, Speech and AVFoundation all run on both platforms.
+  **Both platforms ship to TestFlight** (Adam confirmed). One bundle ID,
+  `com.milestonemade.winston`, and one App Store Connect record cover both. The Mac build runs in the App
+  Sandbox with the network-client and audio-input entitlements.
 - **Speech-to-text:** `SpeechAnalyzer` with `SpeechTranscriber`, on-device.
-  This sets the minimum OS to iOS 26 / macOS 26.
+  **The minimum OS is iOS 26 / macOS 26** (Adam confirmed).
 - **Text-to-speech:** `AVSpeechSynthesizer.write(_:toBufferCallback:)` renders
   speech into buffers. They play through the same `AVAudioEngine` whose input
   node has `setVoiceProcessingEnabled(true)`, so Apple's echo cancellation
@@ -219,11 +222,11 @@ Inside it:
 
 | # | Milestone | Done when | Est. |
 |---|-----------|-----------|------|
-| M0 | Skeleton | Package and app build for iOS and macOS with `xcodebuild`, the tests run, and `Secrets.xcconfig` is wired up. Adam has an `api_id`/`api_hash`, a bundle ID and an App Store Connect record. | 0.25d |
+| M0 | Skeleton | Package and app build for iOS and macOS with `xcodebuild`, the tests run, and `Secrets.xcconfig` is wired up. Adam has an `api_id`/`api_hash`, a bundle ID and an App Store Connect record for iOS and macOS. | 0.25d |
 | M1 | Text client | On a device: log in, pick a bot, see history, send and receive text, see edits live, send a photo, toggle 👍 on the latest bot message, see the bot's 👀/reactions on Adam's messages. | 1–1.5d |
 | M2 | Voice with headphones | Voice mode with AirPods: speak, pause, the message is sent with 🎙️, the reply is spoken, and talking over the reply stops it. | 0.5–1d |
 | M3 | Barge-in on the speaker | The same loop on the phone speaker without the app interrupting itself; tested in a quiet room and with background noise. | 0.5–1d |
-| M4 | TestFlight | Archive and upload for iOS (and macOS if wanted), installed from TestFlight. | 0.25–0.5d |
+| M4 | TestFlight (iOS + Mac) | Archive and upload both the iOS and macOS builds; both install from TestFlight. The Mac build passes sandbox checks, and the voice loop works on the Mac. | 0.5d |
 
 ## Testing
 
@@ -255,6 +258,11 @@ Inside it:
    the app binary is large. That doesn't matter for TestFlight.
 
 ## Bot-side items (optional, outside the app)
+
+> **On hold.** This section analyzed the official Claude Code Telegram plugin,
+> but the bots run itsybitsy's Telegram integration. It will be rewritten once
+> the integration's behavior is confirmed: transport, reactions, edits,
+> buttons, photos.
 
 None of these are needed for the app to work. Each one is Adam's call.
 
@@ -301,7 +309,10 @@ None of these are needed for the app to work. Each one is Adam's call.
 
 ## Open questions for Adam
 
-1. **Claude seeing reactions.** Which of these?
+Q1, Q2 and Q8 are on hold until the itsybitsy integration is confirmed. Q5
+and Q6 are answered, and Q7 is partly answered.
+
+1. **(On hold) Claude seeing reactions.** Which of these?
    - (a) Fork the plugin, described above. Claude sees real reactions. This
      needs the dev-channels flag and an interactive confirmation every time a
      bot starts. Does that fit how the always-on laptop launches its session?
@@ -312,7 +323,7 @@ None of these are needed for the app to work. Each one is Adam's call.
 
    If (a), I recommend a separate repo for the fork: it's TypeScript with its
    own lifecycle and marketplace.
-2. **Permission prompts.** Do the bots ever send `🔐 Permission: <tool>`
+2. **(On hold) Permission prompts.** Do the bots ever send `🔐 Permission: <tool>`
    prompts? The plugin sends them with inline **Allow/Deny** buttons, and the
    request ID only exists in the button data. If the app doesn't render those
    buttons, Adam can't approve from the app. Supporting them is small: render
@@ -329,12 +340,12 @@ None of these are needed for the app to work. Each one is Adam's call.
 4. **Always listening.** Is "send everything after a pause" OK, with the live
    transcript and Discard button as the safety net? The alternative is an
    optional push-to-talk. **Recommendation:** as specified, plus Discard.
-5. **Mac in v1?** The plan is one multiplatform target with the iPhone tested
-   first. Is the Mac a v1 TestFlight target, or just "it builds"?
-6. **Minimum OS.** Is iOS 26 / macOS 26 OK? `SpeechAnalyzer` requires it.
-7. **App identity.** The app name ("Winston"?), the bundle ID, and the
-   developer team for signing and App Store Connect.
-8. **Bot-side config.** OK to set `ackReaction: "👀"` and add the 🎙️ line to
+5. ~~Mac in v1?~~ **Answered:** both iOS and Mac ship to TestFlight (M4).
+6. ~~Minimum OS?~~ **Answered:** iOS 26 / macOS 26.
+7. **App identity.** **Partly answered:** the app is named Winston, and the
+   bundle ID is `com.milestonemade.winston`. Still needed: the developer team
+   for signing and App Store Connect.
+8. **(On hold) Bot-side config.** OK to set `ackReaction: "👀"` and add the 🎙️ line to
    CLAUDE.md on both laptops? Adam can make these edits himself, or an agent
    with access to those machines can.
 
