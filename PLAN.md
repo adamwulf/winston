@@ -222,6 +222,9 @@ Inside it:
 - The voice/text toggle switches modes. Voice mode replaces the text field
   with a live transcript and a **Discard** button that drops the current
   utterance before it's sent.
+- **Background:** the app has the `audio` background mode. Once voice mode
+  starts, it keeps listening, receiving replies and speaking them with the
+  phone locked or another app in front. iOS shows the orange mic indicator.
 - **Listening:** the mic stays on while voice mode is active. Once the
   transcript has stopped changing for `pauseThreshold`, it is sent as **one**
   message:
@@ -279,9 +282,9 @@ Inside it:
 
 | # | Milestone | Done when | Est. |
 |---|-----------|-----------|------|
-| M0 | Skeleton | Package and app build for iOS and macOS with `xcodebuild`, the tests run, and `Secrets.xcconfig` is wired up. Adam has an `api_id`/`api_hash` and a signing team. | 0.25d |
-| M1 | Text client | On a device: log in, pick a bot, see history, send and receive text, send a photo, open a document the bot sent, toggle 👍 on the latest bot message and confirm the coordinator sees it, see reactions the coordinator adds. | 1–1.5d |
-| M2 | Voice with headphones | Voice mode with AirPods: speak, pause, the message is sent with 🎙️ (and alternates when they differ), the reply is spoken, and talking over the reply stops it. | 0.5–1d |
+| M0 | Skeleton | Package and app build for iOS and macOS with `xcodebuild`, the tests run, and `Secrets.xcconfig` is wired up. Automatic signing with Adam's Xcode team for device runs; the TestFlight team is set up later (Q7). | 0.25d |
+| M1 | Text client | Needs Adam's `api_id`/`api_hash`. On a device: log in, pick a bot, see history, send and receive text, send a photo, open a document the bot sent, toggle 👍 on the latest bot message and confirm the coordinator sees it, see reactions the coordinator adds. | 1–1.5d |
+| M2 | Voice with headphones | Voice mode with AirPods: speak, pause, the message is sent with 🎙️ (and alternates when they differ), the reply is spoken, and talking over the reply stops it. This also works with the phone locked (`audio` background mode). | 0.5–1d |
 | M3 | Barge-in on the speaker | The same loop on the phone speaker without the app interrupting itself; tested in a quiet room and with background noise. | 0.5–1d |
 | M4 | TestFlight (iOS + Mac) | An App Store Connect record exists for `com.milestonemade.winston`; both the iOS and macOS builds are archived, uploaded and installed from TestFlight; the Mac build passes sandbox checks, and the voice loop works on the Mac. | 0.5d |
 
@@ -308,16 +311,17 @@ Inside it:
    volume a little. If neither is enough, barge-in on the built-in speaker
    becomes tap-to-stop, and barge-in stays automatic with headphones.
 2. **Misheard words lead to wrong actions (medium).** This already happened
-   ("red" for "read"). The mitigations are the 🎙️ tag, alternates in the
-   message, and a coordinator instruction to confirm ambiguous actions from
-   🎙️ messages (Q8).
+   ("red" for "read"). The mitigations are the 🎙️ tag and alternates in the
+   message. A coordinator instruction to confirm ambiguous actions is
+   deferred (Q8).
 3. **Always-on mic picks up other people (low to medium).** Anything said near
    the phone in voice mode gets sent. Voice mode is an explicit toggle, and
    the live transcript plus the Discard button give Adam a chance to catch it.
-   See Q4.
-4. **iOS suspends the app in the background.** By default, listening,
-   speaking and receiving replies all stop when the app is backgrounded or the
-   screen locks. Replies can take minutes, so this matters. See Q3.
+4. **Background audio has limits (low).** With the `audio` background mode,
+   the session has to start in the foreground. Another app that takes the
+   audio session (a phone call, Siri, music) can end it, and voice mode then
+   needs restarting when Adam reopens the app. The app restarts listening
+   after an audio interruption ends, wherever iOS allows.
 5. **Account flagging (low).** Telegram sometimes flags accounts used through
    new, unofficial `api_id`s, mostly for spam-like automation. This app is
    one person reading and writing two private bot chats at about 1 message per
@@ -325,13 +329,18 @@ Inside it:
 6. **TDLib's footprint.** The first package resolve is a ~300 MB download, and
    the app binary is large. That doesn't matter for TestFlight.
 
-## Bot-side change (optional)
+## Bot-side change (deferred)
 
-The bot integration needs no changes. Reactions, photos and the allowlist all
-work today. The one optional change is the system coordinator's instructions
-in `~/.itsybitsy/agent-types/system-coordinator.md` **on both machines**. Its
+**Not doing this now.** Adam wants the iOS side only (Q8). The bot
+integration needs no changes for the app to work: reactions, photos and the
+allowlist all work today. The app still sends the `🎙️ ` prefix and
+`(alt: …)` on spoken messages, and Claude can read those without
+instructions.
+
+For later, the optional change is the system coordinator's instructions in
+`~/.itsybitsy/agent-types/system-coordinator.md` **on both machines**. Its
 body is injected at session start, so the coordinator needs a respawn after
-the edit. This is Adam's file (see Q8). Suggested text:
+the edit. This is Adam's file. Suggested text:
 
 > Messages beginning with 🎙️ were spoken and your reply will be read aloud.
 > Reply via `ib tgsend` in 1–3 short plain sentences: no markdown, code,
@@ -352,31 +361,33 @@ never depends on it.
   reactions to the coordinator, so no fork is needed.
 - **Q2, permission prompts and buttons:** none exist. Approvals never go to
   Telegram, and there are no inline buttons.
+- **Q3, listening with the screen locked:** yes. The `audio` background mode
+  keeps voice mode listening, speaking and receiving replies with the phone
+  locked.
+- **Q4, always listening:** as specified, with the Discard button. No
+  push-to-talk.
 - **Q5, Mac:** both iOS and Mac ship to TestFlight.
 - **Q6, minimum OS:** iOS 26 / macOS 26.
+- **Q7, signing team:** Adam will set it up after the first draft build. The
+  draft uses automatic signing with whatever team Adam's Xcode has. The
+  Allume membership (apple@allume.com) expires around Dec 4; renew it before
+  M4 if that's the team.
+- **Q8, coordinator instructions:** not now. iOS side only (see "Bot-side
+  change (deferred)").
 
 ### Open
 
-3. **Listening with the screen locked.** Turning on the `audio` background
-   mode keeps voice mode listening, speaking *and receiving replies* with the
-   phone locked in a pocket (with AirPods). The listening has to start in the
-   foreground, and iOS shows the orange mic indicator. It's mostly
-   configuration. **Recommendation:** include it. Replies take minutes, so
-   foreground-only would miss most of them.
-4. **Always listening.** Is "send everything after a pause" OK, with the live
-   transcript and Discard button as the safety net? The alternative is an
-   optional push-to-talk. **Recommendation:** as specified, plus Discard.
-7. **Signing team.** Which Apple Developer team should own
-   `com.milestonemade.winston`? The Allume membership (apple@allume.com)
-   expires around Dec 4. If it's that team, renew it before M4. A separate
-   Milestone Made team works too if one exists. This blocks M4 only.
-8. **Coordinator instructions.** OK to add the 🎙️ text above, and optionally
-   the 👀-on-receipt line, to `system-coordinator.md` on both machines? Who
-   makes the edit and the respawn?
-9. **Offline prompt.** The bot sometimes sends "The coordinator is offline.
-   Start the coordinator? (y/n)". It accepts only a whole message of
-   `y`/`yes`/`n`/`no` (any case), so "🎙️ yes" or a merged batch just
-   re-prompts. The proposal:
+9. **Offline prompt.** When a message reaches a laptop whose coordinator
+   isn't running, the bot drops that message and replies "The coordinator is
+   offline. Start the coordinator? (y/n)". The next message is treated as the
+   answer:
+   - `y` or `yes` starts the coordinator, and the bot replies "online".
+   - `n` or `no` leaves it off, and the bot replies "leaving offline".
+   - Anything else gets asked again. That includes "🎙️ yes" from voice mode
+     and messages merged into one batch.
+
+   The message that triggered the prompt is lost, so Adam re-sends it after
+   answering. The proposal:
    - When that exact text is the latest bot message, the prompt is
      *pending*. The app shows **Yes / No** buttons that send a bare `y` or
      `n`.
@@ -384,7 +395,8 @@ never depends on it.
      as a bare `y` or `n`, with no 🎙️ prefix and no alternates.
    - Any other message is held, not sent, until the prompt is answered.
 
-   **Recommendation:** yes. It's small.
+   **Recommendation:** yes. It's small. Without it, Adam switches to text
+   mode and types `y`.
 
 Also needed before M1: an `api_id` and `api_hash` from my.telegram.org.
 
