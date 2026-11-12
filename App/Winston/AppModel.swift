@@ -43,7 +43,8 @@ final class AppModel {
     /// A user-facing error from the last action. The chat screen shows it in an alert.
     var errorMessage: String?
 
-    /// Nil without credentials, and in previews.
+    /// Nil without credentials, and in previews. One instance for the app's lifetime: once started it must
+    /// never be deallocated, because TDLib's client manager blocks while tearing down.
     private let link: TelegramLink?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isLoadingChats = false
@@ -203,15 +204,20 @@ final class AppModel {
         do {
             chats = try await link.botChats()
             chatsLoaded = true
-            for chat in chats {
+        } catch {
+            chatsError = userMessage(for: error)
+            return
+        }
+        for chat in chats {
+            do {
                 let history = try await link.history(in: chat.id, limit: 50)
                 // Keep anything that arrived as an event while the history was loading.
                 let historyIDs = Set(history.map(\.id))
                 let newer = (messages[chat.id] ?? []).filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
+            } catch {
+                errorMessage = "Couldn't load the history for \(chat.title): \(userMessage(for: error))"
             }
-        } catch {
-            chatsError = userMessage(for: error)
         }
     }
 
@@ -294,6 +300,8 @@ final class AppModel {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 throw PhotoFiles.Failure.unreadableImage
             }
+            // TDLib uploads after sendPhoto returns, and the sent message's photo can keep pointing at this
+            // file, so it stays in the temporary directory for the system to clean up.
             let fileURL = try await PhotoFiles.jpegForSending(from: data)
             try await link.sendPhoto(fileURL: fileURL, caption: caption.isEmpty ? nil : caption, to: chat.id)
             return true

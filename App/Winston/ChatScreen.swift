@@ -56,11 +56,15 @@ struct ChatScreen: View {
                 }
             }
         } else if model.chatsLoaded {
-            ContentUnavailableView(
-                "No Bot Chats",
-                systemImage: "bubble.left.and.bubble.right",
-                description: Text("Start a chat with your bots in Telegram, then reopen Winston.")
-            )
+            ContentUnavailableView {
+                Label("No Bot Chats", systemImage: "bubble.left.and.bubble.right")
+            } description: {
+                Text("Start a chat with your bots in Telegram, then reload.")
+            } actions: {
+                Button("Reload") {
+                    Task { await model.loadChats() }
+                }
+            }
         } else {
             ProgressView()
         }

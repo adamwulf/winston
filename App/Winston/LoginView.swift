@@ -67,8 +67,12 @@ struct LoginView: View {
             submitButton("Log In") { try await model.submitPassword(input) }
         case .loggingOut:
             ProgressView("Logging out…")
-        case .unsupported(let name):
-            Text("Telegram is asking for a login step Winston doesn't support (\(name)). Finish logging in with another Telegram app, then reopen Winston.")
+        case .unsupported(let reason):
+            // Either a login step Winston doesn't handle, or a setup failure such as a bad api_id/api_hash.
+            Text("Winston can't continue logging in:")
+            Text(reason)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
         }
     }
 
