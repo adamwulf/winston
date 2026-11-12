@@ -340,7 +340,9 @@ the edit. This is Adam's file (see Q8). Suggested text:
 > action is ambiguous or could be misheard, confirm before acting.
 
 Optional extra line: *"React 👀 (`ib tgreact`) to each message when you start
-working on it."* This gives the app a visible "received" signal.
+working on it."* This gives the app a visible "received" signal. The
+coordinator issues it on a best-effort basis, so the app only displays it and
+never depends on it.
 
 ## Questions for Adam
 
@@ -371,10 +373,17 @@ working on it."* This gives the app a visible "received" signal.
 8. **Coordinator instructions.** OK to add the 🎙️ text above, and optionally
    the 👀-on-receipt line, to `system-coordinator.md` on both machines? Who
    makes the edit and the respawn?
-9. **Offline prompt.** When the bot sends "The coordinator is offline. Start
-   the coordinator? (y/n)", should the app show **Yes / No** buttons that send
-   a plain `y`/`n`, and in voice mode send a spoken "yes"/"no" as `y`/`n`
-   without the 🎙️ prefix? Otherwise a spoken "🎙️ yes" may not match.
+9. **Offline prompt.** The bot sometimes sends "The coordinator is offline.
+   Start the coordinator? (y/n)". It accepts only a whole message of
+   `y`/`yes`/`n`/`no` (any case), so "🎙️ yes" or a merged batch just
+   re-prompts. The proposal:
+   - When that exact text is the latest bot message, the prompt is
+     *pending*. The app shows **Yes / No** buttons that send a bare `y` or
+     `n`.
+   - In voice mode, the app speaks the prompt. A spoken "yes" or "no" is sent
+     as a bare `y` or `n`, with no 🎙️ prefix and no alternates.
+   - Any other message is held, not sent, until the prompt is answered.
+
    **Recommendation:** yes. It's small.
 
 Also needed before M1: an `api_id` and `api_hash` from my.telegram.org.
