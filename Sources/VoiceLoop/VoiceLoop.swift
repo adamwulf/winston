@@ -712,7 +712,9 @@ public final class VoiceLoop {
             playback.receive(buffer)
         }
         pipeline.player.play()
-        pipeline.timeline.speechStarted(playback, at: started, chars: text.count, queued: speechQueue.count)
+        pipeline.timeline.speechStarted(at: started, chars: text.count, queued: speechQueue.count) {
+            playback.firstAudioHostTime
+        }
     }
 
     private func speechFinished(_ playback: SpeechPlayback) {

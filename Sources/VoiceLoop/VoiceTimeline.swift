@@ -123,6 +123,12 @@ final class MicrophoneTimeline: Sendable {
     }
 
     private let state = Mutex(State())
+    /// The host clock; tests pass their own.
+    private let now: @Sendable () -> UInt64
+
+    init(now: @escaping @Sendable () -> UInt64 = TimelineClock.now) {
+        self.now = now
+    }
 
     /// Records one microphone buffer: `when` is the time the tap was given with it, `audioTime`
     /// where it starts on the analyzer's timeline, and `voice` the detector's reading of it.
@@ -134,7 +140,7 @@ final class MicrophoneTimeline: Sendable {
         audioTime: CMTime,
         voice: VoiceActivity.Reading?
     ) {
-        let callbackTime = TimelineClock.now()
+        let callbackTime = now()
         let hasCaptureTime = when.isHostTimeValid
         let mark = Mark(hostTime: hasCaptureTime ? when.hostTime : callbackTime, audioTime: audioTime)
         state.withLock { state in
@@ -200,15 +206,19 @@ final class VoiceTimeline {
     /// The voice loop's `runID` for this session.
     let session: Int
     /// Starts when the pipeline is built, before its engine starts.
-    let clock = TimelineClock(start: TimelineClock.now())
+    let clock: TimelineClock
     /// What the microphone tap records.
-    let microphone = MicrophoneTimeline()
+    let microphone: MicrophoneTimeline
     private let fedAudio: FedAudioClock
+    private let logger: Logger
+    /// The host clock.
+    private let now: @Sendable () -> UInt64
 
     private struct Reply {
         /// Counts replies within the session.
         let number: Int
-        let playback: SpeechPlayback
+        /// When its first buffer was scheduled on the player, in host time; nil until then.
+        let firstAudio: () -> UInt64?
         /// When it was set up, in host time.
         let started: UInt64
         var wroteFirstAudio = false
@@ -226,16 +236,26 @@ final class VoiceTimeline {
     /// When the latest voice span started, in host time.
     private var lastVoiceStart: UInt64?
 
-    init(session: Int, fedAudio: FedAudioClock) {
+    /// `log` and `now` are for tests: by default the `voice.timeline` logger and the host clock.
+    init(
+        session: Int,
+        fedAudio: FedAudioClock,
+        log: Logger? = nil,
+        now: @escaping @Sendable () -> UInt64 = TimelineClock.now
+    ) {
         self.session = session
         self.fedAudio = fedAudio
+        logger = log ?? Self.log
+        self.now = now
+        clock = TimelineClock(start: now())
+        microphone = MicrophoneTimeline(now: now)
     }
 
     // MARK: - Lines
 
     /// The session is listening. Its `tMs` is 0, when the pipeline was built.
     func started(echoCancellation: Bool, fastResults: Bool, tapFramesRequested: AVAudioFrameCount, analyzerRate: Double) {
-        Self.log.info("timeline started", metadata(at: clock.start, [
+        logger.info("timeline started", metadata(at: clock.start, [
             "echoCancellation": echoCancellation,
             "fastResults": fastResults,
             "tapFramesRequested": tapFramesRequested,
@@ -245,7 +265,7 @@ final class VoiceTimeline {
 
     /// `Recognizer.start(inputs:)` was called at `called` and returned at `returned`.
     func recognizerStarted(called: UInt64, returned: UInt64) {
-        Self.log.info("recognizer started", metadata(at: returned, [
+        logger.info("recognizer started", metadata(at: returned, [
             "startMs": TimelineClock.milliseconds(from: called, to: returned),
         ]))
     }
@@ -254,7 +274,7 @@ final class VoiceTimeline {
     /// Every other line except the first two writes these first, so the log stays in order;
     /// `VoiceLoop.checkForPause` also calls it every 100 ms.
     func writeRecorded() {
-        let now = TimelineClock.now()
+        let time = now()
         if let buffer = microphone.takeFirstBuffer() {
             var extra: [String: CustomStringConvertible] = [
                 "tapFrames": buffer.frames,
@@ -263,7 +283,7 @@ final class VoiceTimeline {
             if buffer.hasCaptureTime {
                 extra["deliveryMs"] = TimelineClock.milliseconds(from: buffer.mark.hostTime, to: buffer.callbackTime)
             }
-            Self.log.info("first mic buffer", metadata(at: buffer.mark.hostTime, audio: buffer.mark.audioTime, extra))
+            logger.info("first mic buffer", metadata(at: buffer.mark.hostTime, audio: buffer.mark.audioTime, extra))
         }
         for event in microphone.takeVoiceEvents() {
             switch event {
@@ -273,20 +293,20 @@ final class VoiceTimeline {
                 var extra: [String: CustomStringConvertible] = [
                     "levelDb": VoiceActivity.decibels(level),
                     "speaking": reply != nil,
-                    "detectMs": TimelineClock.milliseconds(from: mark.hostTime, to: now),
+                    "detectMs": TimelineClock.milliseconds(from: mark.hostTime, to: time),
                 ]
                 extra["floorDb"] = noiseFloor.map(VoiceActivity.decibels)
-                Self.log.info("voice started", metadata(at: mark.hostTime, audio: mark.audioTime, extra))
+                logger.info("voice started", metadata(at: mark.hostTime, audio: mark.audioTime, extra))
             case .ended(let start, let end):
                 isVoiceActive = false
                 var extra: [String: CustomStringConvertible] = [:]
                 extra["voicedMs"] = Self.milliseconds(end.audioTime - start.audioTime)
-                Self.log.info("voice ended", metadata(at: end.hostTime, audio: end.audioTime, extra))
+                logger.info("voice ended", metadata(at: end.hostTime, audio: end.audioTime, extra))
             }
         }
-        if let current = reply, !current.wroteFirstAudio, let firstAudio = current.playback.firstAudioHostTime {
+        if let current = reply, !current.wroteFirstAudio, let firstAudio = current.firstAudio() {
             reply?.wroteFirstAudio = true
-            Self.log.info("speech first audio", metadata(at: firstAudio, [
+            logger.info("speech first audio", metadata(at: firstAudio, [
                 "reply": current.number,
                 "synthMs": TimelineClock.milliseconds(from: current.started, to: firstAudio),
             ]))
@@ -298,12 +318,12 @@ final class VoiceTimeline {
     /// `firstWordStart` is where its first new word starts on the analyzer's timeline.
     func result(_ piece: TranscriptPiece, words: Int, isFirst: Bool, firstWordStart: CMTime?) {
         writeRecorded()
-        let now = TimelineClock.now()
+        let time = now()
         let audio = fedAudio.time
         var extra: [String: CustomStringConvertible] = ["words": words, "final": piece.isFinal]
         extra["rangeEndMs"] = Self.milliseconds(piece.range.end)
         guard isFirst else {
-            Self.log.info("result", metadata(at: now, audio: audio, extra))
+            logger.info("result", metadata(at: time, audio: audio, extra))
             return
         }
         extra["rangeStartMs"] = Self.milliseconds(piece.range.start)
@@ -312,14 +332,14 @@ final class VoiceTimeline {
             extra["wordStartMs"] = wordStart
             extra["lagMs"] = audioMs - wordStart
         }
-        extra["sinceVoiceMs"] = lastVoiceStart.map { TimelineClock.milliseconds(from: $0, to: now) }
-        Self.log.info("first result", metadata(at: now, audio: audio, extra))
+        extra["sinceVoiceMs"] = lastVoiceStart.map { TimelineClock.milliseconds(from: $0, to: time) }
+        logger.info("first result", metadata(at: time, audio: audio, extra))
     }
 
     /// A result ignored while a reply plays. `reason` is `noEchoCancellation` or `tooFewWords`.
     func resultIgnored(reason: String, words: Int) {
         writeRecorded()
-        Self.log.info("result ignored", metadata(at: TimelineClock.now(), audio: fedAudio.time, [
+        logger.info("result ignored", metadata(at: now(), audio: fedAudio.time, [
             "reason": reason,
             "words": words,
         ]))
@@ -328,20 +348,21 @@ final class VoiceTimeline {
     /// Words heard over the reply decided to stop it. Its stop follows straight away.
     func bargeInDecided(words: Int) {
         writeRecorded()
-        let now = TimelineClock.now()
-        reply?.bargeInDecided = now
+        let time = now()
+        reply?.bargeInDecided = time
         var extra: [String: CustomStringConvertible] = ["trigger": "words", "words": words]
-        extra["replyMs"] = reply.map { TimelineClock.milliseconds(from: $0.started, to: now) }
-        extra["sinceVoiceMs"] = lastVoiceStart.map { TimelineClock.milliseconds(from: $0, to: now) }
-        Self.log.info("barge-in decided", metadata(at: now, audio: fedAudio.time, extra))
+        extra["replyMs"] = reply.map { TimelineClock.milliseconds(from: $0.started, to: time) }
+        extra["sinceVoiceMs"] = lastVoiceStart.map { TimelineClock.milliseconds(from: $0, to: time) }
+        logger.info("barge-in decided", metadata(at: time, audio: fedAudio.time, extra))
     }
 
     /// A reply was set up at `started` and is playing. `queued` replies wait behind it.
-    func speechStarted(_ playback: SpeechPlayback, at started: UInt64, chars: Int, queued: Int) {
+    /// `firstAudio` tells when its first buffer was scheduled on the player, once it has been.
+    func speechStarted(at started: UInt64, chars: Int, queued: Int, firstAudio: @escaping () -> UInt64?) {
         writeRecorded()
         replies += 1
-        reply = Reply(number: replies, playback: playback, started: started)
-        Self.log.info("speech started", metadata(at: TimelineClock.now(), [
+        reply = Reply(number: replies, firstAudio: firstAudio, started: started)
+        logger.info("speech started", metadata(at: now(), [
             "reply": replies,
             "chars": chars,
             "queued": queued,
@@ -352,35 +373,35 @@ final class VoiceTimeline {
     /// The loop began stopping the reply. `reason` is the one "reply ended" gives.
     func speechStopRequested(reason: String) {
         writeRecorded()
-        let now = TimelineClock.now()
-        reply?.stopRequested = now
+        let time = now()
+        reply?.stopRequested = time
         var extra: [String: CustomStringConvertible] = ["reason": reason]
         extra["reply"] = reply?.number
-        Self.log.info("speech stop requested", metadata(at: now, extra))
+        logger.info("speech stop requested", metadata(at: time, extra))
     }
 
     /// The player has stopped. The speaker goes quiet about `outputLatency` seconds later.
     /// After a barge-in, also writes how long each part of it took.
     func speechStopped(outputLatency: TimeInterval) {
-        let now = TimelineClock.now()
+        let time = now()
         guard let stopped = reply else { return }
         reply = nil
         var extra: [String: CustomStringConvertible] = [
             "reply": stopped.number,
             "outputLatencyMs": Int((outputLatency * 1000).rounded()),
         ]
-        extra["stopMs"] = stopped.stopRequested.map { TimelineClock.milliseconds(from: $0, to: now) }
-        Self.log.info("speech stopped", metadata(at: now, extra))
+        extra["stopMs"] = stopped.stopRequested.map { TimelineClock.milliseconds(from: $0, to: time) }
+        logger.info("speech stopped", metadata(at: time, extra))
 
         guard let decided = stopped.bargeInDecided else { return }
         var timeline: [String: CustomStringConvertible] = [
-            "resultToStopMs": TimelineClock.milliseconds(from: decided, to: now),
+            "resultToStopMs": TimelineClock.milliseconds(from: decided, to: time),
         ]
         if let lastVoiceStart {
             timeline["voiceToResultMs"] = TimelineClock.milliseconds(from: lastVoiceStart, to: decided)
-            timeline["voiceToStopMs"] = TimelineClock.milliseconds(from: lastVoiceStart, to: now)
+            timeline["voiceToStopMs"] = TimelineClock.milliseconds(from: lastVoiceStart, to: time)
         }
-        Self.log.info("barge-in timeline", metadata(at: now, timeline))
+        logger.info("barge-in timeline", metadata(at: time, timeline))
     }
 
     /// The reply played to its end. `replyEnded` holds the fields of the "reply ended" line.
@@ -389,7 +410,7 @@ final class VoiceTimeline {
         var extra = replyEnded
         extra["reply"] = reply?.number
         reply = nil
-        Self.log.info("speech finished", metadata(at: TimelineClock.now(), extra))
+        logger.info("speech finished", metadata(at: now(), extra))
     }
 
     /// An utterance was sent. `lastVoice` and `lastChange` are when the pause detector last
@@ -401,17 +422,17 @@ final class VoiceTimeline {
         endsSentence: Bool
     ) {
         writeRecorded()
-        let now = ContinuousClock.now
+        let instant = ContinuousClock.now
         var extra: [String: CustomStringConvertible] = ["words": words, "endsSentence": endsSentence]
-        extra["sinceVoiceMs"] = lastVoice.map { Int($0.duration(to: now) / .milliseconds(1)) }
-        extra["sinceChangeMs"] = lastChange.map { Int($0.duration(to: now) / .milliseconds(1)) }
-        Self.log.info("utterance sent", metadata(at: TimelineClock.now(), audio: fedAudio.time, extra))
+        extra["sinceVoiceMs"] = lastVoice.map { Int($0.duration(to: instant) / .milliseconds(1)) }
+        extra["sinceChangeMs"] = lastChange.map { Int($0.duration(to: instant) / .milliseconds(1)) }
+        logger.info("utterance sent", metadata(at: now(), audio: fedAudio.time, extra))
     }
 
     /// The utterance in progress was dropped.
     func utteranceDiscarded(words: Int) {
         writeRecorded()
-        Self.log.info("utterance discarded", metadata(at: TimelineClock.now(), audio: fedAudio.time, [
+        logger.info("utterance discarded", metadata(at: now(), audio: fedAudio.time, [
             "words": words,
         ]))
     }
