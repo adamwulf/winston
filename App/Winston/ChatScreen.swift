@@ -4,7 +4,6 @@ import TelegramLink
 /// The one chat screen: a picker for the bot chats, the message list, and the bottom bar.
 struct ChatScreen: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(StorageKey.selectedChatID) private var storedChatID = 0
     @State private var draft = ""
     @State private var showingSettings = false
 
@@ -32,9 +31,6 @@ struct ChatScreen: View {
             Button("OK") {}
         } message: {
             Text(model.errorMessage ?? "")
-        }
-        .onChange(of: storedChatID, initial: true) {
-            model.selectedChatID = ChatID(Int64(storedChatID))
         }
     }
 
@@ -70,23 +66,16 @@ struct ChatScreen: View {
         }
     }
 
+    @ViewBuilder
     private var chatPicker: some View {
-        Picker("Bot", selection: selectedChat) {
+        @Bindable var model = model
+        Picker("Bot", selection: $model.selectedChatID) {
             ForEach(model.chats) { chat in
                 Text(chat.title).tag(Optional(chat.id))
             }
         }
         .pickerStyle(.segmented)
         .fixedSize()
-    }
-
-    /// Shows the chat in use and remembers the user's choice in `@AppStorage`.
-    private var selectedChat: Binding<ChatID?> {
-        Binding {
-            model.currentChat?.id
-        } set: { id in
-            if let id { storedChatID = Int(id.rawValue) }
-        }
     }
 
     private var showingError: Binding<Bool> {

@@ -1,11 +1,9 @@
 import SwiftUI
 import TelegramLink
 
-/// The root view: missing credentials, login, or the chat screen. Also applies the voice settings.
+/// The root view: missing credentials, login, or the chat screen.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage(StorageKey.pauseThreshold) private var pauseThreshold = 1.2
-    @AppStorage(StorageKey.voiceIdentifier) private var voiceIdentifier = ""
 
     var body: some View {
         Group {
@@ -18,12 +16,6 @@ struct ContentView: View {
             }
         }
         .onAppear { model.start() }
-        .onChange(of: pauseThreshold, initial: true) {
-            model.voiceLoop.pauseThreshold = .seconds(pauseThreshold)
-        }
-        .onChange(of: voiceIdentifier, initial: true) {
-            model.voiceLoop.voiceIdentifier = voiceIdentifier.isEmpty ? nil : voiceIdentifier
-        }
     }
 }
 

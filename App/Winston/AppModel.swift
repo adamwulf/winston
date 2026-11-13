@@ -8,8 +8,8 @@ import VoiceLoop
 import UIKit
 #endif
 
-/// `@AppStorage` keys, shared by the views that read and write them.
-enum StorageKey {
+/// UserDefaults keys for the settings AppModel persists.
+private enum StorageKey {
     static let selectedChatID = "selectedChatID"
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
@@ -31,8 +31,11 @@ final class AppModel {
     private(set) var chats: [BotChat] = []
     private(set) var chatsLoaded = false
     private(set) var chatsError: String?
-    /// The chat the user picked. The chat screen persists it; `currentChat` falls back to the first chat.
-    var selectedChatID: ChatID?
+    /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
+    var selectedChatID: ChatID? = (UserDefaults.standard.object(forKey: StorageKey.selectedChatID) as? Int64)
+        .map(ChatID.init) {
+        didSet { UserDefaults.standard.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
+    }
     private(set) var messages: [ChatID: [ChatMessage]] = [:]
     private(set) var typingChats: Set<ChatID> = []
     private(set) var downloadedFiles: [Int32: URL] = [:]
@@ -40,6 +43,20 @@ final class AppModel {
     private(set) var isSendingPhoto = false
 
     private(set) var isVoiceMode = false
+    /// Seconds the transcript must stay unchanged before voice mode sends it. Persisted.
+    var pauseThreshold: Double = UserDefaults.standard.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2 {
+        didSet {
+            UserDefaults.standard.set(pauseThreshold, forKey: StorageKey.pauseThreshold)
+            applyVoiceSettings()
+        }
+    }
+    /// The `VoiceOption.id` to speak with, or nil for VoiceLoop's default. Persisted.
+    var voiceIdentifier: String? = UserDefaults.standard.string(forKey: StorageKey.voiceIdentifier) {
+        didSet {
+            UserDefaults.standard.set(voiceIdentifier, forKey: StorageKey.voiceIdentifier)
+            applyVoiceSettings()
+        }
+    }
     /// A user-facing error from the last action. The chat screen shows it in an alert.
     var errorMessage: String?
 
@@ -58,6 +75,7 @@ final class AppModel {
             link = nil
             hasCredentials = false
         }
+        applyVoiceSettings()
     }
 
     #if DEBUG
@@ -70,8 +88,14 @@ final class AppModel {
         chats = previewChats
         chatsLoaded = true
         self.messages = messages
+        selectedChatID = previewChats.first?.id
     }
     #endif
+
+    private func applyVoiceSettings() {
+        voiceLoop.pauseThreshold = .seconds(pauseThreshold)
+        voiceLoop.voiceIdentifier = voiceIdentifier
+    }
 
     private static func telegramConfig(_ secrets: AppSecrets) -> TelegramConfig {
         let directory = URL.applicationSupportDirectory.appending(path: "Telegram", directoryHint: .isDirectory)
@@ -177,9 +201,8 @@ final class AppModel {
 
     // MARK: - Chats
 
-    /// The selected chat, or the first bot chat when nothing valid is selected.
     var currentChat: BotChat? {
-        chats.first { $0.id == selectedChatID } ?? chats.first
+        chats.first { $0.id == selectedChatID }
     }
 
     var currentMessages: [ChatMessage] {
@@ -207,6 +230,9 @@ final class AppModel {
                 .filter { $0.username?.lowercased() != "botfather" }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             chatsLoaded = true
+            if currentChat == nil {
+                selectedChatID = chats.first?.id
+            }
         } catch {
             chatsError = userMessage(for: error)
             return
@@ -360,9 +386,11 @@ final class AppModel {
     // MARK: - Voice
 
     /// Switches between text and voice mode. Starting voice mode can fail, for example without mic permission.
+    /// Turning it on again while already in voice mode resumes a loop that turned itself off.
     func setVoiceMode(_ on: Bool) async {
         if on {
-            guard !isVoiceMode else { return }
+            // VoiceLoop ignores a second start() while one is in progress.
+            guard voiceLoop.state == .off else { return }
             isVoiceMode = true
             do {
                 try await voiceLoop.start()

@@ -90,16 +90,24 @@ struct BottomBar: View {
 
     @ViewBuilder
     private var voiceControls: some View {
-        Button(action: tapIndicator) {
-            Image(systemName: indicatorSymbol)
-                .symbolEffect(.variableColor.iterative, isActive: isListening)
-        }
-        .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
-
-        Text(transcript)
-            .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
-            .lineLimit(5)
+        if model.voiceLoop.state == .off {
+            // VoiceLoop turns itself off only when it gives up, such as after an interruption it can't resume from.
+            Button("Resume Listening", systemImage: "mic.slash") {
+                Task { await model.setVoiceMode(true) }
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Button(action: tapIndicator) {
+                Image(systemName: indicatorSymbol)
+                    .symbolEffect(.variableColor.iterative, isActive: isListening)
+            }
+            .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
+
+            Text(transcript)
+                .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
+                .lineLimit(5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
 
         Button("Discard") {
             model.voiceLoop.discardCurrentUtterance()

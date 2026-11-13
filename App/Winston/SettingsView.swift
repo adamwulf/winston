@@ -1,27 +1,26 @@
 import SwiftUI
 import VoiceLoop
 
-/// The pause threshold, the voice, and Log out. `ContentView` applies the stored values to the voice loop.
+/// The pause threshold, the voice, and Log out. AppModel persists the settings and applies them to the voice loop.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @AppStorage(StorageKey.pauseThreshold) private var pauseThreshold = 1.2
-    @AppStorage(StorageKey.voiceIdentifier) private var voiceIdentifier = ""
     @State private var confirmingLogOut = false
     private let voices = VoiceLoop.availableVoices()
 
     var body: some View {
+        @Bindable var model = model
         NavigationStack {
             Form {
                 Section {
                     LabeledContent("Pause before sending") {
-                        Text("\(pauseThreshold.formatted(.number.precision(.fractionLength(1)))) s")
+                        Text("\(model.pauseThreshold.formatted(.number.precision(.fractionLength(1)))) s")
                     }
-                    Slider(value: $pauseThreshold, in: 0.8...3.0, step: 0.1)
-                    Picker("Voice", selection: $voiceIdentifier) {
-                        Text("Default").tag("")
+                    Slider(value: $model.pauseThreshold, in: 0.8...3.0, step: 0.1)
+                    Picker("Voice", selection: $model.voiceIdentifier) {
+                        Text("Default").tag(String?.none)
                         ForEach(voices) { voice in
-                            Text(label(for: voice)).tag(voice.id)
+                            Text(label(for: voice)).tag(Optional(voice.id))
                         }
                     }
                 } header: {
