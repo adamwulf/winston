@@ -37,6 +37,9 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case execute, setTdlibParameters, setAuthenticationPhoneNumber, checkAuthenticationCode
         case checkAuthenticationPassword, logOut, loadChats, getChats, getChat, getUser, getChatHistory
         case getMessage, sendMessage, addMessageReaction, removeMessageReaction, viewMessages, downloadFile
+        /// Not a request: the answer to `getChatHistory`, after TDLib has read the history. Only
+        /// for `hold(_:)`, to make the answer arrive after something that happened meanwhile.
+        case chatHistoryReply
     }
 
     private struct State {
@@ -127,6 +130,11 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         for continuation in waiting {
             continuation.resume()
         }
+    }
+
+    /// Whether a request has reached the held `call` and is waiting there.
+    package func isWaiting(on call: Call) -> Bool {
+        withState { !($0.waiting[call] ?? []).isEmpty }
     }
 
     /// How many times the link has closed its clients, as it does before the app quits.
@@ -272,6 +280,14 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     /// that call, then throws if they made it fail.
     private func begin(_ request: Request, _ call: Call) async throws {
         withState { $0.requests.append(request) }
+        await waitWhileHeld(call)
+        if let failure = withState({ $0.failures[call] }) {
+            throw failure
+        }
+    }
+
+    /// Returns at once, or after `release(call)` when the tests are holding `call`.
+    private func waitWhileHeld(_ call: Call) async {
         await withCheckedContinuation { continuation in
             let isHeld = withState { state in
                 guard state.held.contains(call) else { return false }
@@ -281,9 +297,6 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
             if !isHeld {
                 continuation.resume()
             }
-        }
-        if let failure = withState({ $0.failures[call] }) {
-            throw failure
         }
     }
 
@@ -414,6 +427,8 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
             let eligible = from == 0 ? newestFirst : newestFirst.filter { $0.id < from }
             return Array(eligible.prefix(min(limit ?? 100, state.historyPageSize)))
         }
+        // The page is read; holding the reply lets a test deliver a message that it lacks first.
+        await waitWhileHeld(.chatHistoryReply)
         return Messages(messages: page, totalCount: page.count)
     }
 

@@ -317,6 +317,28 @@ struct ChatsTests {
         ])
     }
 
+    @Test func aMessageThatArrivesAfterTheHistoryWasReadIsKeptAfterIt() async throws {
+        let harness = Harness.withTwoBots()
+        // TDLib reads the history, and its answer is still on the way when a new message comes.
+        harness.fake.hold(.chatHistoryReply)
+        let model = harness.model
+        model.start()
+        #expect(await eventually { harness.fake.isWaiting(on: .chatHistoryReply) })
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Both jobs are done."))
+        #expect(await eventually { model.currentMessages.map(\.text) == ["Both jobs are done."] })
+        harness.fake.release(.chatHistoryReply)
+
+        // The history that arrives doesn't have the new message. It isn't lost.
+        #expect(await eventually { model.messages[ChatID(2)] != nil })
+        #expect(model.currentMessages.map(\.id) == [MessageID(10), MessageID(11), MessageID(12)])
+        #expect(model.currentMessages.map(\.text) == [
+            "What's on the build server?",
+            "Two jobs are queued.",
+            "Both jobs are done.",
+        ])
+    }
+
     @Test func loadingTheChatsWhileTheyAreLoadingDoesNothing() async throws {
         let harness = Harness.withTwoBots()
         harness.fake.hold(.getChats)
