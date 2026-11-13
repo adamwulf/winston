@@ -57,21 +57,21 @@ final class Pipeline {
         engine.prepare()
     }
 
-    /// On a MacBook Pro with voice processing on, the input reports 9 identical channels, and
-    /// the engine won't start (-10875, "client-side input and output formats do not match")
-    /// while the output keeps its default stereo format. A mono output at the input's rate
-    /// works. The engine keeps this connection's format through a hardware change, so
-    /// `restartEngine()` connects it again for the new rate. Does nothing on iOS or without
-    /// voice processing.
+    /// With voice processing on, connects the output mono at the input's rate, so the voice
+    /// processing unit's two sides match. On a MacBook Pro the input reports 9 identical
+    /// channels, and the engine won't start (-10875, "client-side input and output formats do
+    /// not match") while the output keeps its default stereo format. The iPhone's engine
+    /// starts anyway, but with a 44.1 kHz stereo output against a 48 kHz microphone, which is
+    /// the same mismatch. The engine keeps this connection's format
+    /// through a hardware change, so `restartEngine()` connects it again for the new rate.
+    /// Does nothing without voice processing.
     private func connectOutputForVoiceProcessing() throws {
-        #if os(macOS)
         guard hasVoiceProcessing else { return }
         let inputFormat = engine.inputNode.outputFormat(forBus: 0)
         guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
             throw AudioFormatError()
         }
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
-        #endif
     }
 
     /// Taps the microphone in its current format, replacing any earlier tap. The format can
