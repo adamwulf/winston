@@ -68,7 +68,8 @@ struct WinstonApp: App {
 // Closes the Telegram session before the app terminates, then ends the process with
 // _exit. TDLibKit's receive thread is still inside td_receive, and exit()'s C++ static
 // destructors would tear TDLib down under it (EXC_BAD_ACCESS). The session is closed and
-// saved by then, so the process ends without running them.
+// saved by then, so the process ends without running them. The log file is flushed first:
+// FellerBuncher writes on its own queue, and _exit would drop what's still queued.
 
 #if os(macOS)
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -78,6 +79,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return .terminateNow }
         Task {
             await model.closeForQuit()
+            await WinstonLog.flush()
             _exit(0)
         }
         return .terminateLater
@@ -92,6 +94,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     func applicationWillTerminate(_ application: UIApplication) {
         guard let model else { return }
         model.closeForQuitBlocking()
+        WinstonLog.flushBlocking()
         _exit(0)
     }
 }

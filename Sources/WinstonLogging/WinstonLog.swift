@@ -62,4 +62,19 @@ public enum WinstonLog {
         let logging = handle.withLock { $0 }
         await logging?.drain()
     }
+
+    /// `flush()` for a caller that can't await, such as `applicationWillTerminate` right before
+    /// `_exit`. Blocks for at most `timeout`, so a stuck writer can't hold up termination.
+    /// FellerBuncher's own blocking `drain()` has no timeout and is meant for tests, so this
+    /// waits on its callback form instead. Its destinations drain on their own queues, never the
+    /// main thread, so blocking the main thread here can't deadlock them.
+    public static func flushBlocking(timeout: DispatchTimeInterval = .seconds(1)) {
+        guard let logging = handle.withLock({ $0 }) else { return }
+        let flushed = DispatchSemaphore(value: 0)
+        logging.drain {
+            flushed.signal()
+        }
+        // A timeout can't be logged: the process is about to end, and the writer is stuck.
+        _ = flushed.wait(timeout: .now() + timeout)
+    }
 }
