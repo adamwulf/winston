@@ -266,8 +266,9 @@ Inside it:
 ### Photos
 
 - `PhotosPicker` lets Adam choose one photo per message, with an optional
-  caption. The image is exported to a temporary JPEG, kept well under the
-  20 MB limit, and sent as an `inputMessagePhoto`. The coordinator receives
+  caption. The image is exported to an upright temporary JPEG (at most
+  2560 px on the long side, well under Telegram's 10 MB photo limit) and sent
+  as an `inputMessagePhoto`. The coordinator receives
   it as `[user sent photo: <path> (N KB)]` plus the caption.
 - Photos from the bot download with `downloadFile` and show inline.
 
