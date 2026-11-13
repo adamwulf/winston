@@ -5,12 +5,16 @@ mode and a hands-free voice mode. See [PLAN.md](PLAN.md) for the design.
 
 ## Layout
 
-- `Package.swift`: library targets `TelegramLink` (TDLibKit wrapper) and
-  `VoiceLoop` (listening, pause detection, speech, barge-in), plus their tests.
-  `LogSupport` and `WinstonLogging` hold the logging (see [Logging](#logging)).
+- `Package.swift`: library targets `TelegramLink` (TDLibKit wrapper),
+  `VoiceLoop` (listening, pause detection, speech, barge-in) and `WinstonCore`
+  (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`), plus
+  their tests. `LogSupport` and `WinstonLogging` hold the logging (see
+  [Logging](#logging)).
 - `App/Winston.xcodeproj`: the multiplatform SwiftUI app (iOS 26+, macOS 26+).
   `App/Winston/` is a folder-synced group, so new files there join the target
-  without project file edits.
+  without project file edits. It holds only SwiftUI views and AppKit/UIKit
+  glue, and has no tests. Anything with logic worth testing goes in a package
+  target.
 
 ## Setup
 
@@ -67,8 +71,8 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   `WinstonLog.bootstrap()` runs first in `WinstonApp.init()`. Never call
   `LoggingSystem.bootstrap` yourself: FellerBuncher makes the one call, and a
   second one crashes.
-- `TelegramLink` and `VoiceLoop` use swift-log (`Logging`) and `LogSupport`
-  only. Under `swift test` their logs go to stderr.
+- `TelegramLink`, `VoiceLoop` and `WinstonCore` use swift-log (`Logging`) and
+  `LogSupport` only. Under `swift test` their logs go to stderr.
 - No `os.Logger`, `NSLog`, or `print`, with one exception: if
   `WinstonLog.bootstrap` fails, FellerBuncher's pre-config buffer never drains,
   so every swift-log line for the rest of the run stays in a 1,000-record

@@ -43,8 +43,9 @@ struct LogDirectoryTests {
         }
     }
 
+    #if os(macOS)
     /// Without an override it resolves the user's real Library, so it runs in an exit test's child
-    /// process with the home folder moved to a temporary one.
+    /// process with the home folder moved to a temporary one. macOS only: iOS has no exit tests.
     @Test
     func withoutAnOverrideResolvesLogsWinstonUnderTheLibraryAndCreatesIt() async {
         await #expect(processExitsWith: .success) {
@@ -61,6 +62,7 @@ struct LogDirectoryTests {
             #expect(isDirectory.boolValue)
         }
     }
+    #endif
 
     @Test
     func libraryUnavailableSaysSo() {

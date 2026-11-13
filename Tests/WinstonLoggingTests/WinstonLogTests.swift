@@ -2,6 +2,8 @@ import Foundation
 import Testing
 import WinstonLogging
 
+// macOS only: every test here needs an exit test's child process, and iOS has no exit tests.
+#if os(macOS)
 @Suite("WinstonLog")
 struct WinstonLogTests {
     /// FellerBuncher's bootstrap is process-wide and permanent, so it runs in an exit test's child
@@ -81,3 +83,4 @@ private func dailyLogContents(under base: URL) throws -> String {
     let file = try #require(daily.first, "no app-yyyy-MM-dd.log in Logs/Winston")
     return try String(contentsOf: logs.appending(path: file), encoding: .utf8)
 }
+#endif

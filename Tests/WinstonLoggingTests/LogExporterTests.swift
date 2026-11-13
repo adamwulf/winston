@@ -90,8 +90,9 @@ struct LogExporterTests {
         #expect(FileManager.default.fileExists(atPath: second.path(percentEncoded: false)))
     }
 
+    #if os(macOS)
     /// Without an override it zips the user's real Logs folder, so it runs in an exit test's child
-    /// process with the home folder moved to a temporary one.
+    /// process with the home folder moved to a temporary one. macOS only: iOS has no exit tests.
     @Test
     func withoutADirectoryOverrideZipsTheLibraryLogsFolder() async {
         await #expect(processExitsWith: .success) {
@@ -112,6 +113,7 @@ struct LogExporterTests {
             #expect(files == ["Winston/app-2026-11-13.log"])
         }
     }
+    #endif
 
     @Test
     func exportingAFolderThatDoesNotExistThrowsAndLeavesNoZip() async throws {

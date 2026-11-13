@@ -102,6 +102,12 @@ let package = Package(
             path: "Tests/VoiceLoopTestSupport"
         ),
         .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]),
+        // iOS only (audio-session interruptions), and a target of its own so it gets its own
+        // process: the voice loop hears interruptions process-wide.
+        .testTarget(
+            name: "VoiceLoopInterruptionTests",
+            dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]
+        ),
         .testTarget(
             name: "WinstonLoggingTests",
             dependencies: [
