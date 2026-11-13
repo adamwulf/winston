@@ -332,7 +332,12 @@ public final class VoiceLoop {
             }
         } catch {
             // Falls through: an error ends the results just like the stream finishing.
-            Self.log.error("transcriber results failed", error.logContext())
+            if self.pipeline === pipeline {
+                Self.log.error("transcriber results failed", error.logContext())
+            } else {
+                // A teardown cancelled this pipeline's analyzer, which can end its results with an error.
+                Self.log.debug("transcriber results ended after teardown", error.logContext())
+            }
         }
         // The results ended while this pipeline is still running, so nothing more can be heard.
         if self.pipeline === pipeline {
