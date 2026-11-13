@@ -173,14 +173,19 @@ final class Pipeline {
         cuePlayer.play()
     }
 
-    func tearDown() {
+    /// Stops listening and speaking, but leaves the engine running so a cue can still play.
+    func stopListening() {
         for task in tasks { task.cancel() }
         tasks = []
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
+        inputContinuation.finish()
+    }
+
+    func tearDown() {
+        stopListening()
         cuePlayer.stop()
         engine.stop()
-        inputContinuation.finish()
     }
 
     /// Runs on the audio thread: measures each microphone buffer's loudness, records its times
