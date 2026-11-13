@@ -17,7 +17,8 @@ import UIKit
 /// microphone is ignored while a reply plays (half-duplex: only `stopSpeaking()`
 /// interrupts). Speech is rendered with
 /// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
-/// the same engine.
+/// the same engine. Sound cues (`SoundCue`) play on a second player node there: taps when
+/// listening starts and stops, and whatever `play(_:)` is asked for.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -580,8 +581,8 @@ public final class VoiceLoop {
         pipeline.cuePlayer.stop()
         pipeline.play(.listeningStopped) {}
         closingPipeline = pipeline
-        // A timer, because the cue's completion never comes if the engine stops. It holds the
-        // loop until then, so the engine is always stopped.
+        // A timer rather than the cue's completion, which can come early or not at all if the
+        // engine stops by itself. It holds the loop until then, so the engine is always stopped.
         let wait = SoundCue.listeningStopped.duration + Self.stopCueMargin
         pipeline.tasks = [Task { [self] in
             do {
