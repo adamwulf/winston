@@ -69,6 +69,8 @@ public final class VoiceLoop {
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
+    /// Plays voice previews when the loop isn't running. See `preview(_:)`.
+    @ObservationIgnored private let previewSynthesizer = AVSpeechSynthesizer()
     /// The synthesizer's delegate (held strongly; `delegate` is weak). Tells the playback
     /// when synthesis has finished.
     @ObservationIgnored private let synthesisObserver = SynthesisObserver()
@@ -268,6 +270,22 @@ public final class VoiceLoop {
     public func stopSpeaking() {
         speechQueue.removeAll()
         silence(consumingEcho: true)
+    }
+
+    /// Says `text` right away in the current voice, for trying voices in settings, cutting off
+    /// an earlier preview. While the loop is running it also stops any reply being spoken and
+    /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
+    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker.
+    public func preview(_ text: String) {
+        previewSynthesizer.stopSpeaking(at: .immediate)
+        if pipeline != nil {
+            stopSpeaking()
+            speak(text)
+        } else {
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = voice()
+            previewSynthesizer.speak(utterance)
+        }
     }
 
     /// Installed voices for the current language, best quality first, for a settings picker.

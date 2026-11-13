@@ -99,6 +99,14 @@ final class AppModel {
         voiceLoop.voiceIdentifier = voiceIdentifier
     }
 
+    /// Says a sample sentence in the chosen voice, for the settings voice picker.
+    func previewVoice() {
+        let voices = VoiceLoop.availableVoices()
+        let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first
+        let name = voice?.name ?? "default"
+        voiceLoop.preview("This is how I sound with the \(name) voice.")
+    }
+
     private static func telegramConfig(_ secrets: AppSecrets) -> TelegramConfig {
         let directory = URL.applicationSupportDirectory.appending(path: "Telegram", directoryHint: .isDirectory)
         let info = Bundle.main.infoDictionary ?? [:]

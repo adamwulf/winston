@@ -41,6 +41,9 @@ struct SettingsView: View {
                         Text(label(for: voice)).tag(Optional(voice.id))
                     }
                 }
+                .onChange(of: model.voiceIdentifier) {
+                    model.previewVoice()
+                }
             } header: {
                 Text("Voice Mode")
             } footer: {
