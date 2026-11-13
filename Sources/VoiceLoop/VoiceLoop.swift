@@ -98,7 +98,8 @@ public final class VoiceLoop {
         defer {
             isStarting = false
             // speak() queues while starting; if stop() came meanwhile, those replies are stale.
-            if state == .off {
+            // They are kept while a resume is still pending.
+            if state == .off && !resumeAfterInterruption {
                 speechQueue.removeAll()
             }
         }
@@ -108,9 +109,12 @@ public final class VoiceLoop {
         } catch {
             // A start that stop() or an interruption overtook leaves the state to them.
             if run == runID {
+                let queued = speechQueue
                 tearDown(.stop)
                 if isForegroundRetry {
+                    // Replies keep queueing for the resume on a later end of the interruption.
                     resumeAfterInterruption = true
+                    speechQueue = queued
                 }
             }
             throw error
@@ -200,11 +204,12 @@ public final class VoiceLoop {
 
     /// Queues `text` to be spoken after anything already queued. Strips markdown/code first.
     ///
-    /// Ignored while the loop is off, but queued while it is starting or rebuilding. A message
-    /// waits while an utterance is in progress, so the reply doesn't start over the user and
-    /// get cut off by barge-in.
+    /// Ignored while the loop is off, except that replies still queue while a resume after an
+    /// interruption is pending (a failed foreground retry shows `.off`). Also queued while it is
+    /// starting or rebuilding. A message waits while an utterance is in progress, so the reply
+    /// doesn't start over the user and get cut off by barge-in.
     public func speak(_ text: String) {
-        guard state != .off || isStarting else { return }
+        guard state != .off || isStarting || resumeAfterInterruption else { return }
         let spoken = SpokenText.speakable(text)
         guard !spoken.isEmpty else { return }
         speechQueue.append(spoken)
