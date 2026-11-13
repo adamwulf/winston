@@ -34,10 +34,16 @@ struct MessageList: View {
                 .padding()
             }
             .defaultScrollAnchor(.bottom)
-            .onChange(of: model.currentMessages.last?.id) { _, newestID in
+            .onChange(of: model.currentMessages.last?.id) { oldID, newestID in
                 guard let newestID else { return }
-                withAnimation {
+                // The list appears before the history loads, so going from no messages to some is the launch
+                // load: jump straight to the newest one rather than animating down to it. New messages animate.
+                if oldID == nil {
                     proxy.scrollTo(newestID, anchor: .bottom)
+                } else {
+                    withAnimation {
+                        proxy.scrollTo(newestID, anchor: .bottom)
+                    }
                 }
             }
             .onChange(of: isActive) {
