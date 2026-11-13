@@ -20,6 +20,8 @@ package final class VoiceTestBed {
     package var engineError: (any Error)?
     /// Whether the microphone can do voice processing (echo cancellation).
     package var hasVoiceProcessing = true
+    /// How many times the loop has tried to turn voice processing on.
+    package private(set) var voiceProcessingAttempts = 0
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -54,6 +56,7 @@ package final class VoiceTestBed {
                 return try audio.makeEngine()
             },
             enableVoiceProcessing: { [self] _ in
+                voiceProcessingAttempts += 1
                 if !hasVoiceProcessing {
                     throw VoiceTestBedError.noVoiceProcessing
                 }

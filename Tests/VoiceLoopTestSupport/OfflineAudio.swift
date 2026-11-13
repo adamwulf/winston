@@ -9,6 +9,11 @@ import Synchronization
 package final class OfflineAudio {
     /// Every engine made so far, newest last. The voice loop makes one per pipeline.
     package private(set) var engines: [AVAudioEngine] = []
+    /// How much sound has come out of the speaker: the frames rendered (at 48 kHz) in passes
+    /// that weren't silent. Only speech reaches the speaker; the microphone is kept out of it.
+    package private(set) var playedFrames = 0
+    /// When true, the next engine made can't start, as when the hardware rejects the formats.
+    package var nextEngineCannotStart = false
     private let microphone = Microphone()
     private var renderTask: Task<Void, Never>?
 
@@ -29,7 +34,11 @@ package final class OfflineAudio {
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
 
         let input = engine.inputNode
-        let inputFormat = input.outputFormat(forBus: 0)
+        // An engine fed in a format other than the one its input node reports, and whose
+        // input feeds nothing, fails to start (-10868).
+        let cannotStart = nextEngineCannotStart
+        nextEngineCannotStart = false
+        let inputFormat = cannotStart ? renderFormat : input.outputFormat(forBus: 0)
         guard let source = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: 16_384) else {
             throw OfflineAudioError.noMicrophoneBuffer
         }
@@ -39,8 +48,12 @@ package final class OfflineAudio {
             return UnsafePointer(source.audioBufferList)
         }
         guard accepted else { throw OfflineAudioError.microphoneFormatRejected }
-        // An offline engine only pulls its input node when the node feeds the output.
-        engine.connect(input, to: engine.mainMixerNode, format: inputFormat)
+        if !cannotStart {
+            // An offline engine only pulls its input node when the node feeds the output.
+            // Muted there, so the speaker carries speech alone; the pipeline's tap still gets it.
+            engine.connect(input, to: engine.mainMixerNode, format: inputFormat)
+            input.volume = 0
+        }
 
         engines.append(engine)
         startRendering()
@@ -65,8 +78,13 @@ package final class OfflineAudio {
                 pcmFormat: engine.manualRenderingFormat,
                 frameCapacity: engine.manualRenderingMaximumFrameCount
             ) else { continue }
-            // A failed render (the engine stopped mid-way) is the same as a sound card with nothing to play.
-            _ = try? engine.renderOffline(output.frameCapacity, to: output)
+            // A failed render is the same as a sound card with nothing to play.
+            guard (try? engine.renderOffline(output.frameCapacity, to: output)) != nil,
+                  let samples = output.floatChannelData?[0] else { continue }
+            let isSilent = (0..<Int(output.frameLength)).allSatisfy { abs(samples[$0]) < 0.001 }
+            if !isSilent {
+                playedFrames += Int(output.frameLength)
+            }
         }
     }
 }
@@ -80,17 +98,26 @@ package enum OfflineAudioError: Error {
 /// What the offline engines' input nodes read.
 private final class Microphone: Sendable {
     let isVoicePresent = Atomic<Bool>(false)
+    /// Frames read so far, which is the microphone's clock.
+    private let framesRead = Atomic<Int>(0)
 
-    /// Fills `buffer` with `frameCount` frames: a 440 Hz tone at half scale, or silence.
+    /// Fills `buffer` with `frameCount` frames: silence, or someone talking. Talking is a
+    /// 440 Hz tone at half scale in bursts (0.4 s of every second of audio), because a steady
+    /// tone is soon taken for a loud room, not a voice.
     func fill(_ buffer: AVAudioPCMBuffer, frameCount: AVAudioFrameCount) {
         let frames = min(frameCount, buffer.frameCapacity)
         buffer.frameLength = frames
         guard let channels = buffer.floatChannelData else { return }
-        let level: Float = isVoicePresent.load(ordering: .relaxed) ? 0.5 : 0
-        let step = 2 * Float.pi * 440 / Float(buffer.format.sampleRate)
-        for channel in 0..<Int(buffer.format.channelCount) {
-            for frame in 0..<Int(frames) {
-                channels[channel][frame] = level * sinf(step * Float(frame))
+        let sampleRate = buffer.format.sampleRate
+        let start = framesRead.add(Int(frames), ordering: .relaxed).oldValue
+        let isTalking = isVoicePresent.load(ordering: .relaxed)
+        let step = 2 * Float.pi * 440 / Float(sampleRate)
+        for frame in 0..<Int(frames) {
+            let seconds = Double(start + frame) / sampleRate
+            let isBurst = isTalking && seconds.truncatingRemainder(dividingBy: 1) < 0.4
+            let sample = isBurst ? 0.5 * sinf(step * Float(start + frame)) : 0
+            for channel in 0..<Int(buffer.format.channelCount) {
+                channels[channel][frame] = sample
             }
         }
     }
