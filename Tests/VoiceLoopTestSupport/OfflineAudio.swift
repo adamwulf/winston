@@ -9,8 +9,10 @@ import Synchronization
 package final class OfflineAudio {
     /// Every engine made so far, newest last. The voice loop makes one per pipeline.
     package private(set) var engines: [AVAudioEngine] = []
-    /// How much sound has come out of the speaker: the frames rendered (at 48 kHz) in passes
-    /// that weren't silent. Only speech reaches the speaker; the microphone is kept out of it.
+    /// How much sound has come out of the speaker: the rendered frames (at 48 kHz) that weren't
+    /// silent. It depends on what was played, not on how fast the engine was pulled, so the
+    /// same words always add the same amount. Only speech reaches the speaker; the microphone
+    /// is kept out of it.
     package private(set) var playedFrames = 0
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
@@ -61,19 +63,25 @@ package final class OfflineAudio {
     }
 
     /// Renders every running engine a few hundred times a second, far faster than real time.
+    /// Stops by itself once no engine has been running for a second, and starts again with
+    /// the next engine.
     private func startRendering() {
         guard renderTask == nil else { return }
         renderTask = Task { [weak self] in
-            while !Task.isCancelled {
+            var idlePasses = 0
+            while idlePasses < 500 {
                 guard let self else { return }
-                self.renderOnce()
+                idlePasses = self.renderOnce() ? 0 : idlePasses + 1
                 try? await Task.sleep(for: .milliseconds(2))
             }
+            self?.renderTask = nil
         }
     }
 
-    private func renderOnce() {
-        for engine in engines where engine.isRunning && engine.isInManualRenderingMode {
+    /// Renders one pass on each running engine. Returns false when none is running.
+    private func renderOnce() -> Bool {
+        let running = engines.filter { $0.isRunning && $0.isInManualRenderingMode }
+        for engine in running {
             guard let output = AVAudioPCMBuffer(
                 pcmFormat: engine.manualRenderingFormat,
                 frameCapacity: engine.manualRenderingMaximumFrameCount
@@ -81,11 +89,9 @@ package final class OfflineAudio {
             // A failed render is the same as a sound card with nothing to play.
             guard (try? engine.renderOffline(output.frameCapacity, to: output)) != nil,
                   let samples = output.floatChannelData?[0] else { continue }
-            let isSilent = (0..<Int(output.frameLength)).allSatisfy { abs(samples[$0]) < 0.001 }
-            if !isSilent {
-                playedFrames += Int(output.frameLength)
-            }
+            playedFrames += (0..<Int(output.frameLength)).count { abs(samples[$0]) >= 0.001 }
         }
+        return !running.isEmpty
     }
 }
 
