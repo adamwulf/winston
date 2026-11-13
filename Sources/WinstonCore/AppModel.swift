@@ -6,6 +6,8 @@ import TelegramLink
 import VoiceLoop
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 /// UserDefaults keys for the settings AppModel persists.
@@ -121,6 +123,9 @@ public final class AppModel {
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
         applyVoiceSettings()
+        // After the saved voice is set: a Kokoro voice keeps its model.
+        voiceLoop.removeUnusedKokoroModel()
+        observeAppActivation()
     }
 
     #if DEBUG
@@ -141,6 +146,22 @@ public final class AppModel {
         voiceLoop.speechRate = speechRate
         voiceLoop.speechPitch = speechPitch
         voiceLoop.pausesOtherAudio = pausesOtherAudio
+    }
+
+    /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has
+    /// gone unused for a day, as launching does.
+    private func observeAppActivation() {
+        #if os(iOS)
+        let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
+        #elseif os(macOS)
+        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+        #endif
+        Task { [weak self] in
+            for await _ in activations {
+                guard let self else { return }
+                self.voiceLoop.removeUnusedKokoroModel()
+            }
+        }
     }
 
     /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the
