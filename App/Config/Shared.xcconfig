@@ -1,8 +1,16 @@
 // Build settings shared by every configuration of the Winston app target.
 
+// Versions live here, not in the project file, so Xcode Cloud's ci_pre_xcodebuild.sh can
+// stamp CURRENT_PROJECT_VERSION with its build number.
+VERSIONING_SYSTEM = apple-generic
+MARKETING_VERSION = 0.1
+CURRENT_PROJECT_VERSION = 1
+
 // Telegram API credentials from https://my.telegram.org (API development tools).
 // Real values go in Secrets.xcconfig, which is gitignored. Copy Secrets.example.xcconfig to start.
+// Xcode Cloud writes it from its TG_API_ID / TG_API_HASH environment variables (ci_post_clone.sh).
 TG_API_ID = 0
 TG_API_HASH =
 
+// After the defaults, so its values win.
 #include? "Secrets.xcconfig"

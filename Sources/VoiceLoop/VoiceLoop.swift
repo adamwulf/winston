@@ -92,6 +92,11 @@ public final class VoiceLoop {
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
+        #if os(iOS)
+        // Its own playback session, so the silent switch doesn't mute previews and the
+        // session voice mode sets up isn't touched.
+        previewSynthesizer.usesApplicationAudioSession = false
+        #endif
         observeAppAndSession()
     }
 
@@ -109,6 +114,8 @@ public final class VoiceLoop {
     /// If it fails, the interruption may still be live, so a later end still resumes the loop.
     private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
+        // A preview playing outside the engine would be heard as speech once listening starts.
+        previewSynthesizer.stopSpeaking(at: .immediate)
         isStarting = true
         defer {
             isStarting = false
@@ -278,7 +285,9 @@ public final class VoiceLoop {
     /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker.
     public func preview(_ text: String) {
         previewSynthesizer.stopSpeaking(at: .immediate)
-        if pipeline != nil {
+        // Starting or rebuilding counts as running: speak() queues for the engine then, and
+        // a preview played outside it would reach the microphone and be sent as speech.
+        if state != .off || isStarting {
             stopSpeaking()
             speak(text)
         } else {
