@@ -802,8 +802,11 @@ struct EngineStopTests {
         #expect(!bed.recognizer.isCancelled)
         #expect(loop.state == .listening(partial: "Mark that"))
 
-        loop.pauseThreshold = .milliseconds(50)
         bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Mark that read.") })
+        // Shortened only now: before the final arrives, "Mark that" has long been unchanged,
+        // so a short pause could end the utterance there.
+        loop.pauseThreshold = .milliseconds(50)
         #expect(await nextUtterance(of: loop)?.text == "Mark that read.")
     }
 
