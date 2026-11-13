@@ -28,8 +28,13 @@ struct SettingsView: View {
                 }
         }
         .sheet(item: $exportedLogs) { file in
-            ShareSheet(url: file.url) { exportedLogs = nil }
-                .presentationDetents([.medium, .large])
+            ShareSheet(url: file.url) {
+                // Shared or cancelled, the temporary zip isn't needed afterwards. (If the sheet is
+                // swiped away instead, the next export empties the folder.)
+                removeExportedLogs(file.url)
+                exportedLogs = nil
+            }
+            .presentationDetents([.medium, .large])
         }
         .alert("Couldn't Export Debug Logs", isPresented: showingExportError) {
             Button("OK") {}
@@ -109,6 +114,14 @@ struct SettingsView: View {
                 Self.log.error("debug log export failed", error.logCodes())
                 exportError = error.localizedDescription
             }
+        }
+    }
+
+    private func removeExportedLogs(_ zip: URL) {
+        do {
+            try FileManager.default.removeItem(at: zip)
+        } catch {
+            Self.log.warning("removing the exported zip failed", error.logCodes())
         }
     }
 

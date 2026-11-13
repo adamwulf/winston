@@ -36,6 +36,8 @@ enum DebugLogs {
             showAlert("Couldn't Export Debug Logs", detail: error.localizedDescription)
             return
         }
+        // Saved or cancelled, the temporary zip isn't needed afterwards.
+        defer { removeArchive(archive) }
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = archive.lastPathComponent
@@ -54,6 +56,15 @@ enum DebugLogs {
             // Codes only: the description names the file and folder the user chose.
             log.error("saving debug logs failed", error.logCodes())
             showAlert("Couldn't Save Debug Logs", detail: error.localizedDescription)
+        }
+    }
+
+    private static func removeArchive(_ archive: URL) {
+        do {
+            try FileManager.default.removeItem(at: archive)
+        } catch {
+            // The next export empties the folder anyway.
+            log.warning("removing the exported zip failed", error.logCodes())
         }
     }
 

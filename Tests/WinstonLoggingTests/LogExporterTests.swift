@@ -14,8 +14,7 @@ struct LogExporterTests {
             try Data("ts=1 msg=\"\(name)\"\n".utf8).write(to: logs.appending(path: name))
         }
 
-        let zip = try await LogExporter.exportLogs(directoryOverride: logs)
-        defer { try? FileManager.default.removeItem(at: zip) }
+        let zip = try await LogExporter.exportLogs(directoryOverride: logs, outputDirectory: base.exports)
 
         // Still there after the coordinator, which deletes its own zip when its block returns.
         #expect(FileManager.default.fileExists(atPath: zip.path(percentEncoded: false)))
@@ -37,12 +36,16 @@ struct LogExporterTests {
         try Data("line\n".utf8).write(to: logs.appending(path: "app-2026-11-13.log"))
         let timestamp = Date(timeIntervalSince1970: 1_794_551_444)
 
-        let zip = try await LogExporter.exportLogs(timestamp: timestamp, directoryOverride: logs)
-        defer { try? FileManager.default.removeItem(at: zip) }
+        let zip = try await LogExporter.exportLogs(
+            timestamp: timestamp,
+            directoryOverride: logs,
+            outputDirectory: base.exports
+        )
 
         let name = zip.lastPathComponent
         #expect(name.wholeMatch(of: /Winston-Logs-\d{8}-\d{6}\.zip/) != nil, "unexpected name \(name)")
         #expect(name == LogExporter.archiveName(for: timestamp))
+        #expect(zip.deletingLastPathComponent().standardizedFileURL == base.exports.standardizedFileURL)
     }
 
     @Test
@@ -56,21 +59,51 @@ struct LogExporterTests {
     }
 
     @Test
+    func eachExportRemovesTheEarlierOnes() async throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let logs = try LogDirectory.logsDirectoryURL(baseOverride: base.url)
+        try Data("line\n".utf8).write(to: logs.appending(path: "app-2026-11-13.log"))
+        let earlier = Date(timeIntervalSince1970: 1_794_551_444)
+        let later = Date(timeIntervalSince1970: 1_794_551_500)
+
+        let first = try await LogExporter.exportLogs(timestamp: earlier, directoryOverride: logs, outputDirectory: base.exports)
+        let second = try await LogExporter.exportLogs(timestamp: later, directoryOverride: logs, outputDirectory: base.exports)
+
+        #expect(!FileManager.default.fileExists(atPath: first.path(percentEncoded: false)))
+        let left = try FileManager.default.contentsOfDirectory(atPath: base.exports.path(percentEncoded: false))
+        #expect(left == [second.lastPathComponent])
+    }
+
+    @Test
     func exportingTwiceInOneSecondReplacesTheEarlierZip() async throws {
         let base = try TemporaryFolder()
         defer { base.remove() }
         let logs = try LogDirectory.logsDirectoryURL(baseOverride: base.url)
         try Data("line\n".utf8).write(to: logs.appending(path: "app-2026-11-13.log"))
-        // Not the other tests' timestamp: tests run in parallel, and the zip's path comes from it.
-        let timestamp = Date(timeIntervalSince1970: 1_794_551_445)
+        let timestamp = Date(timeIntervalSince1970: 1_794_551_444)
 
-        let first = try await LogExporter.exportLogs(timestamp: timestamp, directoryOverride: logs)
-        let second = try await LogExporter.exportLogs(timestamp: timestamp, directoryOverride: logs)
-        defer { try? FileManager.default.removeItem(at: second) }
+        let first = try await LogExporter.exportLogs(timestamp: timestamp, directoryOverride: logs, outputDirectory: base.exports)
+        let second = try await LogExporter.exportLogs(timestamp: timestamp, directoryOverride: logs, outputDirectory: base.exports)
 
         #expect(first == second)
         #expect(FileManager.default.fileExists(atPath: second.path(percentEncoded: false)))
     }
+
+    @Test
+    func exportsGoToTheirOwnTemporaryFolderByDefault() {
+        let folder = LogExporter.defaultOutputDirectory
+        #expect(folder.lastPathComponent == "DebugLogExports")
+        #expect(
+            folder.deletingLastPathComponent().standardizedFileURL
+                == FileManager.default.temporaryDirectory.standardizedFileURL
+        )
+    }
+}
+
+private extension TemporaryFolder {
+    /// A folder for the test's zips, so parallel tests don't empty each other's.
+    var exports: URL { url.appending(path: "Exports", directoryHint: .isDirectory) }
 }
 
 /// The entry names in a zip's central directory.

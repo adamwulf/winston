@@ -18,18 +18,28 @@ public enum LogExporter {
         }
     }
 
-    /// Flushes the log file, zips the Logs folder, and returns the zip: a temporary file named
-    /// `Winston-Logs-yyyyMMdd-HHmmss.zip` (local time).
+    /// Where exports go by default: a temporary folder of their own, emptied at the start of each
+    /// export, so a zip left behind (say, a share sheet swiped away) doesn't pile up.
+    public static var defaultOutputDirectory: URL {
+        FileManager.default.temporaryDirectory.appending(path: "DebugLogExports", directoryHint: .isDirectory)
+    }
+
+    /// Flushes the log file, zips the Logs folder, and returns the zip, named
+    /// `Winston-Logs-yyyyMMdd-HHmmss.zip` (local time). Empties `outputDirectory` first, which
+    /// removes earlier exports. Delete the zip once it's saved or shared.
     ///
     /// - Parameters:
     ///   - timestamp: stamped into the file name.
     ///   - directoryOverride: tests inject the folder to zip directly.
-    public static func exportLogs(timestamp: Date = Date(), directoryOverride: URL? = nil) async throws -> URL {
+    ///   - outputDirectory: where the zip goes; tests pass their own folder.
+    public static func exportLogs(
+        timestamp: Date = Date(),
+        directoryOverride: URL? = nil,
+        outputDirectory: URL = LogExporter.defaultOutputDirectory
+    ) async throws -> URL {
         await WinstonLog.flush()
         let logsDir = try directoryOverride ?? LogDirectory.logsDirectoryURL()
-        let destination = FileManager.default.temporaryDirectory
-            .appending(path: archiveName(for: timestamp), directoryHint: .notDirectory)
-        return try await zip(logsDir, to: destination)
+        return try await zip(logsDir, into: outputDirectory, named: archiveName(for: timestamp))
     }
 
     /// The zip's file name: `Winston-Logs-yyyyMMdd-HHmmss.zip`, in `timeZone`.
@@ -41,14 +51,16 @@ public enum LogExporter {
         return "Winston-Logs-\(formatter.string(from: date)).zip"
     }
 
-    /// File coordination blocks, so it runs off the caller's actor.
+    /// Empties `outputDirectory`, then zips `directory` into it. File work and coordination
+    /// block, so this runs off the caller's actor.
     @concurrent
-    private static func zip(_ directory: URL, to destination: URL) async throws -> URL {
+    private static func zip(_ directory: URL, into outputDirectory: URL, named name: String) async throws -> URL {
         let fileManager = FileManager.default
-        // Remove a stale destination from an export in the same second, so copyItem succeeds.
-        if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
-            try fileManager.removeItem(at: destination)
+        if fileManager.fileExists(atPath: outputDirectory.path(percentEncoded: false)) {
+            try fileManager.removeItem(at: outputDirectory)
         }
+        try fileManager.createDirectory(at: outputDirectory, withIntermediateDirectories: true)
+        let destination = outputDirectory.appending(path: name, directoryHint: .notDirectory)
 
         let coordinator = NSFileCoordinator()
         var coordinatorError: NSError?
