@@ -10,5 +10,9 @@ struct WinstonApp: App {
             ContentView()
                 .environment(model)
         }
+        .commands {
+            // One window: a second one would share the same model and Telegram session.
+            CommandGroup(replacing: .newItem) {}
+        }
     }
 }
