@@ -11,7 +11,8 @@ import UIKit
 ///
 /// One `AVAudioEngine` does everything. Its input node has voice processing on, so the app's
 /// own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer` running
-/// `SpeechTranscriber`. Speech is rendered with `AVSpeechSynthesizer.write(_:toBufferCallback:)`
+/// `SpeechTranscriber`. If voice processing can't start (it fails on some Macs), the engine
+/// runs without it and the microphone is ignored while a reply plays. Speech is rendered with `AVSpeechSynthesizer.write(_:toBufferCallback:)`
 /// and played on an `AVAudioPlayerNode` in the same engine.
 @MainActor
 @Observable
@@ -38,7 +39,8 @@ public final class VoiceLoop {
     /// `AVSpeechSynthesisVoice.identifier` to speak with; nil picks the best installed voice.
     public var voiceIdentifier: String?
     /// While speaking, transcripts with fewer words than this are ignored instead of
-    /// interrupting. Raise it if the app's own voice leaks through echo cancellation.
+    /// interrupting. Raise it if the app's own voice leaks through echo cancellation. When
+    /// echo cancellation couldn't start, speech never interrupts a reply.
     public var bargeInMinimumWords = 1
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
@@ -68,12 +70,15 @@ public final class VoiceLoop {
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
     /// Set when a result was ignored as too short while speaking (possibly the reply's own
-    /// echo). When speaking ends, all audio fed so far is consumed if this is set or
-    /// `bargeInMinimumWords` is above 1 (echo is expected then, and a short reply's echo may
-    /// only arrive after playback). That also covers the echo of the last words, whose results
+    /// echo). When speaking ends, all audio fed so far is consumed if this is set,
+    /// `bargeInMinimumWords` is above 1, or echo cancellation is off (echo is expected then,
+    /// and a short reply's echo may only arrive after playback). That also covers the echo of the last words, whose results
     /// lag behind the audio. At the default of 1 nothing is consumed, so words spoken right
     /// as a reply ends are kept.
     @ObservationIgnored private var ignoredWhileSpeaking = false
+    /// Set once voice processing fails to start, so later starts go straight to an engine
+    /// without it.
+    @ObservationIgnored private var voiceProcessingFailed = false
 
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
@@ -134,12 +139,10 @@ public final class VoiceLoop {
         var newPipeline: Pipeline?
         do {
             try Self.activateAudioSession()
-            let pipeline = try Pipeline(analyzerFormat: analyzerFormat)
+            let pipeline = try makeRunningPipeline(analyzerFormat: analyzerFormat)
             newPipeline = pipeline
+            // Microphone buffers queue in `pipeline.inputs` until the analyzer starts reading.
             try await analyzer.start(inputSequence: pipeline.inputs)
-            if run == runID {
-                try pipeline.engine.start()
-            }
         } catch {
             newPipeline?.tearDown()
             await analyzer.cancelAndFinishNow()
@@ -187,6 +190,33 @@ public final class VoiceLoop {
         ]
         // Replies carried over a rebuild, or queued while starting.
         speakNextIfIdle()
+    }
+
+    /// Builds and starts the engine with voice processing (echo cancellation), or without it
+    /// if voice processing can't start. On some Macs it fails to build the combined
+    /// input/output device it needs, even with the built-in microphone and speakers. Without
+    /// echo cancellation the loop is half-duplex: replies can't be interrupted by voice.
+    private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
+        if !voiceProcessingFailed {
+            do {
+                return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: true)
+            } catch {
+                // Each failed attempt takes seconds, so don't try again in this session.
+                voiceProcessingFailed = true
+            }
+        }
+        return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
+    }
+
+    private static func startedPipeline(analyzerFormat: AVAudioFormat, voiceProcessing: Bool) throws -> Pipeline {
+        let pipeline = try Pipeline(analyzerFormat: analyzerFormat, voiceProcessing: voiceProcessing)
+        do {
+            try pipeline.engine.start()
+        } catch {
+            pipeline.tearDown()
+            throw error
+        }
+        return pipeline
     }
 
     /// Stops listening and speaking.
@@ -261,7 +291,10 @@ public final class VoiceLoop {
         var candidate = transcript
         guard candidate.apply(piece) else { return }
         if currentSpeech != nil {
-            guard candidate.wordCount >= max(1, bargeInMinimumWords) else {
+            // Without echo cancellation the microphone hears the reply itself, so nothing
+            // spoken interrupts it (the app's stop button still does).
+            let echoCancelled = pipeline?.hasVoiceProcessing ?? false
+            guard echoCancelled, candidate.wordCount >= max(1, bargeInMinimumWords) else {
                 ignoredWhileSpeaking = true
                 return
             }
@@ -496,7 +529,7 @@ public final class VoiceLoop {
     /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for
     /// when the audio fed so far is consumed.
     private func consumeEcho() {
-        if ignoredWhileSpeaking || bargeInMinimumWords > 1, let pipeline {
+        if let pipeline, ignoredWhileSpeaking || bargeInMinimumWords > 1 || !pipeline.hasVoiceProcessing {
             transcript.consume(through: pipeline.fedAudio.time)
         }
         ignoredWhileSpeaking = false

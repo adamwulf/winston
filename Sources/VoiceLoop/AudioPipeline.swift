@@ -2,12 +2,15 @@
 import Speech
 import Synchronization
 
-/// The audio engine for one listening session: the microphone, with voice processing on,
-/// feeding converted buffers to the analyzer, and a player node for speech in the same engine.
+/// The audio engine for one listening session: the microphone, normally with voice processing
+/// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
 @MainActor
 final class Pipeline {
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
+    /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
+    /// the speech the player plays.
+    let hasVoiceProcessing: Bool
     /// The player's connection format; speech buffers are converted to it.
     let speechFormat: AVAudioFormat
     /// Microphone audio in the analyzer's format, for `SpeechAnalyzer.start(inputSequence:)`.
@@ -18,13 +21,16 @@ final class Pipeline {
     var analyzer: SpeechAnalyzer?
     var tasks: [Task<Void, Never>] = []
 
-    init(analyzerFormat: AVAudioFormat) throws {
+    init(analyzerFormat: AVAudioFormat, voiceProcessing: Bool) throws {
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
+        hasVoiceProcessing = voiceProcessing
 
         let input = engine.inputNode
-        // Echo cancellation: removes the player's output from the microphone signal.
-        try input.setVoiceProcessingEnabled(true)
+        if voiceProcessing {
+            // Echo cancellation: removes the player's output from the microphone signal.
+            try input.setVoiceProcessingEnabled(true)
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat),
               let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
