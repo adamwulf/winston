@@ -1,0 +1,52 @@
+{
+  "configurations" : [
+    {
+      "id" : "4F1E2D3C-5B6A-4798-8A1B-2C3D4E5F6A7B",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : true
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:..",
+        "identifier" : "TelegramLinkTests",
+        "name" : "TelegramLinkTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:..",
+        "identifier" : "VoiceLoopInterruptionTests",
+        "name" : "VoiceLoopInterruptionTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:..",
+        "identifier" : "VoiceLoopTests",
+        "name" : "VoiceLoopTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:..",
+        "identifier" : "WinstonCoreTests",
+        "name" : "WinstonCoreTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:..",
+        "identifier" : "WinstonLoggingTests",
+        "name" : "WinstonLoggingTests"
+      }
+    }
+  ],
+  "version" : 1
+}

@@ -18,6 +18,7 @@
 		A10000000000000000000006 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000008 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
+		A10000000000000000000009 /* Winston.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Winston.xctestplan; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -48,6 +49,7 @@
 			children = (
 				A10000000000000000000004 /* Winston */,
 				A10000000000000000000003 /* Config */,
+				A10000000000000000000009 /* Winston.xctestplan */,
 				A10000000000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
