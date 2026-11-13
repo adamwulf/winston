@@ -49,6 +49,16 @@ public final class VoiceLoop {
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
     public var bargeInMinimumWords = 1
+    /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
+    /// the iOS audio session mixes with other audio instead of interrupting it, and voice
+    /// processing ducks other audio as little as it can (it has no setting for not at all).
+    /// Changing this while the loop is running rebuilds the engine to apply it.
+    public var pausesOtherAudio = true {
+        didSet {
+            guard pausesOtherAudio != oldValue, pipeline != nil else { return }
+            restart(resettingAudioSession: true)
+        }
+    }
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
     /// the app model): it has a single consumer, and cancelling that iteration ends the
@@ -159,7 +169,7 @@ public final class VoiceLoop {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         var newPipeline: Pipeline?
         do {
-            try Self.activateAudioSession()
+            try Self.activateAudioSession(pausingOtherAudio: pausesOtherAudio)
             let pipeline = try makeRunningPipeline(analyzerFormat: analyzerFormat)
             newPipeline = pipeline
             // Microphone buffers queue in `pipeline.inputs` until the analyzer starts reading.
@@ -226,12 +236,20 @@ public final class VoiceLoop {
     /// if voice processing can't start. Without echo cancellation the loop is half-duplex:
     /// replies can't be interrupted by voice.
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
+        let ducksOtherAudio = pausesOtherAudio
+        func started(voiceProcessing: Bool) throws -> Pipeline {
+            try Self.startedPipeline(
+                analyzerFormat: analyzerFormat,
+                voiceProcessing: voiceProcessing,
+                ducksOtherAudio: ducksOtherAudio
+            )
+        }
         if !skipVoiceProcessing {
             do {
-                return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: true)
+                return try started(voiceProcessing: true)
             } catch {
                 Self.log.warning("voice processing failed to start; trying without echo cancellation", error.logContext())
-                let pipeline = try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
+                let pipeline = try started(voiceProcessing: false)
                 // Only voice processing failed, and a failed attempt can take seconds, so don't
                 // try it again in this session. A start that fails either way (a route change
                 // or call mid-start) leaves it on for next time.
@@ -239,11 +257,19 @@ public final class VoiceLoop {
                 return pipeline
             }
         }
-        return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
+        return try started(voiceProcessing: false)
     }
 
-    private static func startedPipeline(analyzerFormat: AVAudioFormat, voiceProcessing: Bool) throws -> Pipeline {
-        let pipeline = try Pipeline(analyzerFormat: analyzerFormat, voiceProcessing: voiceProcessing)
+    private static func startedPipeline(
+        analyzerFormat: AVAudioFormat,
+        voiceProcessing: Bool,
+        ducksOtherAudio: Bool
+    ) throws -> Pipeline {
+        let pipeline = try Pipeline(
+            analyzerFormat: analyzerFormat,
+            voiceProcessing: voiceProcessing,
+            ducksOtherAudio: ducksOtherAudio
+        )
         do {
             try pipeline.engine.start()
         } catch {
@@ -468,10 +494,18 @@ public final class VoiceLoop {
         state = kind == .stop ? .off : .listening(partial: "")
     }
 
-    /// Rebuilds everything after the engine stopped on its own. If starting fails, `start()`
-    /// turns the loop off.
-    private func restart() {
+    /// Rebuilds everything after the engine stopped on its own, or to apply a changed
+    /// `pausesOtherAudio`. If starting fails, `start()` turns the loop off.
+    ///
+    /// `resettingAudioSession` also deactivates the iOS session before the rebuild, so audio it
+    /// interrupted can resume and the new start activates it with the new options. Only for a
+    /// change made in the app's UI: a backgrounded app may not be allowed to activate a
+    /// recording session again.
+    private func restart(resettingAudioSession: Bool = false) {
         tearDown(.rebuild)
+        if resettingAudioSession {
+            Self.deactivateAudioSession()
+        }
         Task {
             do {
                 try await start()
@@ -483,10 +517,16 @@ public final class VoiceLoop {
 
     // MARK: - Audio session
 
-    private static func activateAudioSession() throws {
+    /// Without `pausingOtherAudio` the session mixes with other apps' audio instead of
+    /// interrupting it. macOS has no audio session; there only voice processing affects other audio.
+    private static func activateAudioSession(pausingOtherAudio: Bool) throws {
         #if os(iOS)
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .defaultToSpeaker]
+        if !pausingOtherAudio {
+            options.insert(.mixWithOthers)
+        }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetoothHFP, .defaultToSpeaker])
+        try session.setCategory(.playAndRecord, mode: .default, options: options)
         try session.setActive(true)
         #endif
     }

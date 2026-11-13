@@ -2,7 +2,7 @@ import SwiftUI
 import VoiceLoop
 import WinstonLogging
 
-/// The pause threshold, the voice, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -69,6 +69,11 @@ struct SettingsView: View {
                 Text("Voice Mode")
             } footer: {
                 Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
+            }
+            Section {
+                Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
+            } footer: {
+                Text("Turn this off to keep music and other audio playing during voice mode.")
             }
             Section("Debug Logs") {
                 #if os(iOS)

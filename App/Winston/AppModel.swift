@@ -13,6 +13,7 @@ private enum StorageKey {
     static let selectedChatID = "selectedChatID"
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
+    static let pausesOtherAudio = "pausesOtherAudio"
 }
 
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
@@ -59,6 +60,13 @@ final class AppModel {
             applyVoiceSettings()
         }
     }
+    /// Whether voice mode may pause or turn down other apps' audio, such as music. Persisted.
+    var pausesOtherAudio: Bool = UserDefaults.standard.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(pausesOtherAudio, forKey: StorageKey.pausesOtherAudio)
+            applyVoiceSettings()
+        }
+    }
     /// A user-facing error from the last action. The chat screen shows it in an alert.
     var errorMessage: String?
 
@@ -97,6 +105,7 @@ final class AppModel {
     private func applyVoiceSettings() {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
         voiceLoop.voiceIdentifier = voiceIdentifier
+        voiceLoop.pausesOtherAudio = pausesOtherAudio
     }
 
     /// Says a sample sentence in the chosen voice, for the settings voice picker.
