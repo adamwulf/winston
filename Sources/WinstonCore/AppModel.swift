@@ -14,6 +14,7 @@ private enum StorageKey {
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
     static let speechRate = "speechRate"
+    static let speechPitch = "speechPitch"
     static let pausesOtherAudio = "pausesOtherAudio"
 }
 
@@ -71,6 +72,13 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
+    /// How high replies are spoken, as a `VoiceLoop.speechPitch` multiplier (1 is normal). Persisted.
+    public var speechPitch: Float {
+        didSet {
+            defaults.set(speechPitch, forKey: StorageKey.speechPitch)
+            applyVoiceSettings()
+        }
+    }
     /// Whether voice mode may pause or turn down other apps' audio, such as music. Persisted.
     public var pausesOtherAudio: Bool {
         didSet {
@@ -110,6 +118,7 @@ public final class AppModel {
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
+        speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
         applyVoiceSettings()
     }
@@ -130,10 +139,12 @@ public final class AppModel {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
         voiceLoop.voiceIdentifier = voiceIdentifier
         voiceLoop.speechRate = speechRate
+        voiceLoop.speechPitch = speechPitch
         voiceLoop.pausesOtherAudio = pausesOtherAudio
     }
 
-    /// Says a sample sentence in the chosen voice and speed, for the settings voice picker and speed slider.
+    /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the
+    /// speed and pitch sliders.
     public func previewVoice() {
         let voices = VoiceLoop.availableVoices()
         let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first

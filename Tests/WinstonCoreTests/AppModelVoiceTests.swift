@@ -465,6 +465,28 @@ struct VoiceSettingsTests {
         #expect(!relaunched.voiceLoop.pausesOtherAudio)
     }
 
+    @Test func repliesAreSpokenAtTheVoicesOwnPitchByDefault() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        #expect(model.speechPitch == VoiceLoop.defaultSpeechPitch)
+        #expect(model.voiceLoop.speechPitch == VoiceLoop.defaultSpeechPitch)
+    }
+
+    @Test func theSpeakingPitchIsSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let highest = VoiceLoop.speechPitches.upperBound
+
+        model.speechPitch = highest
+
+        #expect(harness.defaults.object(forKey: "speechPitch") as? Float == highest)
+        #expect(model.voiceLoop.speechPitch == highest)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.speechPitch == highest)
+        #expect(relaunched.voiceLoop.speechPitch == highest)
+    }
+
     @Test func turningPauseOtherAudioOffInVoiceModeRebuildsTheEngineAndKeepsListening() async throws {
         let harness = Harness()
         let model = harness.model
