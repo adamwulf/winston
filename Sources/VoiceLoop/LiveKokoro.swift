@@ -60,8 +60,11 @@ package actor LiveKokoro: KokoroEngine {
             }
         }
         // Downloads only the files that are missing or incomplete.
-        model = try await Self.load(from: modelFolder, offline: false, downloadProgress: downloadProgress)
-        FileManager.default.createFile(atPath: downloadedMarker.path, contents: nil)
+        let downloaded = try await Self.load(from: modelFolder, offline: false, downloadProgress: downloadProgress)
+        // Before the model counts as loaded: if the marker can't be written (the disk is full),
+        // the load fails, and a retry downloads nothing more but writes the marker again.
+        try Data().write(to: downloadedMarker)
+        model = downloaded
     }
 
     private static func load(
