@@ -395,7 +395,8 @@ public actor TelegramLink {
     }
 
     /// Why `setTdlibParameters` failed, as a fixed string for the log, from TDLib's message.
-    private static func setupFailureReason(_ tdlibMessage: String?) -> String {
+    /// Internal so the tests can check it: it only reaches the log.
+    static func setupFailureReason(_ tdlibMessage: String?) -> String {
         guard let tdlibMessage else { return "notTDLib" }
         if tdlibMessage.contains("api_id") || tdlibMessage.contains("api_hash") {
             return "apiCredentials"
