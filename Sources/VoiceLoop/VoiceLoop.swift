@@ -34,9 +34,9 @@ public final class VoiceLoop {
 
     /// `.off` means voice mode is stopped: before the first successful `start()`, after
     /// `stop()`, and after an unrecoverable failure (a failed `start()`, a transcriber failure,
-    /// or an audio interruption iOS doesn't let it resume from). While the engine is rebuilt
-    /// after an audio route change, and during an audio interruption, it stays
-    /// `.listening(partial: "")`. iOS doesn't promise to report an interruption's end, so the
+    /// an audio interruption iOS doesn't let it resume from, or the engine stopping itself more
+    /// than 3 times in 10 seconds). While the engine is rebuilt after an audio route change,
+    /// and during an audio interruption, it stays `.listening(partial: "")`. iOS doesn't promise to report an interruption's end, so the
     /// loop also retries when the app next comes to the foreground. That retry may run while
     /// the interruption is still active; if it fails, `state` shows `.off`, but the loop still
     /// resumes if iOS later reports the interruption's end.
@@ -78,7 +78,9 @@ public final class VoiceLoop {
     /// (or, if iOS never says so, when the app becomes active). Cleared by `tearDown(.stop)`,
     /// except that a failed foreground retry sets it again.
     @ObservationIgnored private var resumeAfterInterruption = false
-    /// When the engine stopped on its own, within the last `engineStopWindow`.
+    /// When the engine stopped on its own, within the last `engineStopWindow`. Cleared when
+    /// voice mode stops and when a settings change rebuilds the engine, so each start counts
+    /// afresh (on the iPhone, every new engine has stopped once right after starting).
     @ObservationIgnored private var recentEngineStops: [ContinuousClock.Instant] = []
 
     @ObservationIgnored private var transcript = Transcript()
@@ -241,18 +243,21 @@ public final class VoiceLoop {
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
         let pausingOtherAudio = pausesOtherAudio
         func started(voiceProcessing: Bool) throws -> Pipeline {
-            try Self.activateAudioSession(voiceProcessing: voiceProcessing, pausingOtherAudio: pausingOtherAudio)
-            return try Self.startedPipeline(
+            try Self.startedPipeline(
                 analyzerFormat: analyzerFormat,
                 voiceProcessing: voiceProcessing,
                 ducksOtherAudio: pausingOtherAudio
             )
         }
         if !skipVoiceProcessing {
+            // Outside the fallback below: a session that can't activate (a call holds it) is
+            // not a voice processing failure.
+            try Self.activateAudioSession(voiceProcessing: true, pausingOtherAudio: pausingOtherAudio)
             do {
                 return try started(voiceProcessing: true)
             } catch {
                 Self.log.warning("voice processing failed to start; trying without echo cancellation", error.logContext())
+                try Self.activateAudioSession(voiceProcessing: false, pausingOtherAudio: pausingOtherAudio)
                 let pipeline = try started(voiceProcessing: false)
                 // Only voice processing failed, and a failed attempt can take seconds, so don't
                 // try it again in this session. A start that fails either way (a route change
@@ -261,6 +266,7 @@ public final class VoiceLoop {
                 return pipeline
             }
         }
+        try Self.activateAudioSession(voiceProcessing: false, pausingOtherAudio: pausingOtherAudio)
         return try started(voiceProcessing: false)
     }
 
@@ -491,6 +497,7 @@ public final class VoiceLoop {
             // Also covers a failed restart, whose session was kept active across the rebuild.
             Self.deactivateAudioSession()
             resumeAfterInterruption = false
+            recentEngineStops = []
             if state != .off {
                 Self.log.notice("voice mode stopped")
             }
@@ -502,9 +509,8 @@ public final class VoiceLoop {
     /// again, keeping the analyzer and the utterance in progress, and rebuilds everything if
     /// that fails. A reply being spoken starts over.
     ///
-    /// If the engine keeps stopping, starting it again won't help, and it would turn voice
-    /// processing (and iOS's call volume) on and off without end, so the loop turns off instead.
-    /// `source` says what noticed the stop, for the logs.
+    /// If the engine keeps stopping, starting it again won't help, so the loop turns off instead
+    /// of trying forever. `source` says what noticed the stop, for the logs.
     private func engineStopped(_ pipeline: Pipeline, source: String) {
         let now = ContinuousClock.now
         recentEngineStops = recentEngineStops.filter { $0.duration(to: now) < Self.engineStopWindow } + [now]
@@ -513,7 +519,6 @@ public final class VoiceLoop {
                 "audio engine keeps stopping; giving up",
                 pipeline.formatContext.merging(["stops": "\(recentEngineStops.count)", "source": source]) { $1 }
             )
-            recentEngineStops = []
             tearDown(.stop)
             return
         }
@@ -545,6 +550,8 @@ public final class VoiceLoop {
     private func restart(resettingAudioSession: Bool = false) {
         tearDown(.rebuild)
         if resettingAudioSession {
+            // A new engine for a settings change, not one that stopped on its own.
+            recentEngineStops = []
             Self.deactivateAudioSession()
         }
         startInTask { error in
@@ -579,10 +586,9 @@ public final class VoiceLoop {
             options.insert(.mixWithOthers)
         }
         let session = AVAudioSession.sharedInstance()
-        // Voice processing puts a session that isn't in a chat mode into voice chat (call volume),
-        // which changes the audio hardware and stops the engine. With `.default` here, every
-        // rebuild switched it back, so the engine was rebuilt twice a second and never heard
-        // anything. Without voice processing, voice chat would only lower the playback level.
+        // Voice processing is meant for a chat mode, and iOS switches the session to voice chat
+        // (call volume) once it runs anyway. Without voice processing, voice chat would only
+        // lower the playback level.
         let mode: AVAudioSession.Mode = voiceProcessing ? .voiceChat : .default
         try session.setCategory(.playAndRecord, mode: mode, options: options)
         try session.setActive(true)
