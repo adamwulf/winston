@@ -21,8 +21,11 @@ public final class VoiceLoop {
         case speaking
     }
 
-    /// `.off` until `start()` succeeds, and again after `stop()` or when the loop stops on its
-    /// own (an audio interruption it can't resume from, or a transcriber failure).
+    /// `.off` means voice mode is stopped: before the first successful `start()`, after
+    /// `stop()`, and after an unrecoverable failure (a failed `start()`, a transcriber failure,
+    /// or an audio interruption iOS doesn't let it resume from). While the engine is rebuilt
+    /// after an audio route change, and during an audio interruption, it stays
+    /// `.listening(partial: "")`.
     public private(set) var state: State = .off
     /// How long the transcript must stay unchanged before an utterance is finished.
     public var pauseThreshold: Duration = .milliseconds(1200)
@@ -32,7 +35,9 @@ public final class VoiceLoop {
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation.
     public var bargeInMinimumWords = 1
 
-    /// One element per finished utterance. Single consumer.
+    /// One element per finished utterance. Iterate it from one long-lived task (for example
+    /// the app model): it has a single consumer, and cancelling that iteration ends the
+    /// stream for good.
     @ObservationIgnored public let utterances: AsyncStream<Utterance>
     @ObservationIgnored private let utteranceContinuation: AsyncStream<Utterance>.Continuation
 
@@ -52,6 +57,9 @@ public final class VoiceLoop {
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
+    /// End of the latest result ignored as too short while speaking (possibly the reply's own
+    /// echo). Its audio is consumed once speaking ends, so it isn't sent afterwards.
+    @ObservationIgnored private var ignoredWhileSpeaking: CMTime?
 
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
@@ -69,7 +77,19 @@ public final class VoiceLoop {
         isStarting = true
         defer { isStarting = false }
         let run = runID
+        do {
+            try await startPipeline(run: run)
+        } catch {
+            // A start that stop() or an interruption overtook leaves the state to them.
+            if run == runID {
+                tearDown(.stop)
+            }
+            throw error
+        }
+    }
 
+    /// The body of `start()`. Returns quietly if `runID` moves on while it waits.
+    private func startPipeline(run: Int) async throws {
         try await Self.requestPermissions()
         let transcriber = try await Self.makeTranscriber()
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -94,7 +114,7 @@ public final class VoiceLoop {
             throw error
         }
         guard let pipeline = newPipeline, run == runID else {
-            // stop() was called while the analyzer was starting.
+            // stop() or an interruption came while the analyzer was starting.
             newPipeline?.tearDown()
             await analyzer.cancelAndFinishNow()
             Self.deactivateAudioSession()
@@ -132,12 +152,14 @@ public final class VoiceLoop {
                 }
             },
         ]
+        // Replies carried over a rebuild, or queued while starting.
+        speakNextIfIdle()
     }
 
     /// Stops listening and speaking.
     public func stop() {
         resumeAfterInterruption = false
-        tearDown(deactivatingSession: true)
+        tearDown(.stop)
     }
 
     /// Drops the utterance in progress without sending it.
@@ -150,10 +172,11 @@ public final class VoiceLoop {
 
     /// Queues `text` to be spoken after anything already queued. Strips markdown/code first.
     ///
-    /// Ignored while the loop is off. A message waits while an utterance is in progress, so
-    /// the reply doesn't start over the user and get cut off by barge-in.
+    /// Ignored while the loop is off, but queued while it is starting or rebuilding. A message
+    /// waits while an utterance is in progress, so the reply doesn't start over the user and
+    /// get cut off by barge-in.
     public func speak(_ text: String) {
-        guard pipeline != nil else { return }
+        guard state != .off || isStarting else { return }
         let spoken = SpokenText.speakable(text)
         guard !spoken.isEmpty else { return }
         speechQueue.append(spoken)
@@ -163,12 +186,7 @@ public final class VoiceLoop {
     /// Stops speaking and clears the queue.
     public func stopSpeaking() {
         speechQueue.removeAll()
-        guard let currentSpeech else { return }
-        self.currentSpeech = nil
-        currentSpeech.cancel()
-        synthesizer.stopSpeaking(at: .immediate)
-        pipeline?.player.stop()
-        updateListeningState()
+        silence()
     }
 
     /// Installed voices for the current language, best quality first, for a settings picker.
@@ -202,7 +220,7 @@ public final class VoiceLoop {
         }
         // The results ended while this pipeline is still running, so nothing more can be heard.
         if self.pipeline === pipeline {
-            tearDown(deactivatingSession: true)
+            tearDown(.stop)
         }
     }
 
@@ -210,13 +228,20 @@ public final class VoiceLoop {
         var candidate = transcript
         guard candidate.apply(piece) else { return }
         if currentSpeech != nil {
-            // Barge-in: speech over the reply stops it and becomes the next utterance.
-            guard candidate.wordCount >= max(1, bargeInMinimumWords) else { return }
+            guard candidate.wordCount >= max(1, bargeInMinimumWords) else {
+                ignoredWhileSpeaking = max(ignoredWhileSpeaking ?? piece.range.end, piece.range.end)
+                return
+            }
+            // Barge-in: speech over the reply stops it and becomes the next utterance. Results
+            // ignored so far may be this utterance's first words, so their audio is kept.
+            ignoredWhileSpeaking = nil
             stopSpeaking()
         }
         transcript = candidate
         pauseDetector.update(text: transcript.text, at: .now)
         updateListeningState()
+        // An empty or revoked result can end the utterance a held reply was waiting on.
+        speakNextIfIdle()
     }
 
     private func checkForPause() {
@@ -275,11 +300,25 @@ public final class VoiceLoop {
         return transcriber
     }
 
-    /// Stops everything and sets `state = .off`. A restart keeps the iOS audio session active,
-    /// because a backgrounded app may not be allowed to activate a recording session again.
-    private func tearDown(deactivatingSession: Bool) {
+    private enum Teardown {
+        /// Voice mode ends: the queue is cleared, the iOS session deactivated, `state` is `.off`.
+        case stop
+        /// The engine is about to be rebuilt: the queue is kept, with the message that was cut
+        /// off back at the front, and `state` stays `.listening(partial: "")`. The iOS session
+        /// stays active, because a backgrounded app may not be allowed to activate a recording
+        /// session again.
+        case rebuild
+    }
+
+    private func tearDown(_ kind: Teardown) {
         runID += 1
-        stopSpeaking()
+        if kind == .rebuild, let currentSpeech {
+            speechQueue.insert(currentSpeech.text, at: 0)
+        }
+        silence()
+        if kind == .stop {
+            speechQueue.removeAll()
+        }
         transcript = Transcript()
         pauseDetector.reset()
         if let pipeline {
@@ -288,17 +327,18 @@ public final class VoiceLoop {
             if let analyzer = pipeline.analyzer {
                 Task { await analyzer.cancelAndFinishNow() }
             }
-            if deactivatingSession {
-                Self.deactivateAudioSession()
-            }
         }
-        state = .off
+        if kind == .stop {
+            // Also covers a failed restart, whose session was kept active across the rebuild.
+            Self.deactivateAudioSession()
+        }
+        state = kind == .stop ? .off : .listening(partial: "")
     }
 
-    /// Rebuilds everything after the engine stopped on its own. If that fails the loop stays
-    /// off, which `state` shows.
+    /// Rebuilds everything after the engine stopped on its own. If starting fails, `start()`
+    /// turns the loop off.
     private func restart() {
-        tearDown(deactivatingSession: false)
+        tearDown(.rebuild)
         Task { try? await start() }
     }
 
@@ -340,13 +380,17 @@ public final class VoiceLoop {
             // iOS has already stopped the engine and deactivated the session. Restart from
             // scratch when it's over. A start in progress (say, a restart) is abandoned.
             guard pipeline != nil || isStarting else { return }
-            tearDown(deactivatingSession: false)
+            tearDown(.rebuild)
             resumeAfterInterruption = true
         case .ended(let shouldResume):
             guard resumeAfterInterruption else { return }
             resumeAfterInterruption = false
-            // If iOS doesn't allow resuming, or starting fails, the loop stays off.
-            guard shouldResume else { return }
+            guard shouldResume else {
+                // iOS doesn't allow resuming, so voice mode is over.
+                tearDown(.stop)
+                return
+            }
+            // If starting fails, `start()` turns the loop off.
             Task { try? await start() }
         case nil:
             break
@@ -362,7 +406,7 @@ public final class VoiceLoop {
         let text = speechQueue.removeFirst()
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = voice()
-        let playback = SpeechPlayback(player: pipeline.player, format: pipeline.speechFormat) { [weak self] playback in
+        let playback = SpeechPlayback(text: text, player: pipeline.player, format: pipeline.speechFormat) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
@@ -376,8 +420,28 @@ public final class VoiceLoop {
     private func speechFinished(_ playback: SpeechPlayback) {
         guard currentSpeech === playback else { return }
         currentSpeech = nil
+        consumeIgnoredAudio()
         updateListeningState()
         speakNextIfIdle()
+    }
+
+    /// Stops the message being spoken, leaving the queue alone.
+    private func silence() {
+        guard let currentSpeech else { return }
+        self.currentSpeech = nil
+        currentSpeech.cancel()
+        synthesizer.stopSpeaking(at: .immediate)
+        pipeline?.player.stop()
+        consumeIgnoredAudio()
+        updateListeningState()
+    }
+
+    /// Once speaking ends, results ignored during it (likely echo) must not be sent later.
+    private func consumeIgnoredAudio() {
+        if let ignoredWhileSpeaking {
+            transcript.consume(through: ignoredWhileSpeaking)
+        }
+        ignoredWhileSpeaking = nil
     }
 
     private func voice() -> AVSpeechSynthesisVoice? {

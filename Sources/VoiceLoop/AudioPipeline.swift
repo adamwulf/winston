@@ -80,12 +80,20 @@ final class SpeechPlayback: Sendable {
         var isCancelled = false
     }
 
+    /// The message being spoken, so it can be queued again if playback is cut off.
+    let text: String
     private let state: Mutex<State>
     private let onFinished: @Sendable (SpeechPlayback) -> Void
 
     /// `format` is the player's connection format. `onFinished` is called, on an arbitrary
     /// thread, once the last buffer has played.
-    init(player: AVAudioPlayerNode, format: AVAudioFormat, onFinished: @escaping @Sendable (SpeechPlayback) -> Void) {
+    init(
+        text: String,
+        player: AVAudioPlayerNode,
+        format: AVAudioFormat,
+        onFinished: @escaping @Sendable (SpeechPlayback) -> Void
+    ) {
+        self.text = text
         state = Mutex(State(player: player, format: format))
         self.onFinished = onFinished
     }
