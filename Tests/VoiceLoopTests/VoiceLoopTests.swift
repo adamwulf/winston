@@ -281,6 +281,55 @@ import Testing
         #expect(transcript.text == "this")
     }
 
+    @Test func volatileFinalizedWithoutResendIsKept() {
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("hello", 0)], end: 1))
+        // The next phrase starts after the first ends, so the first was finalized as-is.
+        _ = transcript.apply(piece([("world", 1.5)], end: 2))
+        #expect(transcript.text == "hello world")
+        // A refinement of the second phrase still replaces only that phrase.
+        _ = transcript.apply(piece([("world", 1.5), ("again", 1.9)], end: 2.4))
+        #expect(transcript.text == "hello world again")
+        #expect(transcript.take().text == "hello world again")
+    }
+
+    @Test func volatileFinalizedWithoutResendIsKeptBeforeALaterFinal() {
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("hello", 0)], end: 1))
+        _ = transcript.apply(piece([("there.", 1.2)], end: 1.8, final: true))
+        #expect(transcript.text == "hello there.")
+    }
+
+    @Test func emptyVolatileResultEmptiesTheTranscript() {
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("uh", 0)], end: 0.5))
+        #expect(!transcript.isEmpty)
+        // The transcriber revokes its guess for the same audio.
+        let applied = transcript.apply(TranscriptPiece(
+            text: AttributedString(),
+            alternatives: [],
+            range: CMTimeRange(start: time(0), end: time(0.8)),
+            isFinal: false
+        ))
+        #expect(applied)
+        #expect(transcript.isEmpty)
+    }
+
+    @Test func consumeIgnoresLaterResultsForThatAudio() {
+        var transcript = Transcript()
+        // Echo heard while speaking was ignored; its audio is consumed when speech ends.
+        transcript.consume(through: time(5.4))
+        var applied = transcript.apply(piece([("the", 5)], end: 5.8, final: true))
+        #expect(!applied)
+        #expect(transcript.isEmpty)
+        applied = transcript.apply(piece([("the", 5), ("real", 7)], end: 7.5))
+        #expect(applied)
+        #expect(transcript.text == "real")
+        // Consuming never moves backwards.
+        transcript.consume(through: time(1))
+        #expect(transcript.consumedThrough == time(5.4))
+    }
+
     @Test func wordsWithoutTimingAreDroppedWhenTrimming() {
         #expect(Transcript.words(of: AttributedString("untimed words"), startingAt: time(1)) == "")
     }

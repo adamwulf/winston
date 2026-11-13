@@ -16,16 +16,21 @@ struct TranscriptPiece {
 
 /// The utterance in progress, assembled from transcriber results.
 ///
-/// Final results accumulate; the latest volatile result replaces the previous one. Once an
-/// utterance is taken or discarded, its audio is *consumed*: later results for that audio
-/// (late finals, refined volatiles) are ignored, and results that straddle the boundary keep
-/// only the words that start after it. That stops already-sent words from being sent again
-/// or merged into the next utterance.
+/// Final results accumulate. A new result replaces the volatile result its audio overlaps; a
+/// volatile result that ends before the new one starts was finalized without being re-sent
+/// (the transcriber may do that when finalizing doesn't change it), so it is kept as final.
+///
+/// Once an utterance is taken or discarded, its audio is *consumed*: later results for that
+/// audio (late finals, refined volatiles) are ignored, and results that straddle the boundary
+/// keep only the words that start after it. That stops already-sent words from being sent
+/// again or merged into the next utterance.
 struct Transcript {
     private struct Segment {
         var text: String
         /// Readings that differ from `text`, most likely first.
         var alternatives: [String]
+        /// The audio the result covers.
+        var range: CMTimeRange
     }
 
     private var finalized: [Segment] = []
@@ -63,8 +68,13 @@ struct Transcript {
             text: line,
             alternatives: alternatives
                 .map(Utterance.singleLine)
-                .filter { !$0.isEmpty && $0.lowercased() != line.lowercased() }
+                .filter { !$0.isEmpty && $0.lowercased() != line.lowercased() },
+            range: piece.range
         )
+        if let earlier = volatile, earlier.range.end <= piece.range.start {
+            if !earlier.text.isEmpty { finalized.append(earlier) }
+            volatile = nil
+        }
         if piece.isFinal {
             if !line.isEmpty { finalized.append(segment) }
             volatile = nil
@@ -89,6 +99,12 @@ struct Transcript {
         let utterance = Utterance(text: text, alternatives: alternatives)
         discard()
         return utterance
+    }
+
+    /// Marks audio before `time` as used without touching the text, so results for it are
+    /// ignored from now on.
+    mutating func consume(through time: CMTime) {
+        consumedThrough = max(consumedThrough, time)
     }
 
     /// Drops the utterance so far, consuming its audio.
