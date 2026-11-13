@@ -61,11 +61,13 @@ struct MessageRow: View {
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
                 bubble
                     .contentShape(.rect(cornerRadius: 16))
-                    .onTapGesture(count: 2) {
-                        // Same 👍 toggle as the context menu, and only on sent messages like it.
+                    // Same 👍 toggle as the context menu, and only on sent messages like it. High priority so a
+                    // double tap on a document row or the photo retry button reacts instead of tapping that
+                    // button twice; a single tap there still reaches the button once the double tap fails.
+                    .highPriorityGesture(TapGesture(count: 2).onEnded {
                         guard message.sendState == .sent else { return }
                         Task { await model.toggleThumbsUp(on: message) }
-                    }
+                    })
                 if !message.reactions.isEmpty {
                     ReactionsRow(reactions: message.reactions)
                 }
