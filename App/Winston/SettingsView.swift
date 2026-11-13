@@ -3,7 +3,7 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice with its speed and pitch, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -106,6 +106,17 @@ struct SettingsView: View {
             } footer: {
                 Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
             }
+            if voices.contains(where: { $0.engine == .kokoro }) {
+                Section {
+                    LabeledContent("Voice model") {
+                        kokoroModelStatus
+                    }
+                } header: {
+                    Text("Kokoro Voices")
+                } footer: {
+                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 335 MB. Until it's ready, the best system voice speaks.")
+                }
+            }
             Section {
                 Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
             } footer: {
@@ -185,10 +196,45 @@ struct SettingsView: View {
     }
 
     private func label(for voice: VoiceOption) -> String {
-        switch voice.quality {
+        if voice.engine == .kokoro {
+            return "\(voice.name) (Kokoro)"
+        }
+        return switch voice.quality {
         case .premium: "\(voice.name) (Premium)"
         case .enhanced: "\(voice.name) (Enhanced)"
         case .standard: voice.name
+        }
+    }
+
+    /// Where the Kokoro model is: its size before anything has asked for it, the download's
+    /// progress, ready, or failed with a retry.
+    @ViewBuilder
+    private var kokoroModelStatus: some View {
+        switch model.voiceLoop.kokoroModelState {
+        case .notLoaded:
+            Text("About 335 MB")
+        case .loading, .downloading(progress: 1...):
+            HStack {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Loading…")
+            }
+        case .downloading(let progress):
+            HStack {
+                ProgressView(value: progress)
+                    .frame(width: 80)
+                Text("Downloading \(progress.formatted(.percent.precision(.fractionLength(0))))")
+                    .monospacedDigit()
+            }
+        case .ready:
+            Label("Ready", systemImage: "checkmark.circle.fill")
+        case .failed:
+            HStack {
+                Text("Couldn't download")
+                Button("Retry") {
+                    model.voiceLoop.loadKokoroModel()
+                }
+            }
         }
     }
 }

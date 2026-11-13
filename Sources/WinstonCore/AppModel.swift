@@ -144,10 +144,12 @@ public final class AppModel {
     }
 
     /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the
-    /// speed and pitch sliders.
+    /// speed and pitch sliders. Says nothing for a Kokoro voice whose model isn't ready yet, rather than
+    /// name it in another voice; settings shows the model's download instead.
     public func previewVoice() {
         let voices = VoiceLoop.availableVoices()
         let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first
+        if voice?.engine == .kokoro, voiceLoop.kokoroModelState != .ready { return }
         let name = voice?.name ?? "default"
         voiceLoop.preview("This is how I sound with the \(name) voice.")
     }
