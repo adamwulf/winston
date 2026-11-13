@@ -340,8 +340,9 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         return user
     }
 
-    /// Like TDLib with `offset: 0`: newest first, starting at `fromMessageId` itself, or at
-    /// the newest message for 0.
+    /// Like TDLib with `offset: 0`: newest first, starting at the newest message for 0, and
+    /// otherwise at the message just older than `fromMessageId`. TDLib leaves `fromMessageId`
+    /// itself out unless the offset is negative (`OrderedMessages::get_history` steps past it).
     package func getChatHistory(
         chatId: Int64?,
         fromMessageId: Int64?,
@@ -353,7 +354,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         let page: [Message] = withState { state in
             let newestFirst = (state.messages[chatId ?? 0] ?? []).sorted { $0.id > $1.id }
             let from = fromMessageId ?? 0
-            let eligible = from == 0 ? newestFirst : newestFirst.filter { $0.id <= from }
+            let eligible = from == 0 ? newestFirst : newestFirst.filter { $0.id < from }
             return Array(eligible.prefix(min(limit ?? 100, state.historyPageSize)))
         }
         return Messages(messages: page, totalCount: page.count)
