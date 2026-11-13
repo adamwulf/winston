@@ -4,10 +4,13 @@ import Foundation
 /// pronunciation for digits, so "3.5", "$20" or "2026" would all come out as the same unknown
 /// sound. System voices read digits themselves and get the text as it is.
 ///
-/// Handles integers (with or without thousands separators), decimals and version numbers,
-/// negatives, percentages, amounts in dollars, euros and pounds, ordinals (1st, 22nd), times
-/// (10:30), and years after a word such as "in" or a month ("in 2026", "May 4, 1999"). Digits
-/// inside a word are spelled out too ("mp3" becomes "mp three").
+/// Handles integers (with or without thousands separators), decimals (".5" too) and version
+/// numbers, negatives, percentages, amounts in dollars, euros and pounds (with "k", "M" or "bn"
+/// after them too), ordinals (1st, 22nd), times (10:30), ranges ("10-20" is "ten to twenty"),
+/// and years after a word such as "in" or a month ("in 2026", "May 4, 1999"). Digits are read
+/// one by one in a number with a leading zero ("0042") and in three or more numbers joined by
+/// dashes (a phone number, an ISO date). Digits inside a word are spelled out too ("mp3"
+/// becomes "mp three").
 struct KokoroNumbers {
     private let formatter: NumberFormatter
 
@@ -18,30 +21,42 @@ struct KokoroNumbers {
         formatter.numberStyle = .spellOut
     }
 
+    private typealias Match = Regex<NumberPattern>.Match
+    private typealias NumberPattern = (
+        Substring,
+        hour: Substring?, minute: Substring?,
+        currency: Substring?, amount: Substring?, cents: Substring?, scale: Substring?,
+        integer: Substring?, fraction: Substring?, percent: Substring?, ordinal: Substring?,
+        point: Substring?, pointPercent: Substring?
+    )
+
     /// `text` with every number in it as words.
     func spelledOut(_ text: String) -> String {
+        let matches = Array(text.matches(of: pattern))
         var result = ""
         var cursor = text.startIndex
-        for match in text.matches(of: pattern) {
-            var before = text[cursor..<match.range.lowerBound]
-            var words: String
-            if let hour = match.output.hour, let minute = match.output.minute {
-                words = time(hour: hour, minute: minute, following: text[match.range.upperBound...])
-            } else if let symbol = match.output.currency, let amount = match.output.amount {
-                words = money(symbol, amount: amount, fraction: match.output.cents, scale: match.output.scale)
-            } else if let integer = match.output.integer {
-                words = number(
-                    integer,
-                    fraction: match.output.fraction,
-                    isPercent: match.output.percent != nil,
-                    isOrdinal: match.output.ordinal != nil,
-                    preceding: text[..<match.range.lowerBound]
-                )
-            } else {
-                continue
+        var first = 0
+        while first < matches.count {
+            // The numbers joined to this one by single dashes, as in "10-20" or "555-123-4567".
+            var last = first
+            while last + 1 < matches.count, Self.isDash(between: matches[last], matches[last + 1], in: text) {
+                last += 1
             }
-            // A minus sign that starts a word makes the number negative; one between two
-            // numbers, as in "10-20", is a dash.
+            let start = matches[first].range.lowerBound
+            let end = matches[last].range.upperBound
+            var before = text[cursor..<start]
+            var words: String
+            switch last - first {
+            case 0:
+                words = self.words(for: matches[first], in: text)
+            case 1:
+                // A range: "2020–2024" is "twenty twenty to twenty twenty-four".
+                words = self.words(for: matches[first], in: text) + " to " + self.words(for: matches[last], in: text)
+            default:
+                // Not a range: a phone number or a date, read group by group.
+                words = matches[first...last].map { digitByDigit(text[$0.range]) }.joined(separator: ", ")
+            }
+            // A minus sign that starts a word makes the number negative.
             if let sign = before.last, sign == "-" || sign == "−" {
                 let beforeSign = before.dropLast().last ?? (cursor == text.startIndex ? nil : text[text.index(before: cursor)])
                 if beforeSign == nil || beforeSign?.isWhitespace == true || beforeSign == "(" || beforeSign == "[" {
@@ -51,17 +66,55 @@ struct KokoroNumbers {
             }
             result += before
             // Apart from letters the digits were joined to, as in "mp3" or "4K".
-            if let last = result.last, last.isLetter {
+            if let previous = result.last, previous.isLetter, words.first?.isLetter == true {
                 result += " "
             }
             result += words
-            if match.range.upperBound < text.endIndex, text[match.range.upperBound].isLetter {
+            if end < text.endIndex, text[end].isLetter {
                 result += " "
             }
-            cursor = match.range.upperBound
+            cursor = end
+            first = last + 1
         }
         result += text[cursor...]
         return result
+    }
+
+    /// Whether `lhs` and `rhs` are joined by a hyphen or an en dash and nothing else.
+    private static func isDash(between lhs: Match, _ rhs: Match, in text: String) -> Bool {
+        let between = text[lhs.range.upperBound..<rhs.range.lowerBound]
+        return between == "-" || between == "–"
+    }
+
+    /// One number's words.
+    private func words(for match: Match, in text: String) -> String {
+        if let hour = match.output.hour, let minute = match.output.minute {
+            return time(hour: hour, minute: minute, following: text[match.range.upperBound...])
+        }
+        if let symbol = match.output.currency, let amount = match.output.amount {
+            return money(symbol, amount: amount, fraction: match.output.cents, scale: match.output.scale)
+        }
+        if let integer = match.output.integer {
+            return number(
+                integer,
+                fraction: match.output.fraction,
+                isPercent: match.output.percent != nil,
+                isOrdinal: match.output.ordinal != nil,
+                preceding: text[..<match.range.lowerBound]
+            )
+        }
+        if let point = match.output.point {
+            // A decimal without its leading zero (".5"), unless the dot follows a word or a
+            // number, as in "file.25".
+            let digits = point.dropFirst()
+            let preceding = text[..<match.range.lowerBound].last
+            guard preceding?.isLetter != true, preceding?.isNumber != true else {
+                return "." + cardinal(digits)
+            }
+            let words = "point " + digitByDigit(digits)
+            return match.output.pointPercent == nil ? words : words + " percent"
+        }
+        return String(text[match.range])
     }
 
     // MARK: - Kinds of number
@@ -69,8 +122,9 @@ struct KokoroNumbers {
     /// "10:30" is "ten thirty", "9:05" "nine oh five", "10:00" "ten o'clock" (or just "ten"
     /// before AM or PM).
     private func time(hour: Substring, minute: Substring, following: Substring) -> String {
-        let hourWords = cardinal(hour)
-        guard let minutes = Int(minute) else { return hourWords }
+        // As a number: "09:30" is "nine thirty", not a code read digit by digit.
+        guard let hours = Int(hour), let minutes = Int(minute) else { return digitByDigit(hour) }
+        let hourWords = cardinal(hours)
         if minutes == 0 {
             let meridiem = following.drop { $0 == " " }.lowercased()
             let isMeridiem = ["am", "pm", "a.m", "p.m"].contains { meridiem.hasPrefix($0) }
@@ -83,12 +137,14 @@ struct KokoroNumbers {
     }
 
     /// "$20" is "twenty dollars", "$3.50" "three dollars and fifty cents", "$0.99" "ninety-nine
-    /// cents", "$2.5 million" "two point five million dollars".
+    /// cents", "$2.5 million" and "$2.5M" "two point five million dollars", "$20k" "twenty
+    /// thousand dollars".
     private func money(_ symbol: Substring, amount: Substring, fraction: Substring?, scale: Substring?) -> String {
         let units = Self.currencies[String(symbol)] ?? Self.dollars
         let whole = Int(amount.filter { $0 != "," })
         if let scale {
-            let scaleWord = scale.trimmingCharacters(in: .whitespaces).lowercased()
+            let written = scale.trimmingCharacters(in: .whitespaces).lowercased()
+            let scaleWord = Self.scaleAbbreviations[written] ?? written
             return decimal(amount, fraction: fraction) + " " + scaleWord + " " + units.plural
         }
         guard let fraction, let whole else {
@@ -112,6 +168,9 @@ struct KokoroNumbers {
         let singularCent: String
         let pluralCent: String
     }
+
+    /// The short forms of a scale after an amount of money, lowercased: "$20k", "$2.5M", "$3bn".
+    private static let scaleAbbreviations = ["k": "thousand", "m": "million", "b": "billion", "bn": "billion"]
 
     private static let dollars = Currency(singular: "dollar", plural: "dollars", singularCent: "cent", pluralCent: "cents")
 
@@ -179,7 +238,7 @@ struct KokoroNumbers {
         var words = cardinal(integer)
         if let fraction {
             for part in fraction.split(separator: ".") {
-                words += " point " + part.map { cardinal(String($0)) }.joined(separator: " ")
+                words += " point " + digitByDigit(part)
             }
         }
         return words
@@ -187,14 +246,26 @@ struct KokoroNumbers {
 
     // MARK: - Words
 
-    /// Digits, with or without thousands separators, as words. Digits too many for a number are
-    /// read one by one.
+    /// Digits, with or without thousands separators, as words. A leading zero means it's a code
+    /// or a phone number, not an amount ("0042" is "zero zero four two"), and digits too many for
+    /// a number are read one by one too.
     private func cardinal(_ digits: some StringProtocol) -> String {
         let plain = String(digits.filter { $0 != "," })
-        guard let value = Int(plain) else {
-            return plain.map { cardinal(String($0)) }.joined(separator: " ")
+        let hasLeadingZero = plain.count > 1 && plain.first == "0" && !digits.contains(",")
+        guard !hasLeadingZero, let value = Int(plain) else {
+            return digitByDigit(plain)
         }
         return cardinal(value)
+    }
+
+    /// Each digit as a word, and each decimal point as "point"; anything else is left out.
+    private func digitByDigit(_ text: some StringProtocol) -> String {
+        text.compactMap { character -> String? in
+            if character == "." { return "point" }
+            guard let digit = character.wholeNumberValue, character.isASCII else { return nil }
+            return cardinal(digit)
+        }
+        .joined(separator: " ")
     }
 
     private func cardinal(_ value: Int) -> String {
@@ -223,15 +294,18 @@ struct KokoroNumbers {
 
     // MARK: - Finding numbers
 
-    /// A time; or an amount of money; or a number, with any decimal or version parts and a
-    /// percent sign or ordinal ending. ASCII digits only. Not `Sendable`, so not shared.
-    private let pattern = #/
+    /// A time; or an amount of money, with any scale after it; or a number, with any decimal or
+    /// version parts and a percent sign or ordinal ending; or a decimal without its leading zero.
+    /// ASCII digits only. Not `Sendable`, so not shared.
+    private let pattern: Regex<NumberPattern> = #/
         (?<hour>[0-9]{1,2}):(?<minute>[0-5][0-9])(?![0-9])
         |
         (?<currency>[$€£])(?<amount>[0-9]{1,3}(?:,[0-9]{3})+(?![0-9])|[0-9]+)(?<cents>\.[0-9]+)?
-            (?<scale>\ +(?i:thousand|million|billion|trillion)\b)?
+            (?<scale>\ +(?i:thousand|million|billion|trillion)\b|(?:[kKmMbB]|bn|BN|Bn)\b)?
         |
         (?<integer>[0-9]{1,3}(?:,[0-9]{3})+(?![0-9])|[0-9]+)(?<fraction>(?:\.[0-9]+)+)?
             (?:(?<percent>%)|(?<ordinal>(?i:st|nd|rd|th))\b)?
+        |
+        (?<point>\.[0-9]+)(?<pointPercent>%)?
         /#
 }

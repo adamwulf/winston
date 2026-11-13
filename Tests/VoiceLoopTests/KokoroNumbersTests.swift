@@ -19,7 +19,25 @@ import Testing
 
     @Test func listsOfSmallNumbersStayApart() {
         #expect(say("1,2,3") == "one,two,three")
-        #expect(say("pages 10-20") == "pages ten-twenty")
+    }
+
+    @Test func twoNumbersJoinedByADashAreARange() {
+        #expect(say("pages 10-20") == "pages ten to twenty")
+        #expect(say("in 2020–2024") == "in twenty twenty to twenty twenty-four")
+        #expect(say("2020–2024") == "two thousand twenty to two thousand twenty-four")
+        #expect(say("10-20%") == "ten to twenty percent")
+        #expect(say("$10-$20") == "ten dollars to twenty dollars")
+        #expect(say("1.5-2.5") == "one point five to two point five")
+        // A minus that starts the first number still makes it negative.
+        #expect(say("-5-10") == "minus five to ten")
+        // A dash after a word is a hyphen, as in a name.
+        #expect(say("COVID-19") == "COVID-nineteen")
+    }
+
+    @Test func threeOrMoreNumbersJoinedByDashesAreReadGroupByGroup() {
+        #expect(say("Call 555-123-4567.") == "Call five five five, one two three, four five six seven.")
+        #expect(say("on 2026-11-13") == "on two zero two six, one one, one three")
+        #expect(say("1-800-555-0199") == "one, eight zero zero, five five five, zero one nine nine")
     }
 
     @Test func decimalsAndVersionsAreReadDigitByDigitAfterThePoint() {
@@ -28,6 +46,25 @@ import Testing
         #expect(say("Swift 6.2.1 is out.") == "Swift six point two point one is out.")
         // A full stop after a number ends the sentence.
         #expect(say("The answer is 7.") == "The answer is seven.")
+    }
+
+    @Test func decimalsWithoutTheirLeadingZero() {
+        #expect(say(".25 seconds") == "point two five seconds")
+        #expect(say("up .5%") == "up point five percent")
+        #expect(say("-.5") == "minus point five")
+        #expect(say("(.75)") == "(point seven five)")
+        // A dot after a word or a number isn't a decimal point.
+        #expect(say("file.25") == "file.twenty-five")
+    }
+
+    @Test func numbersWithALeadingZeroAreReadDigitByDigit() {
+        #expect(say("Call 02079460958") == "Call zero two zero seven nine four six zero nine five eight")
+        #expect(say("code 0042") == "code zero zero four two")
+        #expect(say("00") == "zero zero")
+        // Not a decimal below one, nor a time.
+        #expect(say("0.5") == "zero point five")
+        #expect(say("at 09:30") == "at nine thirty")
+        #expect(say("at 09:05") == "at nine oh five")
     }
 
     @Test func negatives() {
@@ -52,6 +89,16 @@ import Testing
         #expect(say("$5.00") == "five dollars")
         #expect(say("$1,200") == "one thousand two hundred dollars")
         #expect(say("$2.5 million") == "two point five million dollars")
+        #expect(say("$20 thousand") == "twenty thousand dollars")
+        #expect(say("$3 billion") == "three billion dollars")
+        // Scales written short, before any reading as dollars and cents.
+        #expect(say("$2.5M") == "two point five million dollars")
+        #expect(say("$5m") == "five million dollars")
+        #expect(say("$20k") == "twenty thousand dollars")
+        #expect(say("raised $1.2K.") == "raised one point two thousand dollars.")
+        #expect(say("$3B") == "three billion dollars")
+        #expect(say("$4.5bn") == "four point five billion dollars")
+        #expect(say("€2bn") == "two billion euros")
         #expect(say("€15") == "fifteen euros")
         #expect(say("£2.20") == "two pounds and twenty pence")
     }
