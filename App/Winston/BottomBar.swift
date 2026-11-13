@@ -4,7 +4,7 @@ import VoiceLoop
 import WinstonCore
 
 /// The bar under the messages: a text field and photo button in text mode, or the live transcript in
-/// voice mode, plus the 👍 button and the voice/text toggle in both.
+/// voice mode, with the 👍 button and the voice/text toggle to their left in both.
 struct BottomBar: View {
     @Environment(AppModel.self) private var model
     @Binding var draft: String
@@ -20,13 +20,14 @@ struct BottomBar: View {
                 .opacity(model.isBotTyping ? 1 : 0)
                 .accessibilityHidden(!model.isBotTyping)
             HStack(spacing: 12) {
+                // On the left, so Send is the only button to the right of the text field.
+                thumbsUpButton
+                modeToggle
                 if model.isVoiceMode {
                     voiceControls
                 } else {
                     textControls
                 }
-                thumbsUpButton
-                modeToggle
             }
             .imageScale(.large)
         }
