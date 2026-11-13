@@ -278,13 +278,19 @@ struct StartingTests {
 struct ListeningTests {
     @Test func whatIsHeardShowsAsTheLiveTranscriptAndIsSentAfterAPause() async throws {
         let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
+        let loop = bed.makeLoop()
+        // Long until the final result is in: a short pause could end the utterance at the
+        // partial "Mark that" before the final arrives.
+        loop.pauseThreshold = .seconds(30)
+        try await loop.start()
         defer { loop.stop() }
         #expect(loop.state == .listening(partial: ""))
 
         bed.recognizer.hear("Mark that", over: 0...0.5)
         #expect(await eventually { loop.state == .listening(partial: "Mark that") })
         bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true, alternatives: ["Mark that red."])
+        #expect(await eventually { loop.state == .listening(partial: "Mark that read.") })
+        loop.pauseThreshold = .milliseconds(50)
 
         let utterance = await nextUtterance(of: loop)
         #expect(utterance?.text == "Mark that read.")
