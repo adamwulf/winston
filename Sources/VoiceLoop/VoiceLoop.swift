@@ -203,7 +203,7 @@ public final class VoiceLoop {
     private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
         // A preview playing outside the engine would be heard as speech once listening starts.
-        stopPreview()
+        stopPreviewPlayer()
         isStarting = true
         defer {
             isStarting = false
@@ -417,7 +417,7 @@ public final class VoiceLoop {
     /// on an engine of its own. Like a reply, it uses the system voice for a Kokoro voice whose
     /// model isn't ready.
     public func preview(_ text: String) {
-        stopPreview()
+        stopPreviewPlayer()
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
@@ -449,9 +449,19 @@ public final class VoiceLoop {
         }
     }
 
+    /// Cuts off a preview as a new `preview(_:)` would, for when there's nothing new to say: one
+    /// playing on its own engine while the loop is off, or, while the loop is running, what it
+    /// is saying (dropping the queue, as `stopSpeaking()` does).
+    public func stopPreview() {
+        stopPreviewPlayer()
+        if state != .off || isStarting {
+            stopSpeaking()
+        }
+    }
+
     /// Stops a preview played while the loop was off. Stopping the player cancels its playback,
     /// so a sentence Kokoro is still rendering is dropped.
-    private func stopPreview() {
+    private func stopPreviewPlayer() {
         previewKokoroSynthesis?.cancel()
         previewKokoroSynthesis = nil
         previewSynthesizer.stopSpeaking(at: .immediate)

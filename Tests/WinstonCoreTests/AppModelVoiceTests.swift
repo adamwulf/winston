@@ -186,6 +186,38 @@ struct VoiceModeTests {
         #expect(harness.bed.kokoro.requests.allSatisfy { $0.voice == "af_heart" })
     }
 
+    @Test func pickingAKokoroVoiceThatIsNotReadyCutsOffThePreviewBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        model.previewVoice()
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(engine.isRunning)
+
+        model.voiceIdentifier = "kokoro.af_heart"
+        model.previewVoice()
+
+        // The system voice's preview stopped, and nothing took its place.
+        #expect(!engine.isRunning)
+        #expect(harness.bed.audio.engines.count == 1)
+        harness.bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func inVoiceModePickingAKokoroVoiceThatIsNotReadyCutsOffThePreviewBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        await model.setVoiceMode(true)
+        model.previewVoice()
+        #expect(model.voiceLoop.state == .speaking)
+
+        model.voiceIdentifier = "kokoro.af_heart"
+        model.previewVoice()
+
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        harness.bed.kokoro.finishLoading(succeeding: true)
+    }
+
     @Test func outsideVoiceModeAKokoroVoiceIsPreviewedOnceItsModelIsReadyAndNotBefore() async throws {
         let harness = Harness()
         harness.bed.kokoro.loadBehavior = .waits
