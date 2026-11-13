@@ -124,10 +124,21 @@ import Testing
     @Test func speechWellAboveTheNoiseFloorIsVoice() {
         var detector = VoiceActivityDetector()
         for _ in 0..<20 { _ = detector.process(rms: 0.004) }
+        let speechStart = detector.process(rms: 0.05)
         let speech = detector.process(rms: 0.05)
         let roomNoise = detector.process(rms: 0.005)
+        #expect(!speechStart)
         #expect(speech)
         #expect(!roomNoise)
+    }
+
+    @Test func aSingleLoudBufferLikeAKeyClickIsNotVoice() {
+        var detector = VoiceActivityDetector()
+        for _ in 0..<20 { _ = detector.process(rms: 0.004) }
+        let click = detector.process(rms: 0.08)
+        let after = detector.process(rms: 0.004)
+        #expect(!click)
+        #expect(!after)
     }
 
     @Test func nearSilenceIsNeverVoice() {

@@ -10,11 +10,16 @@ import Synchronization
 struct VoiceActivityDetector {
     /// Running estimate of the background noise level.
     private(set) var noiseFloor: Float?
+    /// Loud buffers in a row so far.
+    private var loudRun = 0
 
     /// Voice is anything this many times louder than the noise floor...
     static let ratio: Float = 3
-    /// ...and above this absolute level (about -50 dBFS), so near-silence never counts.
+    /// ...and above this absolute level (about -50 dBFS), so near-silence never counts...
     static let minimumLevel: Float = 0.003
+    /// ...for at least this many buffers in a row (about 0.17 s at 4096 frames, 48 kHz), so a
+    /// keyboard click doesn't count.
+    static let minimumRun = 2
 
     /// Takes one buffer's RMS level and returns whether it sounds like speech.
     mutating func process(rms: Float) -> Bool {
@@ -22,11 +27,12 @@ struct VoiceActivityDetector {
             noiseFloor = rms
             return false
         }
-        let isVoice = rms > floor * Self.ratio && rms > Self.minimumLevel
+        let isLoud = rms > floor * Self.ratio && rms > Self.minimumLevel
+        loudRun = isLoud ? loudRun + 1 : 0
         // Falls quickly to quieter levels, and rises slowly, so speech doesn't raise the floor
         // much but a louder room is learned within several seconds.
         noiseFloor = rms < floor ? floor * 0.8 + rms * 0.2 : floor * 0.99 + rms * 0.01
-        return isVoice
+        return loudRun >= Self.minimumRun
     }
 }
 

@@ -5,7 +5,7 @@ import Foundation
 /// voice (`heardVoice(at:)`); the transcript alone lags speech by more than a second at
 /// times, which used to send a paragraph one sentence at a time.
 ///
-/// Text that doesn't end a sentence (no closing `.`, `?` or `!`, as in "but it's uh") waits
+/// Text that doesn't end a sentence (no closing `.`, `?`, `!` or `…`, as in "but it's uh") waits
 /// twice as long, so a mid-thought pause doesn't split the message; the transcriber adds the
 /// closing punctuation once the speaker has finished. Pure: callers pass in the times, so it
 /// never reads a clock.
