@@ -64,9 +64,12 @@ package final class VoiceTestBed {
         )
     }
 
-    /// A voice loop on this test bed.
-    package func makeLoop() -> VoiceLoop {
-        VoiceLoop(environment: environment)
+    /// A voice loop on this test bed. Its sound cues are off unless `soundCues` is true, so the
+    /// only sound it makes is what it says.
+    package func makeLoop(soundCues: Bool = false) -> VoiceLoop {
+        let loop = VoiceLoop(environment: environment)
+        loop.playsSoundCues = soundCues
+        return loop
     }
 
     /// The current listening session's recognizer.

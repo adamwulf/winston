@@ -27,4 +27,12 @@ import WinstonCore
             Reaction(emoji: "👍", count: 1, isChosen: true),
         ]).hasMyThumbsUp)
     }
+
+    @Test func theBotsThumbsUpIsEveryThumbsUpButAdamsOwn() {
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: false)]).othersThumbsUpCount == 1)
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 2, isChosen: true)]).othersThumbsUpCount == 1)
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: true)]).othersThumbsUpCount == 0)
+        #expect(message(reactions: [Reaction(emoji: "👀", count: 1, isChosen: false)]).othersThumbsUpCount == 0)
+        #expect(message(reactions: []).othersThumbsUpCount == 0)
+    }
 }

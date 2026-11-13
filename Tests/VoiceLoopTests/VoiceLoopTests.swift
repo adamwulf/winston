@@ -213,6 +213,52 @@ import Testing
     }
 }
 
+@Suite struct SoundCueSynthesisTests {
+    private let sampleRate = 48_000.0
+
+    /// Sign changes in `samples`, a measure of pitch for audio of the same length.
+    private func zeroCrossings(_ samples: ArraySlice<Float>) -> Int {
+        zip(samples, samples.dropFirst()).count { ($0 < 0) != ($1 < 0) && $0 != 0 && $1 != 0 }
+    }
+
+    @Test func eachCueIsShortSoftAndStartsAndEndsInSilence() {
+        for cue in SoundCue.allCases {
+            let samples = cue.samples(sampleRate: sampleRate)
+            let peak = samples.map(abs).max() ?? 0
+            #expect(cue.duration < (cue == .reaction ? .milliseconds(450) : .milliseconds(300)))
+            // The loop waits this long for the stop cue to play.
+            #expect(samples.count == Int((cue.duration / .seconds(1) * sampleRate).rounded()))
+            // Audible, but well below full scale and the speech it plays beside.
+            #expect(peak > 0.1)
+            #expect(peak < 0.3)
+            // No click at either end.
+            #expect(samples.first == 0)
+            #expect(samples.last == 0)
+        }
+    }
+
+    @Test func theStartTapsRiseInPitchAndTheStopTapsFall() {
+        let started = SoundCue.listeningStarted.samples(sampleRate: sampleRate)
+        let stopped = SoundCue.listeningStopped.samples(sampleRate: sampleRate)
+        let half = started.count / 2
+
+        #expect(stopped.count == started.count)
+        #expect(zeroCrossings(started[..<half]) < zeroCrossings(started[half...]))
+        #expect(zeroCrossings(stopped[..<half]) > zeroCrossings(stopped[half...]))
+    }
+
+    @Test func aCueBufferHoldsItsSamplesInTheSpeechFormat() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(SoundCue.reaction.buffer(in: format))
+        let samples = SoundCue.reaction.samples(sampleRate: 48_000)
+
+        #expect(buffer.format == format)
+        #expect(Int(buffer.frameLength) == samples.count)
+        let channel = try #require(buffer.floatChannelData)[0]
+        #expect(Array(UnsafeBufferPointer(start: channel, count: samples.count)) == samples)
+    }
+}
+
 @Suite struct PauseDetectorTests {
     let start = ContinuousClock.Instant.now
 

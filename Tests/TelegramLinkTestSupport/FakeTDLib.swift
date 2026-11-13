@@ -238,6 +238,23 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         return sent
     }
 
+    /// The bot reacts to a message with `emoji`, as the coordinator does with 👍: the count
+    /// goes up and whether Adam chose it stays as it was. The link is told, as TDLib does.
+    package func botReacts(_ emoji: String, to messageID: Int64, in chatID: Int64) throws {
+        let type = ReactionType.reactionTypeEmoji(ReactionTypeEmoji(emoji: emoji))
+        try react(chatID: chatID, messageID: messageID) { reactions in
+            if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
+                reactions[index] = messageReaction(
+                    type,
+                    count: reactions[index].totalCount + 1,
+                    isChosen: reactions[index].isChosen
+                )
+            } else {
+                reactions.append(messageReaction(type, count: 1, isChosen: false))
+            }
+        }
+    }
+
     /// The server rejects a pending message.
     package func failSend(of temporaryID: Int64, in chatID: Int64, code: Int = 400, message: String) {
         guard let pending = self.message(temporaryID, in: chatID) else { return }

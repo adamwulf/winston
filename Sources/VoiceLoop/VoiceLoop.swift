@@ -17,7 +17,8 @@ import UIKit
 /// microphone is ignored while a reply plays (half-duplex: only `stopSpeaking()`
 /// interrupts). Speech is rendered with
 /// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
-/// the same engine.
+/// the same engine. Sound cues (`SoundCue`) play on a second player node there: taps when
+/// listening starts and stops, and whatever `play(_:)` is asked for.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -66,6 +67,9 @@ public final class VoiceLoop {
             restart(resettingAudioSession: true)
         }
     }
+    /// Whether `play(_:)` and the start and stop of listening make a sound. Most tests turn it
+    /// off, since they measure what was spoken by how much sound came out.
+    @ObservationIgnored package var playsSoundCues = true
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
     /// the app model): it has a single consumer, and cancelling that iteration ends the
@@ -76,6 +80,9 @@ public final class VoiceLoop {
     /// The running engine and analyzer. Nil while off, while starting, and during a rebuild
     /// or an interruption (when `state` is still `.listening`).
     @ObservationIgnored private var pipeline: Pipeline?
+    /// The pipeline playing the stop cue after `stop()`: it has stopped listening, and its engine
+    /// runs only until the cue has played. Nil otherwise.
+    @ObservationIgnored private var closingPipeline: Pipeline?
     /// True while `start()` is running, so a second call doesn't start a second pipeline.
     @ObservationIgnored private var isStarting = false
     /// Bumped by every teardown (stop, rebuild, interruption), so a `start()` that one of
@@ -112,6 +119,13 @@ public final class VoiceLoop {
     @ObservationIgnored private var ignoredWhileSpeaking = false
     /// Results ignored while the current reply plays, for the logs.
     @ObservationIgnored private var ignoredResultsThisReply = 0
+    /// Cues scheduled on the current pipeline that haven't finished playing, oldest first, with
+    /// the ID their completion reports. If the engine stops itself, they play again from the
+    /// start once it is running again.
+    @ObservationIgnored private var unfinishedCues: [(id: Int, cue: SoundCue)] = []
+    /// The ID of the last cue scheduled. IDs only grow, so a late completion for a cue that was
+    /// cut off can't mark a newer one finished.
+    @ObservationIgnored private var lastCueID = 0
     /// Set once voice processing fails to start, so later starts go straight to an engine
     /// without it (a failed attempt can block the main thread for seconds).
     @ObservationIgnored private var skipVoiceProcessing = false
@@ -256,6 +270,9 @@ public final class VoiceLoop {
         if !pipeline.engine.isRunning {
             engineStopped(pipeline, source: "startCheck")
         }
+        // Adam can talk now, also after a rebuild or an interruption. Does nothing if the engine
+        // is being rebuilt; the rebuild's start plays it.
+        play(.listeningStarted)
         // Replies carried over a rebuild, or queued while starting. Does nothing if the engine
         // is being rebuilt.
         speakNextIfIdle()
@@ -265,6 +282,8 @@ public final class VoiceLoop {
     /// cancellation), or without it if voice processing can't start. Without echo cancellation
     /// the loop is half-duplex: replies can't be interrupted by voice.
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat, session: Int) throws -> Pipeline {
+        // Only one engine runs at a time, and this start owns the session from here on.
+        endClosingPipeline()
         let pausingOtherAudio = pausesOtherAudio
         func started(voiceProcessing: Bool) throws -> Pipeline {
             try startedPipeline(
@@ -317,7 +336,8 @@ public final class VoiceLoop {
         return pipeline
     }
 
-    /// Stops listening and speaking.
+    /// Stops listening and speaking. `state` is `.off` at once; the stop cue plays out on the
+    /// engine for a moment after.
     public func stop() {
         tearDown(.stop)
     }
@@ -364,6 +384,20 @@ public final class VoiceLoop {
             speak(text)
         } else {
             previewSynthesizer.speak(makeUtterance(text))
+        }
+    }
+
+    /// Plays `cue` through the loop's engine, mixed with any reply being spoken, so echo
+    /// cancellation keeps it out of what is heard. It doesn't change `state`. Plays only while
+    /// the loop is listening or speaking: does nothing while off, starting, or rebuilding the
+    /// engine. A cue still playing finishes first.
+    public func play(_ cue: SoundCue) {
+        guard playsSoundCues, let pipeline, pipeline.engine.isRunning else { return }
+        lastCueID += 1
+        let id = lastCueID
+        unfinishedCues.append((id, cue))
+        pipeline.play(cue) { [weak self] in
+            Task { @MainActor in self?.cueFinished(id) }
         }
     }
 
@@ -484,7 +518,8 @@ public final class VoiceLoop {
 
     private enum Teardown {
         /// Voice mode ends: the queue is cleared, the iOS session deactivated, no resume is
-        /// pending after an interruption, and `state` is `.off`.
+        /// pending after an interruption, and `state` is `.off`. If the engine is running, it
+        /// plays the stop cue first, and the session is deactivated after that.
         case stop
         /// The engine is about to be rebuilt: the queue is kept, with the message that was cut
         /// off back at the front, and `state` stays `.listening(partial: "")`. The iOS session
@@ -504,10 +539,19 @@ public final class VoiceLoop {
         }
         transcript = Transcript()
         pauseDetector.reset()
+        // A cue cut off here isn't played again; the next start plays its own.
+        unfinishedCues = []
         if let pipeline {
             self.pipeline = nil
-            pipeline.tearDown()
-            // What its tap recorded since the last 100 ms poll, now that the tap is gone.
+            // No stop cue for a rebuild, or for an engine that has stopped (an interruption, or
+            // one that keeps stopping).
+            if kind == .stop && playsSoundCues && pipeline.engine.isRunning {
+                close(pipeline)
+            } else {
+                pipeline.tearDown()
+            }
+            // What its tap recorded since the last 100 ms poll, now that the tap is gone (both
+            // paths remove it).
             pipeline.timeline.writeRecorded()
             if let recognizer = pipeline.recognizer {
                 Task { await recognizer.cancel() }
@@ -515,7 +559,10 @@ public final class VoiceLoop {
         }
         if kind == .stop {
             // Also covers a failed restart, whose session was kept active across the rebuild.
-            Self.deactivateAudioSession()
+            // A pipeline playing the stop cue deactivates it when it's done.
+            if closingPipeline == nil {
+                Self.deactivateAudioSession()
+            }
             resumeAfterInterruption = false
             recentEngineStops = []
             if state != .off {
@@ -525,9 +572,47 @@ public final class VoiceLoop {
         state = kind == .stop ? .off : .listening(partial: "")
     }
 
+    /// Stops listening on `pipeline` at once, but keeps its engine running to play the stop cue,
+    /// then tears it down and deactivates the iOS session. A start that builds a new engine
+    /// meanwhile ends it sooner, with `endClosingPipeline()`.
+    private func close(_ pipeline: Pipeline) {
+        pipeline.stopListening()
+        // The stop cue replaces any cue still playing.
+        pipeline.cuePlayer.stop()
+        pipeline.play(.listeningStopped) {}
+        closingPipeline = pipeline
+        // A timer rather than the cue's completion, which can come early or not at all if the
+        // engine stops by itself. It holds the loop until then, so the engine is always stopped.
+        let wait = SoundCue.listeningStopped.duration + Self.stopCueMargin
+        pipeline.tasks = [Task { [self] in
+            do {
+                try await Task.sleep(for: wait)
+            } catch {
+                // A new start ended the pipeline first, and owns the session now.
+                return
+            }
+            guard closingPipeline === pipeline else { return }
+            closingPipeline = nil
+            pipeline.tearDown()
+            Self.deactivateAudioSession()
+        }]
+    }
+
+    /// Ends the pipeline playing the stop cue now, cutting the cue short. For a start about to
+    /// build a new engine, which activates the iOS session itself, so it isn't deactivated.
+    private func endClosingPipeline() {
+        guard let closingPipeline else { return }
+        self.closingPipeline = nil
+        closingPipeline.tearDown()
+    }
+
+    /// How much longer than the stop cue its engine keeps running. On a device the sound
+    /// reaches the speaker, or AirPods, a little after it is rendered.
+    private static let stopCueMargin: Duration = .milliseconds(250)
+
     /// The engine stopped itself because the audio hardware changed. Starts the same engine
     /// again, keeping the analyzer and the utterance in progress, and rebuilds everything if
-    /// that fails. A reply being spoken starts over.
+    /// that fails. A reply being spoken starts over, and so does a cue that hadn't finished.
     ///
     /// If the engine keeps stopping, starting it again won't help, so the loop turns off instead
     /// of trying forever. `source` says what noticed the stop, for the logs.
@@ -547,9 +632,17 @@ public final class VoiceLoop {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
         silence(consumingEcho: true, reason: "engineStopped")
+        // On the iPhone every new engine stops once right after it starts, cutting off the
+        // start cue.
+        let interruptedCues = unfinishedCues.map(\.cue)
+        unfinishedCues = []
+        pipeline.cuePlayer.stop()
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
+            for cue in interruptedCues {
+                play(cue)
+            }
             speakNextIfIdle()
         } catch {
             Self.log.warning("restarting the audio engine failed; rebuilding", error.logContext(pipeline.formatContext))
@@ -727,6 +820,14 @@ public final class VoiceLoop {
         consumeEcho()
         updateListeningState()
         speakNextIfIdle()
+    }
+
+    /// The cue `play(_:)` gave `id` has played, or its player was stopped. An engine that stops
+    /// itself stops its players too, before the loop hears of it; a cue cut off that way stays
+    /// unfinished, to play again once the engine is running again.
+    private func cueFinished(_ id: Int) {
+        guard pipeline?.engine.isRunning == true else { return }
+        unfinishedCues.removeAll { $0.id == id }
     }
 
     /// Stops the message being spoken, leaving the queue alone. A barge-in passes

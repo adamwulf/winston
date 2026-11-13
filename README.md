@@ -60,6 +60,11 @@ player and the real `AVSpeechSynthesizer`, and `AppModel` on top of both.
 `TelegramLinkTestSupport` and `VoiceLoopTestSupport` hold the stand-ins, so
 every test target shares them.
 
+`VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
+when listening starts and stops, a chime for the bot's 👍) would add to
+`playedFrames`, so `VoiceTestBed.makeLoop()` and `Harness` leave them off, and
+the tests of the cues pass `soundCues: true`.
+
 Rules for new tests:
 
 - Drive the real type through its public API, and assert what it did: the

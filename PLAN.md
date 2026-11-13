@@ -261,6 +261,10 @@ Inside it:
     is the only way to interrupt.
 - **Voice:** the best installed voice for the system language (Premium,
   then Enhanced, then default), with a voice picker in settings.
+- **Sound cues:** a few soft taps rising in pitch when listening starts (also
+  after the engine is rebuilt or a call ends), so Adam knows he can talk, and
+  falling when it stops. They are synthesized in code and play through the
+  loop's engine, so echo cancellation keeps them out of the transcript.
 
 ### Reactions
 
@@ -272,7 +276,8 @@ Inside it:
   needed.
 - **Incoming:** reactions the coordinator adds (`ib tgreact`) arrive as
   `updateMessageInteractionInfo` and show under the bubble. There is no
-  automatic 👀 "received" ack, so the app never waits for one.
+  automatic 👀 "received" ack, so the app never waits for one. In voice mode,
+  the coordinator's 👍 on a message in the current chat plays a short chime.
 
 ### Photos
 

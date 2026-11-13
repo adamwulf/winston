@@ -278,6 +278,124 @@ struct SpokenMessageTests {
     }
 }
 
+/// The chime when the bot puts a 👍 on a message, in voice mode. These harnesses turn the sound
+/// cues on; a cue renders in a few milliseconds, so `settle()` lets one finish.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReactionChimeTests {
+    /// Two bots with their chats loaded and the sound cues on, in voice mode once the start cue
+    /// has played, or in text mode.
+    private func twoBots(inVoiceMode: Bool = true) async throws -> Harness {
+        let harness = Harness.withTwoBots(soundCues: true)
+        #expect(await harness.startAndLoadChats())
+        if inVoiceMode {
+            await harness.model.setVoiceMode(true)
+            #expect(await eventually { harness.bed.audio.playedFrames > 0 })
+            try await settle()
+        }
+        return harness
+    }
+
+    @Test func theBotsThumbsUpInTheCurrentChatChimes() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
+        #expect(await eventually { harness.bed.audio.playedFrames > played })
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+    }
+
+    @Test func adamsOwnThumbsUpIsSilentButTheBotsBesideItChimes() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
+        #expect(await eventually { model.latestIncomingMessage?.hasMyThumbsUp == true })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == played)
+
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 2, isChosen: true)]
+        })
+        #expect(await eventually { harness.bed.audio.playedFrames > played })
+
+        // Adam taking his back leaves the bot's, and is silent too.
+        try await settle()
+        let playedWithBoth = harness.bed.audio.playedFrames
+        await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == playedWithBoth)
+    }
+
+    @Test func theBotsThumbsUpIsSilentInTextMode() async throws {
+        let harness = try await twoBots(inVoiceMode: false)
+        let model = harness.model
+
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == 0)
+        #expect(harness.bed.audio.engines.isEmpty)
+    }
+
+    @Test func theBotsThumbsUpInAnotherChatIsSilent() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.botReacts("👍", to: 20, in: 2)
+
+        #expect(await eventually {
+            model.messages[ChatID(2)]?.last?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == played)
+    }
+
+    @Test func anotherEmojiFromTheBotIsSilent() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.botReacts("👀", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👀", count: 1, isChosen: false)]
+        })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == played)
+    }
+
+    @Test func theBotsThumbsUpOnAMessageThatIsNotLoadedIsSilent() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        harness.fake.addHistory([textMessage(id: 5, chatID: 1, "An old reply.")])
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.botReacts("👍", to: 5, in: 1)
+        // Events arrive in order, so once this one shows, the reaction was handled.
+        harness.fake.setTyping(true, in: 1)
+
+        #expect(await eventually { model.isBotTyping })
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == played)
+        #expect(!model.currentMessages.contains { $0.id == MessageID(5) })
+    }
+}
+
 /// The voice settings: how long a pause ends what Adam says, and the voice replies are read in.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))

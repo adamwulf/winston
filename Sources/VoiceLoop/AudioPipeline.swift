@@ -3,15 +3,18 @@ import Speech
 import Synchronization
 
 /// The audio engine for one listening session: the microphone, normally with voice processing
-/// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
+/// on, feeding converted buffers to the analyzer, and player nodes for speech and sound cues in
+/// the same engine.
 @MainActor
 final class Pipeline {
     let engine: AVAudioEngine
     let player = AVAudioPlayerNode()
+    /// Plays sound cues, mixed with speech. A player of its own, so stopping speech leaves a cue alone.
+    let cuePlayer = AVAudioPlayerNode()
     /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
     /// the speech the player plays.
     let hasVoiceProcessing: Bool
-    /// The player's connection format; speech buffers are converted to it.
+    /// The players' connection format; speech buffers are converted to it, and cues made in it.
     let speechFormat: AVAudioFormat
     /// Microphone audio in the analyzer's format, for `SpeechAnalyzer.start(inputSequence:)`.
     let inputs: AsyncStream<AnalyzerInput>
@@ -70,8 +73,10 @@ final class Pipeline {
         try installMicrophoneTap()
 
         engine.attach(player)
+        engine.attach(cuePlayer)
         // Mono into the mixer, which spreads it to every output channel.
         engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+        engine.connect(cuePlayer, to: engine.mainMixerNode, format: speechFormat)
         engine.prepare()
     }
 
@@ -158,13 +163,29 @@ final class Pipeline {
         return context
     }
 
-    func tearDown() {
+    /// Plays `cue` on the cue player, after any cue it is still playing. `onPlayed` is called, on
+    /// an arbitrary thread, once the cue has played or the player was stopped. Only while the
+    /// engine is running: a player can't play in a stopped engine.
+    func play(_ cue: SoundCue, onPlayed: @escaping @Sendable () -> Void) {
+        // Making the buffer only fails for a format the pipeline doesn't use.
+        guard let buffer = cue.buffer(in: speechFormat) else { return }
+        cuePlayer.scheduleBuffer(buffer, completionCallbackType: playbackCompletion) { _ in onPlayed() }
+        cuePlayer.play()
+    }
+
+    /// Stops listening and speaking, but leaves the engine running so a cue can still play.
+    func stopListening() {
         for task in tasks { task.cancel() }
         tasks = []
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
-        engine.stop()
         inputContinuation.finish()
+    }
+
+    func tearDown() {
+        stopListening()
+        cuePlayer.stop()
+        engine.stop()
     }
 
     /// Runs on the audio thread: measures each microphone buffer's loudness, records its times

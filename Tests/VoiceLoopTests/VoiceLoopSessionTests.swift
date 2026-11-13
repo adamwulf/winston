@@ -971,6 +971,142 @@ struct VoiceSettingsTests {
     }
 }
 
+// MARK: - Sound cues
+
+// The other suites leave the cues off, so that what plays is only what is said. These turn
+// them on. A cue renders in a few milliseconds offline, so `settle()` lets one finish.
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct SoundCueTests {
+    @Test func startingPlaysTheStartCueWithoutSpeaking() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+
+        try await loop.start()
+        defer { loop.stop() }
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func aReactionCuePlaysWhileListeningAndNotWhileOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+
+        loop.play(.reaction)
+        try await settle()
+        #expect(loop.state == .off)
+        #expect(bed.audio.engines.isEmpty)
+        #expect(bed.audio.playedFrames == 0)
+
+        try await loop.start()
+        defer { loop.stop() }
+        try await settle()
+        let played = bed.audio.playedFrames
+        loop.play(.reaction)
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await eventually { bed.audio.playedFrames > played })
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func stoppingTurnsTheLoopOffAtOnceThenPlaysTheStopCueAndReleasesTheEngine() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+        try await loop.start()
+        let engine = try #require(bed.audio.engines.last)
+        try await settle()
+        let startCue = bed.audio.playedFrames
+        #expect(startCue > 0)
+
+        loop.stop()
+
+        // Listening ends at once; the engine runs on only to play the stop cue.
+        #expect(loop.state == .off)
+        #expect(engine.isRunning)
+        #expect(await eventually { bed.recognizer.isCancelled })
+        #expect(await eventually { !engine.isRunning })
+        // The whole stop cue played: the same taps as the start cue, in the other order.
+        let played = bed.audio.playedFrames
+        #expect(abs(played - 2 * startCue) <= startCue / 10)
+        try await settle()
+        #expect(bed.audio.playedFrames == played)
+        #expect(loop.state == .off)
+    }
+
+    @Test func startingWhileTheStopCuePlaysEndsItAndLeavesOneEngineRunning() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+        try await loop.start()
+        let first = try #require(bed.audio.engines.last)
+        loop.stop()
+        #expect(first.isRunning)
+
+        try await loop.start()
+        defer { loop.stop() }
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(!first.isRunning)
+        #expect(bed.audio.engines.count == 2)
+        #expect(bed.audio.engines.filter(\.isRunning).count == 1)
+        // Well after the stop cue would have ended: its timer leaves the new engine alone.
+        try await settle(.milliseconds(600))
+        #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.engines.last?.isRunning == true)
+        #expect(bed.audio.engines.filter(\.isRunning).count == 1)
+    }
+
+    @Test func aCueCutOffWhenTheEngineStopsByItselfPlaysAgainInFull() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+        try await loop.start()
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+
+        // As on the iPhone, the new engine stops by itself before the start cue has finished.
+        engine.stop()
+        let playedBeforeStop = bed.audio.playedFrames
+        // Lets the loop start watching for configuration changes; the stopped engine plays nothing meanwhile.
+        try await settle(.milliseconds(50))
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { engine.isRunning })
+        #expect(await eventually { bed.audio.playedFrames > playedBeforeStop })
+        try await settle()
+        let playedAfterRestart = bed.audio.playedFrames - playedBeforeStop
+        // One whole start cue, for comparison.
+        let playedBeforeAnother = bed.audio.playedFrames
+        loop.play(.listeningStarted)
+        #expect(await eventually { bed.audio.playedFrames > playedBeforeAnother })
+        try await settle()
+        let wholeCue = bed.audio.playedFrames - playedBeforeAnother
+
+        #expect(abs(playedAfterRestart - wholeCue) <= wholeCue / 10)
+        #expect(bed.audio.engines.count == 1)
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func aRebuiltEngineEndsTheOldOneAtOnceAndPlaysTheStartCueAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop(soundCues: true)
+        try await loop.start()
+        defer { loop.stop() }
+        let first = try #require(bed.audio.engines.last)
+        try await settle()
+        let played = bed.audio.playedFrames
+
+        loop.pausesOtherAudio = false
+
+        // A rebuild isn't a stop: the old engine plays no stop cue.
+        #expect(!first.isRunning)
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await eventually { bed.audio.engines.count == 2 && bed.recognizer.isStarted })
+        #expect(await eventually { bed.audio.playedFrames > played })
+    }
+}
+
 // MARK: - Voices
 
 @Suite struct VoiceOptionTests {
