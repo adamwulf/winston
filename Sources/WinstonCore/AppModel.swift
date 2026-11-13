@@ -512,6 +512,13 @@ public final class AppModel {
     }
 }
 
+extension ChatMessage {
+    /// Whether Adam's own 👍 is on this message: what `AppModel.toggleThumbsUp(on:)` flips.
+    public var hasMyThumbsUp: Bool {
+        reactions.contains { $0.emoji == "👍" && $0.isChosen }
+    }
+}
+
 /// A short, plain description of an error for the UI.
 public func userMessage(for error: any Error) -> String {
     if let error = error as? TelegramLinkError {

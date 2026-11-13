@@ -38,6 +38,74 @@ xcodebuild -quiet -project App/Winston.xcodeproj -scheme Winston \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
+## Testing
+
+`swift test` needs no network, microphone, speaker or Telegram account.
+
+### What the tests run
+
+The tests run the real code. A test process can't have three things, and each
+is reached through one seam. The seams are `package` declarations, so the app
+can't see them.
+
+| A test can't have | Seam | Stand-in, under `Tests/` |
+|---|---|---|
+| TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
+| Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
+| A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
+
+Everything else is the production code: the `TelegramLink` actor with its
+update decoding and mapping, the `VoiceLoop` with its pipeline, converter,
+player and the real `AVSpeechSynthesizer`, and `AppModel` on top of both.
+`TelegramLinkTestSupport` and `VoiceLoopTestSupport` hold the stand-ins, so
+every test target shares them.
+
+Rules for new tests:
+
+- Drive the real type through its public API, and assert what it did: the
+  requests TDLib received, the state it published, how much was spoken.
+- Don't copy production logic into a test, and don't write a test only to run
+  lines.
+- New logic goes in a package target, not in `App/`.
+
+### Coverage
+
+```sh
+sh Scripts/coverage.sh
+```
+
+runs the tests on macOS and prints line coverage for every file in `Sources/`.
+
+Three places stay uncovered on purpose, because they only call into the
+system:
+
+- `LiveVoiceEnvironment.swift`: the permission prompts and the speech model.
+- `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
+  `TelegramLink.init(config:)`: the real TDLib, which would use the network.
+- A few defensive `throw`s that the system never triggers, such as
+  `AudioFormatError`.
+
+Keep new code out of `LiveVoiceEnvironment.swift` unless it is a call into
+the system.
+
+### iOS
+
+Code inside `#if os(iOS)` isn't compiled by `swift test`: the audio session,
+and what the voice loop does when a call or another app interrupts it. Run the
+package tests on a simulator to cover it:
+
+```sh
+xcodebuild test -scheme Winston-Package \
+  -destination "platform=iOS Simulator,name=iPhone 17" \
+  -derivedDataPath DerivedData -enableCodeCoverage YES \
+  -resultBundlePath DerivedData/ios-tests.xcresult
+
+xcrun xccov view --report --files-for-target VoiceLoop DerivedData/ios-tests.xcresult
+```
+
+`Tests/VoiceLoopInterruptionTests` only has tests on iOS. The tests that need a
+child process (logging bootstrap, the real `Library` folder) only run on macOS.
+
 ## Logging
 
 Winston logs through [swift-log](https://github.com/apple/swift-log) to a

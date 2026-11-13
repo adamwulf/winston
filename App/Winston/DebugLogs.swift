@@ -46,7 +46,7 @@ enum DebugLogs {
             return
         }
         // Saved or cancelled, the temporary zip isn't needed afterwards.
-        defer { removeArchive(archive) }
+        defer { LogExporter.remove(archive) }
 
         let panel = NSSavePanel()
         panel.nameFieldStringValue = archive.lastPathComponent
@@ -55,25 +55,11 @@ enum DebugLogs {
         guard await panel.begin() == .OK, let destination = panel.url else { return }
 
         do {
-            let fileManager = FileManager.default
-            // The save panel has already asked whether to replace an existing file.
-            if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
-                try fileManager.removeItem(at: destination)
-            }
-            try fileManager.copyItem(at: archive, to: destination)
+            try LogExporter.save(archive, to: destination)
         } catch {
             // Codes only: the description names the file and folder the user chose.
             log.error("saving debug logs failed", error.logCodes())
             showAlert("Couldn't Save Debug Logs", detail: error.localizedDescription)
-        }
-    }
-
-    private static func removeArchive(_ archive: URL) {
-        do {
-            try FileManager.default.removeItem(at: archive)
-        } catch {
-            // The next export empties the folder anyway.
-            log.warning("removing the exported zip failed", error.logCodes())
         }
     }
 

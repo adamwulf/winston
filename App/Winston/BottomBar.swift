@@ -177,7 +177,7 @@ struct BottomBar: View {
 
     private var thumbsUpButton: some View {
         let message = model.latestIncomingMessage
-        let isChosen = message?.reactions.contains { $0.emoji == "👍" && $0.isChosen } ?? false
+        let isChosen = message?.hasMyThumbsUp ?? false
         return Button("👍 Latest Message", systemImage: isChosen ? "hand.thumbsup.fill" : "hand.thumbsup") {
             guard let message else { return }
             Task { await model.toggleThumbsUp(on: message) }
