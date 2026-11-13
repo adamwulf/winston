@@ -243,7 +243,11 @@ struct SettingsView: View {
                 .monospacedDigit()
         case .ready:
             HStack {
-                Label("Ready", systemImage: "checkmark.circle.fill")
+                // Not a Label: in an iOS Form, a Label as LabeledContent's value is styled as
+                // a row of its own and makes the row much taller.
+                Image(systemName: "checkmark.circle.fill")
+                    .accessibilityHidden(true)
+                Text("Ready")
                 // Picking a Kokoro voice says nothing while its model downloads, so this
                 // plays the sample once it's ready.
                 Button {
