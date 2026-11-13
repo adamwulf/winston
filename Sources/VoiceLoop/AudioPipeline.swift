@@ -188,7 +188,9 @@ final class SpeechPlayback: Sendable {
 final class SynthesisObserver: NSObject, AVSpeechSynthesizerDelegate, Sendable {
     private let current = Mutex<(utterance: ObjectIdentifier, playback: SpeechPlayback)?>(nil)
 
-    /// Call before `write(_:toBufferCallback:)`; one utterance is written at a time.
+    /// Call before `write(_:toBufferCallback:)`. `stopSpeaking(at:)` doesn't stop a write, so a
+    /// cancelled utterance keeps synthesizing and its `didFinish` can arrive after the next
+    /// write has started; the utterance identity check drops that stale callback.
     func track(_ utterance: AVSpeechUtterance, playback: SpeechPlayback) {
         current.withLock { $0 = (ObjectIdentifier(utterance), playback) }
     }
