@@ -36,13 +36,17 @@ public struct Utterance: Sendable, Equatable {
         text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
-    /// The words of `text`, lowercased, without punctuation or filler words like "uh".
+    /// The words of `text`, lowercased, without punctuation (apostrophes included, so "I'm" and
+    /// "Im" match), filler words like "uh", or spelling variants like "okay" for "ok".
     static func words(of text: String) -> [String] {
         text.lowercased()
-            .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "'" && $0 != "’" })
-            .map(String.init)
+            .filter { $0 != "'" && $0 != "’" }
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map { spellingVariants[String($0)] ?? String($0) }
             .filter { !fillers.contains($0) }
     }
+
+    private static let spellingVariants = ["okay": "ok"]
 
     /// Whether `alternative` is another reading of the same words as `text`: the same number
     /// of words, with at least one different (like "mark that read" for "mark that red").

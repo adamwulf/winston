@@ -332,6 +332,9 @@ import Testing
     @Test func rereadingsAreRecognizedIgnoringCaseAndPunctuation() {
         #expect(Utterance.isRereading("mark that read.", of: "Mark that red"))
         #expect(!Utterance.isRereading("Mark, that red?", of: "mark that red."))
+        // From a real session: spelling variants aren't other readings.
+        #expect(!Utterance.isRereading("Im", of: "I'm"))
+        #expect(!Utterance.isRereading("OK, great.", of: "Okay, great."))
         #expect(!Utterance.isRereading("uh mark that red", of: "mark that red"))
         #expect(!Utterance.isRereading("works?", of: "checking if it works."))
         #expect(!Utterance.isRereading("", of: "red"))
