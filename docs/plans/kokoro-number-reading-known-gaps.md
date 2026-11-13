@@ -51,8 +51,14 @@ are probably dropped. Each fix would go in `KokoroNumbers`, with a case in
   it if replies sound slow.
 - **No way to delete the model.** The roughly 335 MB model stays in Application
   Support. Settings has no "Remove download" button.
+- **Pinned to a fork.** speech-swift is pinned to `adamwulf/speech-swift`
+  `7cc2ddb` (branch `fix/kokoro-x86_64-float16`), which is upstream `31d676c`
+  plus a fix that lets `KokoroTTS` compile for x86_64. Upstream reads float16
+  outputs through Swift's `Float16`, which does not exist on Intel Macs, so the
+  universal Mac archive fails there. Go back to `soniqo/speech-swift` only once
+  that fix, or an equivalent one, is upstream.
 - **Dependency weight.** speech-swift has no release tags, so it is pinned to a
-  commit on `main` (`31d676c`). SwiftPM builds only `KokoroTTS` and what it
+  commit. SwiftPM builds only `KokoroTTS` and what it
   needs, but it still fetches and pins all of speech-swift's roughly 44
   dependencies. Both `Package.resolved` files grow by about 350 lines, and a cold
   resolve (Xcode Cloud) takes about 3 minutes. When updating the pin, check

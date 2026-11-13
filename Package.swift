@@ -20,8 +20,10 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", .upToNextMinor(from: "1.14.0")),
         .package(url: "https://github.com/adamwulf/FellerBuncher.git", branch: "main"),
         // Kokoro-82M neural voices (KokoroTTS, CoreML). speech-swift has no release tags, so it is
-        // pinned to a commit on main.
-        .package(url: "https://github.com/soniqo/speech-swift", revision: "31d676c6a7f1a3f9e3004c06914de54e61f0f987"),
+        // pinned to a commit. This is a fork commit: soniqo/speech-swift 31d676c6 plus a fix so
+        // KokoroTTS compiles for x86_64 macOS (Swift's Float16 does not exist there), which the
+        // universal Mac archive needs. Branch fix/kokoro-x86_64-float16 on the fork.
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "7cc2ddb84410c63264cafa66b8e6d3f5f1e520fa"),
     ],
     targets: [
         .target(
