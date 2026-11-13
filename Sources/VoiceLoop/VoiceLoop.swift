@@ -7,13 +7,13 @@ import UIKit
 #endif
 
 /// Hands-free voice loop: listens, detects the end of an utterance, speaks replies,
-/// and, on iOS, stops speaking when the user talks over it (barge-in).
+/// and stops speaking when the user talks over it (barge-in).
 ///
-/// One `AVAudioEngine` does everything. On iOS its input node has voice processing on, so the
-/// app's own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer`
-/// running `SpeechTranscriber`. On macOS, or if voice processing can't start, the engine runs
-/// without it and the microphone is ignored while a reply plays (half-duplex: only
-/// `stopSpeaking()` interrupts). Speech is rendered with
+/// One `AVAudioEngine` does everything. Its input node has voice processing on, so the app's
+/// own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer` running
+/// `SpeechTranscriber`. If voice processing can't start, the engine runs without it and the
+/// microphone is ignored while a reply plays (half-duplex: only `stopSpeaking()`
+/// interrupts). Speech is rendered with
 /// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
 /// the same engine.
 @MainActor
@@ -43,7 +43,7 @@ public final class VoiceLoop {
     public var voiceIdentifier: String?
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
-    /// echo cancellation (macOS, or if it couldn't start), speech never interrupts a reply.
+    /// echo cancellation (if it couldn't start), speech never interrupts a reply.
     public var bargeInMinimumWords = 1
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
@@ -84,14 +84,8 @@ public final class VoiceLoop {
     /// a short margin, is consumed.
     @ObservationIgnored private var ignoredWhileSpeaking = false
     /// Set once voice processing fails to start, so later starts go straight to an engine
-    /// without it. Set from the start on macOS: there voice processing fails even with the
-    /// built-in microphone and speakers (it can't build its combined input/output device), and
-    /// each attempt blocks the main thread for seconds.
-    #if os(macOS)
-    @ObservationIgnored private var skipVoiceProcessing = true
-    #else
+    /// without it (a failed attempt can block the main thread for seconds).
     @ObservationIgnored private var skipVoiceProcessing = false
-    #endif
 
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
@@ -214,8 +208,8 @@ public final class VoiceLoop {
     }
 
     /// Builds and starts the engine with voice processing (echo cancellation), or without it
-    /// on macOS or if voice processing can't start. Without echo cancellation the loop is
-    /// half-duplex: replies can't be interrupted by voice.
+    /// if voice processing can't start. Without echo cancellation the loop is half-duplex:
+    /// replies can't be interrupted by voice.
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
         if !skipVoiceProcessing {
             do {

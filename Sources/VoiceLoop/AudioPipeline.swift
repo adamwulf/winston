@@ -2,8 +2,8 @@
 import Speech
 import Synchronization
 
-/// The audio engine for one listening session: the microphone (with voice processing on iOS)
-/// feeding converted buffers to the analyzer, and a player node for speech in the same engine.
+/// The audio engine for one listening session: the microphone, normally with voice processing
+/// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
 @MainActor
 final class Pipeline {
     let engine = AVAudioEngine()
@@ -32,12 +32,28 @@ final class Pipeline {
             try input.setVoiceProcessingEnabled(true)
         }
         let inputFormat = input.outputFormat(forBus: 0)
+        #if os(macOS)
+        if voiceProcessing {
+            // On a MacBook Pro with voice processing on, the input reports 9 identical channels,
+            // and the engine won't start (-10875, "client-side input and output formats do not
+            // match") while the output keeps its default stereo format. A mono output works.
+            guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
+                throw AudioFormatError()
+            }
+            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
+        }
+        #endif
         guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat),
               let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
             throw AudioFormatError()
         }
         self.speechFormat = speechFormat
         converter.primeMethod = .none
+        if inputFormat.channelCount > 1 {
+            // Use the first channel rather than a downmix; with voice processing on, the extra
+            // channels repeat it.
+            converter.channelMap = [0]
+        }
         input.installTap(
             onBus: 0,
             bufferSize: 4096,
