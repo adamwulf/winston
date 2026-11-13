@@ -168,6 +168,11 @@ public final class VoiceLoop {
     @ObservationIgnored private var skipVoiceProcessing = false
     /// The permission prompts, the speech recognizer and the audio hardware.
     @ObservationIgnored private let environment: VoiceEnvironment
+    /// The system voices of `voices` and the language they were listed for. Listing them blocks
+    /// the main thread on the speech service for tens of milliseconds, and a voice picker reads
+    /// `chosenVoice` once for every voice it lists, so they are listed once and kept. Emptied
+    /// when the system's voices change (a voice installed or removed).
+    @ObservationIgnored private var systemVoiceCache: (language: String, voices: [VoiceOption])?
 
     public convenience init() {
         self.init(environment: .live)
@@ -181,7 +186,7 @@ public final class VoiceLoop {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
         previewSynthesizer.delegate = previewSynthesisObserver
-        observeAppAndSession()
+        observeSystem()
     }
 
     // MARK: - Public API
@@ -491,8 +496,12 @@ public final class VoiceLoop {
     }
 
     /// `availableVoices()`, the voices on offer: the ones settings lists and the loop speaks with.
+    /// The system voices are listed once per language and kept (see `systemVoiceCache`), and
+    /// listed again when the system's voices change.
     public var voices: [VoiceOption] {
-        Self.availableVoices(language: environment.languageCode())
+        access(keyPath: \.voices)
+        let language = environment.languageCode()
+        return cachedSystemVoices(language: language) + KokoroCatalog.voices(forLanguage: language)
     }
 
     /// The voice `voiceIdentifier` picks, if it is one of `voices`. Nil otherwise, and then the
@@ -510,8 +519,18 @@ public final class VoiceLoop {
         loadKokoroModelIfChosen()
     }
 
+    /// The system voices of `voices`, from `systemVoiceCache` if it holds `language`'s.
+    private func cachedSystemVoices(language: String) -> [VoiceOption] {
+        if let systemVoiceCache, systemVoiceCache.language == language {
+            return systemVoiceCache.voices
+        }
+        let voices = environment.systemVoices(language)
+        systemVoiceCache = (language, voices)
+        return voices
+    }
+
     /// The system voices of `availableVoices(language:)`.
-    private static func systemVoices(language: String) -> [VoiceOption] {
+    package static func systemVoices(language: String) -> [VoiceOption] {
         let defaultID = AVSpeechSynthesisVoice(language: language)?.identifier
         return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language == language && !$0.voiceTraits.contains(.isNoveltyVoice) }
@@ -827,7 +846,18 @@ public final class VoiceLoop {
         #endif
     }
 
-    private func observeAppAndSession() {
+    /// Follows changes to the system's voices, and on iOS the audio session's interruptions and
+    /// the app coming to the foreground.
+    private func observeSystem() {
+        let voiceChanges = NotificationCenter.default.notifications(named: AVSpeechSynthesizer.availableVoicesDidChangeNotification)
+        Task { [weak self] in
+            for await _ in voiceChanges {
+                guard let self else { return }
+                self.withMutation(keyPath: \.voices) {
+                    self.systemVoiceCache = nil
+                }
+            }
+        }
         #if os(iOS)
         let interruptions = NotificationCenter.default.notifications(named: AVAudioSession.interruptionNotification)
             .map { InterruptionEvent($0) }

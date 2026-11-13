@@ -44,7 +44,7 @@ xcodebuild -quiet -project App/Winston.xcodeproj -scheme Winston \
 
 ### What the tests run
 
-The tests run the real code. A test process can't have four things, and each
+The tests run the real code. A test process can't have five things, and each
 is reached through one seam. The seams are `package` declarations, so the app
 can't see them.
 
@@ -54,6 +54,7 @@ can't see them.
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
 | The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, and renders each sentence as a 0.2 s tone |
+| A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 
 Everything else is the production code: the `TelegramLink` actor with its
 update decoding and mapping, the `VoiceLoop` with its pipeline, converter,

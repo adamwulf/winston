@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Observation
 import Testing
 import VoiceLoop
 import VoiceLoopTestSupport
@@ -1107,6 +1108,46 @@ struct VoiceSettingsTests {
         #expect(bed.recognizers.count == 1)
         #expect(bed.audio.engines.count == 1)
     }
+
+    @Test func theSystemVoicesAreListedOnceAndAgainWhenTheyOrTheLanguageChange() async throws {
+        let bed = VoiceTestBed()
+        let samantha = VoiceOption(id: "voice.samantha", name: "Samantha", quality: .standard)
+        let ava = VoiceOption(id: "voice.ava", name: "Ava", quality: .premium)
+        bed.systemVoices = [samantha]
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = samantha.id
+
+        // A voice picker reads the choice once for every voice it lists.
+        for _ in 0..<50 {
+            #expect(loop.chosenVoice == samantha)
+        }
+        #expect(loop.voices.filter { $0.engine == .system } == [samantha])
+        #expect(bed.systemVoiceListings == ["en-US"])
+
+        // A voice is installed: settings is told, and the new list is read.
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = loop.voices
+        } onChange: {
+            MainActor.assumeIsolated { changed.isSet = true }
+        }
+        bed.systemVoices = [ava, samantha]
+        NotificationCenter.default.post(name: AVSpeechSynthesizer.availableVoicesDidChangeNotification, object: nil)
+        #expect(await eventually { changed.isSet })
+        #expect(loop.voices.filter { $0.engine == .system } == [ava, samantha])
+        #expect(bed.systemVoiceListings == ["en-US", "en-US"])
+
+        // Another language has voices of its own.
+        bed.languageCode = "en-GB"
+        _ = loop.voices
+        #expect(bed.systemVoiceListings == ["en-US", "en-US", "en-GB"])
+    }
+}
+
+/// Set when an observed value changes.
+@MainActor
+private final class ChangeFlag {
+    var isSet = false
 }
 
 // MARK: - Sound cues
