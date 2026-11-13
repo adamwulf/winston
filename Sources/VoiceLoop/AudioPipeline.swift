@@ -1,4 +1,6 @@
 @preconcurrency import AVFoundation
+import Logging
+import LogSupport
 import Speech
 import Synchronization
 
@@ -6,6 +8,8 @@ import Synchronization
 /// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
 @MainActor
 final class Pipeline {
+    private nonisolated static let log = Logger(label: "voice.pipeline")
+
     let engine = AVAudioEngine()
     let player = AVAudioPlayerNode()
     /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
@@ -89,6 +93,17 @@ final class Pipeline {
         engine.inputNode.removeTap(onBus: 0)
         player.stop()
         engine.stop()
+        if hasVoiceProcessing {
+            // Stopping the engine leaves voice processing on (iOS stays at call volume) until the
+            // engine is freed, which can be after the next pipeline's engine has started. The
+            // audio hardware then changes under that engine and stops it. Turn voice processing
+            // off now, before anything else starts.
+            do {
+                try engine.inputNode.setVoiceProcessingEnabled(false)
+            } catch {
+                Self.log.warning("turning off voice processing failed", error.logContext())
+            }
+        }
         inputContinuation.finish()
     }
 

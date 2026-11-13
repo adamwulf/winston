@@ -78,6 +78,8 @@ public final class VoiceLoop {
     /// (or, if iOS never says so, when the app becomes active). Cleared by `tearDown(.stop)`,
     /// except that a failed foreground retry sets it again.
     @ObservationIgnored private var resumeAfterInterruption = false
+    /// When the engine was rebuilt after stopping on its own, within the last `rebuildWindow`.
+    @ObservationIgnored private var recentRebuilds: [ContinuousClock.Instant] = []
 
     @ObservationIgnored private var transcript = Transcript()
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
@@ -501,16 +503,45 @@ public final class VoiceLoop {
     /// interrupted can resume and the new start activates it with the new options. Only for a
     /// change made in the app's UI: a backgrounded app may not be allowed to activate a
     /// recording session again.
+    ///
+    /// If the engine keeps stopping on its own, rebuilding again won't help, and it would turn
+    /// voice processing (and iOS's call volume) on and off without end, so the loop turns off
+    /// instead. A settings change (`resettingAudioSession`) doesn't count toward that.
     private func restart(resettingAudioSession: Bool = false) {
+        if !resettingAudioSession {
+            let now = ContinuousClock.now
+            recentRebuilds = recentRebuilds.filter { $0.duration(to: now) < Self.rebuildWindow } + [now]
+            guard recentRebuilds.count <= Self.maxRebuildsPerWindow else {
+                Self.log.error("audio engine keeps stopping; giving up", ["rebuilds": recentRebuilds.count])
+                recentRebuilds = []
+                tearDown(.stop)
+                return
+            }
+            Self.log.notice("audio engine stopped; rebuilding")
+        }
         tearDown(.rebuild)
         if resettingAudioSession {
             Self.deactivateAudioSession()
         }
+        startInTask { error in
+            Self.log.error("voice loop rebuild failed", error.logContext())
+        }
+    }
+
+    private static let rebuildWindow: Duration = .seconds(10)
+    private static let maxRebuildsPerWindow = 3
+
+    /// Calls `start()` from a new task, unless a teardown (such as `stop()`) comes before that
+    /// task runs: starting then would undo the stop, leaving the loop running after the app
+    /// turned voice mode off.
+    private func startInTask(isForegroundRetry: Bool = false, onFailure: @escaping (any Error) -> Void) {
+        let run = runID
         Task {
+            guard run == runID else { return }
             do {
-                try await start()
+                try await start(isForegroundRetry: isForegroundRetry)
             } catch {
-                Self.log.error("voice loop rebuild failed", error.logContext())
+                onFailure(error)
             }
         }
     }
@@ -572,12 +603,8 @@ public final class VoiceLoop {
     private func resumeIfInterruptionNeverEnded() {
         guard resumeAfterInterruption else { return }
         resumeAfterInterruption = false
-        Task {
-            do {
-                try await start(isForegroundRetry: true)
-            } catch {
-                Self.log.warning("voice loop resume on foreground failed", error.logContext())
-            }
+        startInTask(isForegroundRetry: true) { error in
+            Self.log.warning("voice loop resume on foreground failed", error.logContext())
         }
     }
 
@@ -598,12 +625,8 @@ public final class VoiceLoop {
                 return
             }
             // If starting fails, `start()` turns the loop off.
-            Task {
-                do {
-                    try await start()
-                } catch {
-                    Self.log.error("voice loop resume after interruption failed", error.logContext())
-                }
+            startInTask { error in
+                Self.log.error("voice loop resume after interruption failed", error.logContext())
             }
         case nil:
             break
