@@ -94,10 +94,11 @@ struct BottomBar: View {
     private var voiceControls: some View {
         if model.voiceLoop.state == .off && !model.isStartingVoice {
             // Off while not starting means VoiceLoop gave up, such as after an interruption it can't resume from.
-            Button("Resume Listening", systemImage: "mic.slash") {
-                Task { await model.setVoiceMode(true) }
+            twoLineArea {
+                Button("Resume Listening", systemImage: "mic.slash") {
+                    Task { await model.setVoiceMode(true) }
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         } else {
             Button(action: tapIndicator) {
                 Image(systemName: indicatorSymbol)
@@ -105,27 +106,37 @@ struct BottomBar: View {
             }
             .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
 
-            // A fixed two lines tall, so the bar (and the message list above it) doesn't jump
-            // as the transcript grows. Longer transcripts scroll, kept at the newest words.
-            Text("\n")
-                .lineLimit(2, reservesSpace: true)
-                .hidden()
-                .frame(maxWidth: .infinity)
-                .overlay {
-                    ScrollView {
-                        Text(transcript)
-                            .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .defaultScrollAnchor(.bottom)
-                    .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            // Longer transcripts scroll, kept at the newest words; a short one sits on the
+            // first line.
+            twoLineArea {
+                ScrollView {
+                    Text(transcript)
+                        .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .defaultScrollAnchor(.topLeading, for: .alignment)
+                .defaultScrollAnchor(.bottom, for: .initialOffset)
+                .defaultScrollAnchor(.bottom, for: .sizeChanges)
+            }
         }
 
         Button("Discard") {
             model.voiceLoop.discardCurrentUtterance()
         }
         .disabled(!isListening)
+    }
+
+    /// A space exactly two text lines tall and as wide as it can be, holding `content` at its
+    /// leading edge. Every voice-mode state uses it, so the bar (and the message list above
+    /// it) keeps one height.
+    private func twoLineArea(@ViewBuilder _ content: () -> some View) -> some View {
+        Text("\n")
+            .lineLimit(2, reservesSpace: true)
+            .hidden()
+            .frame(maxWidth: .infinity)
+            .overlay(alignment: .leading) {
+                content()
+            }
     }
 
     private var isListening: Bool {
