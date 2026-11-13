@@ -69,7 +69,16 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   second one crashes.
 - `TelegramLink` and `VoiceLoop` use swift-log (`Logging`) and `LogSupport`
   only. Under `swift test` their logs go to stderr.
-- No `os.Logger`, `NSLog`, or `print`.
+- No `os.Logger`, `NSLog`, or `print`, with one exception: if
+  `WinstonLog.bootstrap` fails, FellerBuncher's pre-config buffer never drains,
+  so every swift-log line for the rest of the run stays in a 1,000-record
+  in-memory ring and reaches neither the file nor Console. `WinstonLog` reports
+  that one failure with `os.Logger` at `.fault`. The check for stray logging
+  skips that file:
+
+  ```sh
+  grep -rn -E "os.Logger|import OSLog|NSLog|print\(" --exclude=WinstonLog.swift App/Winston Sources
+  ```
 - One `private static let log = Logger(label: "<area>.<feature>")` per type,
   such as `app.model`, `telegram.link`, or `voice.loop`. A swift-log `Logger`
   binds to its handler when it's created, so keep loggers lazy like this.
