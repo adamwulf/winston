@@ -101,6 +101,10 @@ else
     # Push only the new tag ref, never every local tag.
     if git push "$remote_url" "refs/tags/$tag" 2>/dev/null; then
         echo "Successfully pushed tag to remote repo."
+    elif git ls-remote --tags "$remote_url" "refs/tags/$tag" 2>/dev/null | grep -q "refs/tags/$tag"; then
+        # The iOS and macOS archive actions run in parallel, so the sibling action can push
+        # the same tag between our check and our push. It's there now, which is what we want.
+        echo "Tag $tag was pushed by another action of this build, skipping."
     else
         echo "error: failed to push tag $tag (git output withheld to keep the token out of the build log)"
         exit 1
