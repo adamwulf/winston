@@ -32,6 +32,8 @@ public actor TelegramLink {
 
     private var manager: TDLibClientManager?
     private var client: TDLibClient?
+    /// Set by `closeForTermination()`, so the closed client isn't replaced with a fresh one.
+    private var isClosingForTermination = false
     /// Ends "typing" for a chat when TDLib's action expires without a refresh.
     private var typingTimeouts: [ChatID: Task<Void, Never>] = [:]
 
@@ -76,6 +78,17 @@ public actor TelegramLink {
 
     public func submitPassword(_ password: String) async throws {
         try await perform { try await $0.checkAuthenticationPassword(password: password) }
+    }
+
+    /// Closes the TDLib client so its database is saved cleanly, right before the process
+    /// exits. Blocks until TDLib reports the client closed; the instance can't be used after.
+    ///
+    /// TDLibKit keeps calling `td_receive` on a background thread for as long as the process
+    /// runs, and `exit()`'s C++ static destructors tear TDLib down under it, which crashes.
+    /// So after this returns, end the process with `_exit` rather than `exit`.
+    public func closeForTermination() {
+        isClosingForTermination = true
+        manager?.closeClients()
     }
 
     public func logOut() async throws {
@@ -302,7 +315,7 @@ public actor TelegramLink {
             setTdlibParameters()
         case .authorizationStateClosed:
             // After a log out TDLib closes the client. Start a fresh one so login can begin again.
-            if let manager {
+            if let manager, !isClosingForTermination {
                 _ = makeClient(manager)
             }
         default:

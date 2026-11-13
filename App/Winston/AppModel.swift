@@ -154,6 +154,12 @@ final class AppModel {
         }
     }
 
+    /// Closes the Telegram session cleanly before the app quits. See `TelegramLink.closeForTermination()`.
+    func closeForQuit() async {
+        voiceLoop.stop()
+        await link?.closeForTermination()
+    }
+
     // MARK: - Login
 
     func submitPhoneNumber(_ phoneNumber: String) async throws {
