@@ -58,6 +58,11 @@ are probably dropped. Each fix would go in `KokoroNumbers`, with a case in
   resolve (Xcode Cloud) takes about 3 minutes. When updating the pin, check
   again that loading with `.cpuAndNeuralEngine` is still needed. `.all` aborted
   in MPSGraph on macOS 27.
+- **A preview right after voice mode stops.** Stopping voice mode keeps its
+  engine running for the stop cue, then deactivates the iOS audio session on a
+  timer. A preview started in that half second plays on its own engine at the
+  same time, and the timer's deactivation can cut it off. Possible fix: have
+  `preview(_:)` call `endClosingPipeline()` before it starts, as a new start does.
 - **Wall-clock test timing.** The Kokoro session suites run one test at a time
   (the `OneVoiceLoopAtATime` trait), because offline audio rendering on the
   shared main actor starved tests that time pauses by the clock. Other audio
