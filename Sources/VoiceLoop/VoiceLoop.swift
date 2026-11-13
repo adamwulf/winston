@@ -28,8 +28,10 @@ public final class VoiceLoop {
     /// `stop()`, and after an unrecoverable failure (a failed `start()`, a transcriber failure,
     /// or an audio interruption iOS doesn't let it resume from). While the engine is rebuilt
     /// after an audio route change, and during an audio interruption, it stays
-    /// `.listening(partial: "")`. iOS doesn't promise to report an interruption's end, so if
-    /// none arrives the loop retries when the app next comes to the foreground.
+    /// `.listening(partial: "")`. iOS doesn't promise to report an interruption's end, so the
+    /// loop also retries when the app next comes to the foreground. That retry may run while
+    /// the interruption is still active; if it fails, `state` shows `.off`, but the loop still
+    /// resumes if iOS later reports the interruption's end.
     public private(set) var state: State = .off
     /// How long the transcript must stay unchanged before an utterance is finished.
     public var pauseThreshold: Duration = .milliseconds(1200)
@@ -54,7 +56,8 @@ public final class VoiceLoop {
     /// them overtook gives up.
     @ObservationIgnored private var runID = 0
     /// Set when an interruption stopped the loop, so it restarts when the interruption ends
-    /// (or, if iOS never says so, when the app becomes active). Cleared by `tearDown(.stop)`.
+    /// (or, if iOS never says so, when the app becomes active). Cleared by `tearDown(.stop)`,
+    /// except that a failed foreground retry sets it again.
     @ObservationIgnored private var resumeAfterInterruption = false
 
     @ObservationIgnored private var transcript = Transcript()
@@ -65,8 +68,11 @@ public final class VoiceLoop {
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
     /// Set when a result was ignored as too short while speaking (possibly the reply's own
-    /// echo). When speaking ends, all audio fed so far is consumed, which also covers the
-    /// echo of the last words whose results haven't arrived yet.
+    /// echo). When speaking ends, all audio fed so far is consumed if this is set or
+    /// `bargeInMinimumWords` is above 1 (echo is expected then, and a short reply's echo may
+    /// only arrive after playback). That also covers the echo of the last words, whose results
+    /// lag behind the audio. At the default of 1 nothing is consumed, so words spoken right
+    /// as a reply ends are kept.
     @ObservationIgnored private var ignoredWhileSpeaking = false
 
     public init() {
@@ -81,6 +87,12 @@ public final class VoiceLoop {
     /// Throws a `VoiceLoopError` when permission is missing or the speech model can't be
     /// installed, and passes audio engine errors through. Does nothing if already running.
     public func start() async throws {
+        try await start(isForegroundRetry: false)
+    }
+
+    /// `isForegroundRetry` marks the retry after an interruption iOS never reported ending.
+    /// If it fails, the interruption may still be live, so a later end still resumes the loop.
+    private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
         isStarting = true
         defer {
@@ -97,6 +109,9 @@ public final class VoiceLoop {
             // A start that stop() or an interruption overtook leaves the state to them.
             if run == runID {
                 tearDown(.stop)
+                if isForegroundRetry {
+                    resumeAfterInterruption = true
+                }
             }
             throw error
         }
@@ -199,7 +214,7 @@ public final class VoiceLoop {
     /// Stops speaking and clears the queue.
     public func stopSpeaking() {
         speechQueue.removeAll()
-        silence()
+        silence(consumingEcho: true)
     }
 
     /// Installed voices for the current language, best quality first, for a settings picker.
@@ -246,9 +261,9 @@ public final class VoiceLoop {
                 return
             }
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
-            // ignored so far may be this utterance's first words, so their audio is kept.
-            ignoredWhileSpeaking = false
-            stopSpeaking()
+            // ignored so far may be this utterance's first words, so no audio is consumed.
+            speechQueue.removeAll()
+            silence(consumingEcho: false)
         }
         transcript = candidate
         pauseDetector.update(text: transcript.text, at: .now)
@@ -329,7 +344,7 @@ public final class VoiceLoop {
         if kind == .rebuild, let currentSpeech {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
-        silence()
+        silence(consumingEcho: true)
         if kind == .stop {
             speechQueue.removeAll()
         }
@@ -397,12 +412,14 @@ public final class VoiceLoop {
 
     #if os(iOS)
     /// Another app (a call, FaceTime, Music) can keep the session, and then iOS never sends
-    /// the interruption's end. Coming back to the foreground retries instead.
+    /// the interruption's end. Coming back to the foreground retries instead. The retry may
+    /// run while the interruption is still active (Adam returns mid-call, or the call UI
+    /// closes just before the end arrives). If it fails, the loop shows `.off` but still
+    /// resumes on a later `.ended(shouldResume: true)`.
     private func resumeIfInterruptionNeverEnded() {
         guard resumeAfterInterruption else { return }
         resumeAfterInterruption = false
-        // If starting fails, `start()` turns the loop off.
-        Task { try? await start() }
+        Task { try? await start(isForegroundRetry: true) }
     }
 
     private func handleInterruption(_ event: InterruptionEvent?) {
@@ -451,27 +468,30 @@ public final class VoiceLoop {
     private func speechFinished(_ playback: SpeechPlayback) {
         guard currentSpeech === playback else { return }
         currentSpeech = nil
-        consumeIgnoredAudio()
+        consumeEcho()
         updateListeningState()
         speakNextIfIdle()
     }
 
-    /// Stops the message being spoken, leaving the queue alone.
-    private func silence() {
+    /// Stops the message being spoken, leaving the queue alone. A barge-in passes
+    /// `consumingEcho: false`, since the audio heard while speaking is the user's.
+    private func silence(consumingEcho: Bool) {
         guard let currentSpeech else { return }
         self.currentSpeech = nil
         currentSpeech.cancel()
         synthesizer.stopSpeaking(at: .immediate)
         pipeline?.player.stop()
-        consumeIgnoredAudio()
+        if consumingEcho {
+            consumeEcho()
+        }
+        ignoredWhileSpeaking = false
         updateListeningState()
     }
 
-    /// Once speaking ends, results ignored during it (likely echo) must not be sent later.
-    /// Consuming through the audio fed so far, rather than the last ignored result, also
-    /// covers the reply's last words, whose results lag behind the audio.
-    private func consumeIgnoredAudio() {
-        if ignoredWhileSpeaking, let pipeline {
+    /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for
+    /// when the audio fed so far is consumed.
+    private func consumeEcho() {
+        if ignoredWhileSpeaking || bargeInMinimumWords > 1, let pipeline {
             transcript.consume(through: pipeline.fedAudio.time)
         }
         ignoredWhileSpeaking = false
