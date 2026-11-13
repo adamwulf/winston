@@ -13,6 +13,7 @@ private enum StorageKey {
     static let selectedChatID = "selectedChatID"
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
+    static let speechRate = "speechRate"
     static let pausesOtherAudio = "pausesOtherAudio"
 }
 
@@ -63,6 +64,13 @@ final class AppModel {
             applyVoiceSettings()
         }
     }
+    /// How fast replies are spoken, as a `VoiceLoop.speechRate`. Persisted.
+    var speechRate: Float = UserDefaults.standard.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate {
+        didSet {
+            UserDefaults.standard.set(speechRate, forKey: StorageKey.speechRate)
+            applyVoiceSettings()
+        }
+    }
     /// Whether voice mode may pause or turn down other apps' audio, such as music. Persisted.
     var pausesOtherAudio: Bool = UserDefaults.standard.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true {
         didSet {
@@ -108,10 +116,11 @@ final class AppModel {
     private func applyVoiceSettings() {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
         voiceLoop.voiceIdentifier = voiceIdentifier
+        voiceLoop.speechRate = speechRate
         voiceLoop.pausesOtherAudio = pausesOtherAudio
     }
 
-    /// Says a sample sentence in the chosen voice, for the settings voice picker.
+    /// Says a sample sentence in the chosen voice and speed, for the settings voice picker and speed slider.
     func previewVoice() {
         let voices = VoiceLoop.availableVoices()
         let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first

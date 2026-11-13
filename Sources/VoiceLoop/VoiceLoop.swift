@@ -45,6 +45,13 @@ public final class VoiceLoop {
     public var pauseThreshold: Duration = .milliseconds(1200)
     /// `AVSpeechSynthesisVoice.identifier` to speak with; nil picks the best installed voice.
     public var voiceIdentifier: String?
+    /// `AVSpeechUtterance.rate` to speak at, within `speechRates`. The scale isn't linear:
+    /// `defaultSpeechRate` (the middle) is normal speed. Applies from the next message spoken.
+    public var speechRate: Float = VoiceLoop.defaultSpeechRate
+    /// The rates `speechRate` can take.
+    public static let speechRates: ClosedRange<Float> = AVSpeechUtteranceMinimumSpeechRate...AVSpeechUtteranceMaximumSpeechRate
+    /// Normal speaking speed.
+    public static let defaultSpeechRate: Float = AVSpeechUtteranceDefaultSpeechRate
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -322,7 +329,7 @@ public final class VoiceLoop {
         silence(consumingEcho: true)
     }
 
-    /// Says `text` right away in the current voice, for trying voices in settings, cutting off
+    /// Says `text` right away in the current voice and speed, for trying them in settings, cutting off
     /// an earlier preview. While the loop is running it also stops any reply being spoken and
     /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
     /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker.
@@ -334,9 +341,7 @@ public final class VoiceLoop {
             stopSpeaking()
             speak(text)
         } else {
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = voice()
-            previewSynthesizer.speak(utterance)
+            previewSynthesizer.speak(makeUtterance(text))
         }
     }
 
@@ -673,8 +678,7 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = voice()
+        let utterance = makeUtterance(text)
         let playback = SpeechPlayback(text: text, player: pipeline.player, format: pipeline.speechFormat) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
@@ -727,6 +731,14 @@ public final class VoiceLoop {
 
     /// Words starting this soon after a reply ends are dropped when there is no echo cancellation.
     private static let halfDuplexEchoMargin = CMTime(value: 3, timescale: 10)
+
+    /// `text` in the chosen voice and speed.
+    private func makeUtterance(_ text: String) -> AVSpeechUtterance {
+        let utterance = AVSpeechUtterance(string: text)
+        utterance.voice = voice()
+        utterance.rate = speechRate
+        return utterance
+    }
 
     private func voice() -> AVSpeechSynthesisVoice? {
         if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
