@@ -490,6 +490,170 @@ struct KokoroReleaseTests {
     }
 }
 
+// MARK: - Deleting the model
+
+private let hour: TimeInterval = 60 * 60
+private let day: TimeInterval = 24 * hour
+
+/// The stored model is deleted once no Kokoro voice has been chosen for a day, when the app
+/// checks (at launch and on returning to the foreground). The bed's clock stands still until a
+/// test moves it, and the bed keeps the record of when the last Kokoro voice was unchosen.
+@MainActor
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
+struct KokoroRemovalTests {
+    /// A loop whose model was loaded for the Heart voice, then freed for a system voice.
+    private func loopAfterSwitchingToASystemVoice(on bed: VoiceTestBed) async throws -> VoiceLoop {
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        loop.voiceIdentifier = try #require(loop.voices.first { $0.engine == .system }).id
+        #expect(await eventually { bed.kokoro.unloads == 1 })
+        return loop
+    }
+
+    @Test func theModelIsDeletedADayAfterASystemVoiceWasChosenAndAKokoroVoiceDownloadsItAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+        #expect(bed.kokoroUnchosenSince == bed.now)
+
+        bed.now += day
+        loop.removeUnusedKokoroModel()
+
+        #expect(await eventually { !bed.kokoro.isStored })
+        #expect(bed.kokoro.removals == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
+
+        loop.voiceIdentifier = "kokoro.af_bella"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loads == 2)
+        #expect(bed.kokoro.isStored)
+    }
+
+    @Test func theModelIsKeptUntilTheDayIsUp() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+
+        bed.now += day - 1
+        loop.removeUnusedKokoroModel()
+        try await settle()
+
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+    }
+
+    @Test func theModelIsKeptWhileAKokoroVoiceIsChosenWhateverTheRecordSays() async throws {
+        let bed = VoiceTestBed()
+        // From a launch long ago, when a system voice was chosen.
+        bed.kokoro.isStored = true
+        bed.kokoroUnchosenSince = bed.now - 2 * day
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoroUnchosenSince == nil)
+
+        bed.now += 2 * day
+        loop.removeUnusedKokoroModel()
+        // Switching between Kokoro voices changes nothing.
+        loop.voiceIdentifier = "kokoro.af_bella"
+        bed.now += 2 * day
+        loop.removeUnusedKokoroModel()
+        try await settle()
+
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+        #expect(bed.kokoroUnchosenSince == nil)
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .ready)
+    }
+
+    @Test func choosingAKokoroVoiceAgainBeforeTheDayIsUpStartsTheDayOver() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+        let systemVoice = loop.voiceIdentifier
+
+        bed.now += 23 * hour
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(bed.kokoroUnchosenSince == nil)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        loop.voiceIdentifier = systemVoice
+        // A day after the first system voice, but two hours after the second.
+        bed.now += 2 * hour
+        loop.removeUnusedKokoroModel()
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+
+        bed.now += 22 * hour
+        loop.removeUnusedKokoroModel()
+        #expect(await eventually { !bed.kokoro.isStored })
+    }
+
+    @Test func choosingAKokoroVoiceWhileADeletionWaitsItsTurnCancelsIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+        bed.now += day
+
+        // In the same turn of the main actor, so the deletion hasn't reached the engine yet.
+        loop.removeUnusedKokoroModel()
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+    }
+
+    @Test func switchingBetweenSystemVoicesDoesNotPutOffTheDeletion() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+
+        bed.now += 12 * hour
+        // The default voice, another system voice.
+        loop.voiceIdentifier = nil
+        bed.now += 12 * hour
+        loop.removeUnusedKokoroModel()
+
+        #expect(await eventually { !bed.kokoro.isStored })
+    }
+
+    @Test func withNoRecordTheDayStartsAtTheCheckInsteadOfDeletingAtOnce() async throws {
+        let bed = VoiceTestBed()
+        // Downloaded by a version that kept no record. The default voice is chosen.
+        bed.kokoro.isStored = true
+        let loop = bed.makeLoop()
+
+        loop.removeUnusedKokoroModel()
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+        #expect(bed.kokoroUnchosenSince == bed.now)
+
+        bed.now += day
+        loop.removeUnusedKokoroModel()
+        #expect(await eventually { !bed.kokoro.isStored })
+    }
+
+    @Test func aModelStillDownloadingIsNotDeleted() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+        // Unchosen while it downloads; the download carries on.
+        loop.voiceIdentifier = nil
+        bed.now += day
+
+        loop.removeUnusedKokoroModel()
+        #expect(loop.kokoroModelState == .loading)
+        bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { loop.kokoroModelState == .notLoaded && bed.kokoro.unloads == 1 })
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+    }
+}
+
 // MARK: - Cancelling
 
 /// Speaking stops while Kokoro is still rendering a sentence. Nothing more is rendered, and the

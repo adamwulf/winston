@@ -2,8 +2,9 @@
 import VoiceLoop
 
 /// Everything a `VoiceLoop` needs from the system, for tests: offline audio hardware, scripted
-/// recognizers, permission prompts that answer at once, and a fake Kokoro. The loop built on it
-/// is the real `VoiceLoop`, with its real pipeline and its real speech synthesizer.
+/// recognizers, permission prompts that answer at once, a fake Kokoro, a clock that moves only
+/// when the test moves it, and user defaults kept in memory. The loop built on it is the real
+/// `VoiceLoop`, with its real pipeline and its real speech synthesizer.
 @MainActor
 package final class VoiceTestBed {
     package let audio = OfflineAudio()
@@ -30,6 +31,11 @@ package final class VoiceTestBed {
     package var systemVoices: [VoiceOption]?
     /// The language of each time the loop listed the system voices, oldest first.
     package private(set) var systemVoiceListings: [String] = []
+    /// The wall clock. It stands still until a test moves it, as by a day.
+    package var now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    /// When the loop recorded that the last Kokoro voice was unchosen, as the app keeps it in its
+    /// user defaults. A loop made later on the same bed sees it, as after a relaunch.
+    package var kokoroUnchosenSince: Date?
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -74,7 +80,10 @@ package final class VoiceTestBed {
             systemVoices: { [self] language in
                 systemVoiceListings.append(language)
                 return systemVoices ?? VoiceLoop.systemVoices(language: language)
-            }
+            },
+            now: { [self] in now },
+            kokoroUnchosenSince: { [self] in kokoroUnchosenSince },
+            setKokoroUnchosenSince: { [self] in kokoroUnchosenSince = $0 }
         )
     }
 
