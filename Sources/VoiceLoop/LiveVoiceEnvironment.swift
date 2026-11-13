@@ -10,12 +10,14 @@ import Speech
 // of its own.
 
 extension VoiceEnvironment {
-    /// The microphone, the on-device speech model and the audio hardware.
+    /// The microphone, the on-device speech model, the audio hardware, and Kokoro with its model
+    /// under Application Support.
     package static let live = VoiceEnvironment(
         requestPermissions: { try await LiveSpeech.requestPermissions() },
         makeRecognizer: { try await LiveSpeech.makeRecognizer() },
         makeEngine: { AVAudioEngine() },
-        enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) }
+        enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) },
+        kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory))
     )
 }
 

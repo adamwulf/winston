@@ -44,7 +44,7 @@ xcodebuild -quiet -project App/Winston.xcodeproj -scheme Winston \
 
 ### What the tests run
 
-The tests run the real code. A test process can't have three things, and each
+The tests run the real code. A test process can't have four things, and each
 is reached through one seam. The seams are `package` declarations, so the app
 can't see them.
 
@@ -53,10 +53,16 @@ can't see them.
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
+| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, and renders each sentence as 0.2 s of steady sound |
 
 Everything else is the production code: the `TelegramLink` actor with its
 update decoding and mapping, the `VoiceLoop` with its pipeline, converter,
 player and the real `AVSpeechSynthesizer`, and `AppModel` on top of both.
+
+`KokoroRealModelTests` runs the real model through the real `VoiceLoop`, but
+only once the model is in `.build/kokoro-model` (or `WINSTON_KOKORO_MODEL_DIR`);
+otherwise it is skipped. Running `LiveKokoro(directory:)` on that folder once
+downloads it.
 `TelegramLinkTestSupport` and `VoiceLoopTestSupport` hold the stand-ins, so
 every test target shares them.
 
@@ -81,10 +87,12 @@ Scripts/coverage.sh
 
 runs the tests on macOS and prints line coverage for every file in `Sources/`.
 
-Three places stay uncovered on purpose, because they only call into the
+Four places stay uncovered on purpose, because they only call into the
 system:
 
 - `LiveVoiceEnvironment.swift`: the permission prompts and the speech model.
+- `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
+  `KokoroRealModelTests` runs.
 - `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
   `TelegramLink.init(config:)`: the real TDLib, which would use the network.
 - A few defensive `throw`s that the system never triggers, such as

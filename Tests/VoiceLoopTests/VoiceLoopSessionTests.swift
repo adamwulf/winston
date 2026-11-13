@@ -1240,13 +1240,16 @@ struct SoundCueTests {
 
 @Suite struct VoiceOptionTests {
     @MainActor
-    @Test func availableVoicesAreForTheCurrentLanguageBestQualityFirst() throws {
-        let voices = VoiceLoop.availableVoices()
+    @Test func availableSystemVoicesAreForTheCurrentLanguageBestQualityFirst() throws {
+        let all = VoiceLoop.availableVoices()
+        let voices = all.filter { $0.engine == .system }
         let language = AVSpeechSynthesisVoice.currentLanguageCode()
         let systemDefault = AVSpeechSynthesisVoice(language: language)?.identifier
 
         #expect(!voices.isEmpty)
-        #expect(Set(voices.map(\.id)).count == voices.count)
+        #expect(Set(all.map(\.id)).count == all.count)
+        // The system voices come first, then any Kokoro voices.
+        #expect(Array(all.prefix(voices.count)) == voices)
         for option in voices {
             let voice = try #require(AVSpeechSynthesisVoice(identifier: option.id))
             #expect(voice.language == language)
@@ -1272,5 +1275,6 @@ struct SoundCueTests {
         #expect(option.id == "voice.id")
         #expect(option.name == "Ava")
         #expect(option.quality == .premium)
+        #expect(option.engine == .system)
     }
 }

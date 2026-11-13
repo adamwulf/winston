@@ -2,11 +2,12 @@
 import VoiceLoop
 
 /// Everything a `VoiceLoop` needs from the system, for tests: offline audio hardware, scripted
-/// recognizers, and permission prompts that answer at once. The loop built on it is the real
-/// `VoiceLoop`, with its real pipeline and its real speech synthesizer.
+/// recognizers, permission prompts that answer at once, and a fake Kokoro. The loop built on it
+/// is the real `VoiceLoop`, with its real pipeline and its real speech synthesizer.
 @MainActor
 package final class VoiceTestBed {
     package let audio = OfflineAudio()
+    package let kokoro = FakeKokoro()
     /// Every recognizer the loop has asked for, newest last. Each listening session gets one.
     package private(set) var recognizers: [ScriptedRecognizer] = []
 
@@ -60,7 +61,8 @@ package final class VoiceTestBed {
                 if !hasVoiceProcessing {
                     throw VoiceTestBedError.noVoiceProcessing
                 }
-            }
+            },
+            kokoro: kokoro
         )
     }
 

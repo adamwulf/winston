@@ -1,0 +1,147 @@
+import Synchronization
+import VoiceLoop
+
+/// The Kokoro engine for tests: no model and no network. Its model "loads" when the test says
+/// so, and it renders every sentence as the same 0.2 s of steady sound, so a test can tell from
+/// `OfflineAudio.playedFrames` whether a message came from Kokoro or from the system voice.
+package final class FakeKokoro: KokoroEngine {
+    /// How long each rendered sentence sounds.
+    package static let secondsPerSentence = 0.2
+
+    /// What `load` does.
+    package enum LoadBehavior: Sendable {
+        /// Loads at once, without downloading: the model is already stored.
+        case succeeds
+        /// Fails at once with `FakeKokoroError.loadFailed`.
+        case fails
+        /// Waits until the test calls `finishLoading(succeeding:)`.
+        case waits
+    }
+
+    /// One `synthesize` call.
+    package struct Request: Equatable, Sendable {
+        package let text: String
+        package let voice: String
+        package let speed: Float
+
+        package init(text: String, voice: String, speed: Float) {
+            self.text = text
+            self.voice = voice
+            self.speed = speed
+        }
+    }
+
+    private struct State {
+        var loadBehavior = LoadBehavior.succeeds
+        var loads = 0
+        var isLoaded = false
+        var waitingLoads: [CheckedContinuation<Void, any Error>] = []
+        var downloadProgress: (@Sendable (Double) -> Void)?
+        var requests: [Request] = []
+        /// The `requests` index that fails, if any.
+        var failingRequest: Int?
+        var holdsSynthesis = false
+        var heldSyntheses: [CheckedContinuation<Void, Never>] = []
+    }
+
+    private let state = Mutex(State())
+
+    package init() {}
+
+    package var loadBehavior: LoadBehavior {
+        get { state.withLock { $0.loadBehavior } }
+        set { state.withLock { $0.loadBehavior = newValue } }
+    }
+
+    /// How many times the loop has asked for the model.
+    package var loads: Int { state.withLock { $0.loads } }
+
+    /// Every sentence rendered or rendering, oldest first.
+    package var requests: [Request] { state.withLock { $0.requests } }
+
+    /// When set, the sentence with this index in `requests` fails to render.
+    package var failingRequest: Int? {
+        get { state.withLock { $0.failingRequest } }
+        set { state.withLock { $0.failingRequest = newValue } }
+    }
+
+    /// While true, each sentence waits to finish rendering until `releaseSyntheses()`.
+    package var holdsSynthesis: Bool {
+        get { state.withLock { $0.holdsSynthesis } }
+        set { state.withLock { $0.holdsSynthesis = newValue } }
+    }
+
+    /// Sentences waiting in `holdsSynthesis`.
+    package var heldSyntheses: Int { state.withLock { $0.heldSyntheses.count } }
+
+    /// Lets every held sentence finish rendering.
+    package func releaseSyntheses() {
+        let held = state.withLock { state in
+            defer { state.heldSyntheses = [] }
+            return state.heldSyntheses
+        }
+        for synthesis in held { synthesis.resume() }
+    }
+
+    /// Reports download progress to a waiting load.
+    package func reportDownloadProgress(_ progress: Double) {
+        state.withLock { $0.downloadProgress }?(progress)
+    }
+
+    /// Ends the loads waiting in `.waits`.
+    package func finishLoading(succeeding: Bool) {
+        let waiting = state.withLock { state in
+            defer { state.waitingLoads = [] }
+            if succeeding { state.isLoaded = true }
+            return state.waitingLoads
+        }
+        for load in waiting {
+            if succeeding {
+                load.resume()
+            } else {
+                load.resume(throwing: FakeKokoroError.loadFailed)
+            }
+        }
+    }
+
+    package func load(downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+        let behavior = state.withLock { state in
+            state.loads += 1
+            state.downloadProgress = downloadProgress
+            return state.isLoaded ? .succeeds : state.loadBehavior
+        }
+        switch behavior {
+        case .succeeds:
+            state.withLock { $0.isLoaded = true }
+        case .fails:
+            throw FakeKokoroError.loadFailed
+        case .waits:
+            try await withCheckedThrowingContinuation { continuation in
+                state.withLock { $0.waitingLoads.append(continuation) }
+            }
+        }
+    }
+
+    package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
+        let (index, holds, isLoaded) = state.withLock { state in
+            state.requests.append(Request(text: text, voice: voice, speed: speed))
+            return (state.requests.count - 1, state.holdsSynthesis, state.isLoaded)
+        }
+        guard isLoaded else { throw FakeKokoroError.notLoaded }
+        if holds {
+            await withCheckedContinuation { continuation in
+                state.withLock { $0.heldSyntheses.append(continuation) }
+            }
+        }
+        if state.withLock({ $0.failingRequest }) == index {
+            throw FakeKokoroError.synthesisFailed
+        }
+        return [Float](repeating: 0.25, count: Int(Self.secondsPerSentence * 24_000))
+    }
+}
+
+package enum FakeKokoroError: Error {
+    case loadFailed
+    case notLoaded
+    case synthesisFailed
+}
