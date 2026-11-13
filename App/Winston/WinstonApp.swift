@@ -6,15 +6,15 @@ struct WinstonApp: App {
     @State private var model = AppModel()
     #if os(macOS)
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
+    #else
+    @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
     #endif
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
-                #if os(macOS)
                 .onAppear { appDelegate.model = model }
-                #endif
         }
         .commands {
             // One window: a second one would share the same model and Telegram session.
@@ -23,9 +23,12 @@ struct WinstonApp: App {
     }
 }
 
+// Closes the Telegram session before the app terminates, then ends the process with
+// _exit. TDLibKit's receive thread is still inside td_receive, and exit()'s C++ static
+// destructors would tear TDLib down under it (EXC_BAD_ACCESS). The session is closed and
+// saved by then, so the process ends without running them.
+
 #if os(macOS)
-/// Closes the Telegram session before quitting. iOS doesn't need this: it ends a suspended
-/// app without running exit-time cleanup.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var model: AppModel?
 
@@ -33,12 +36,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return .terminateNow }
         Task {
             await model.closeForQuit()
-            // TDLibKit's receive thread is still inside td_receive, and exit()'s C++ static
-            // destructors would tear TDLib down under it (EXC_BAD_ACCESS on quit). The session
-            // is closed and saved, so end the process without running them.
             _exit(0)
         }
         return .terminateLater
+    }
+}
+#else
+/// iOS only calls this when the app is running at termination, for example when it's swiped
+/// away while voice mode keeps it alive in the background. A suspended app is killed without it.
+final class AppDelegate: NSObject, UIApplicationDelegate {
+    var model: AppModel?
+
+    func applicationWillTerminate(_ application: UIApplication) {
+        guard let model else { return }
+        model.closeForQuitBlocking()
+        _exit(0)
     }
 }
 #endif

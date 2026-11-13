@@ -160,6 +160,19 @@ final class AppModel {
         await link?.closeForTermination()
     }
 
+    /// The same, for `applicationWillTerminate`, which must finish before it returns. Waits at
+    /// most `timeout`. TelegramLink isn't main-actor isolated, so blocking here can't deadlock it.
+    func closeForQuitBlocking(timeout: DispatchTimeInterval = .seconds(3)) {
+        voiceLoop.stop()
+        guard let link else { return }
+        let closed = DispatchSemaphore(value: 0)
+        Task.detached {
+            await link.closeForTermination()
+            closed.signal()
+        }
+        _ = closed.wait(timeout: .now() + timeout)
+    }
+
     // MARK: - Login
 
     func submitPhoneNumber(_ phoneNumber: String) async throws {
