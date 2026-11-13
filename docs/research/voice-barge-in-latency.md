@@ -472,10 +472,13 @@ it first, and an engine restart and a teardown call it so nothing recorded is
 lost.
 
 **File order is the order lines were written, not the order things
-happened.** Recorded lines are dated when the thing happened but written up
-to 100 ms later, the microphone's before the reply's whatever their times, and
-"voice ended" is dated about 500 ms before it can be written. To see a session
-in time order, sort its lines by `tMs`.
+happened.** Recorded lines are dated when the thing happened and written
+later. 100 ms is only how often the main actor writes what was recorded; the
+time from capture to the tap (a buffer length, 100 ms or more) and any delay
+on the main actor come on top, so a `detectMs` above 100 is normal. The
+microphone's lines are written before the reply's whatever their times, and
+"voice ended" is dated about 500 ms before it can be written. To see a
+session in time order, sort its lines by `tMs`.
 
 | # | Message | Where it is written | Extra keys |
 |---|---|---|---|
@@ -501,10 +504,12 @@ What the keys measure:
 
 - "voice started" is the first buffer the existing detector calls voice after
   quiet. `speaking` is whether a reply was playing when the line was written,
-  which is up to 100 ms after the buffer was captured. A reply writes what was
-  recorded before it starts, so a voice start written then says
-  `speaking=false`: that voice began before the reply did, and the "speech
-  started" line that follows shows `voiceActive=true`.
+  which is `detectMs` after the buffer was captured: the buffer reaches the
+  tap a buffer length or more after capture, then waits for the main actor's
+  next write (every 100 ms). A reply writes what was recorded before it
+  starts, so a voice start written then says `speaking=false`: that voice
+  began before the reply did, and the "speech started" line that follows shows
+  `voiceActive=true`.
 - "voice ended" is written once the voice has been absent for 0.5 s of audio
   (counted in frames, so the gaps between words don't end it). Its `tMs` and
   `audioMs` are where that quiet began, so the voice stopped at `tMs` and the
@@ -536,11 +541,12 @@ latency the system reports on both platforms[^20], so "the speaker went quiet"
 is about `tMs + outputLatencyMs`. Measuring the real moment would need a tap
 on the output, which isn't worth it for diagnosis.
 
-"first mic buffer" is dated when the buffer was captured. The tap ran
-`deliveryMs` later and only then converted the buffer and queued it for the
-recognizer[^5], so `tMs + deliveryMs` is when it was queued. When the
-recognizer read it is not measured: at startup, buffers wait in the queue
-until the recognizer starts reading, which "recognizer started" shows.
+"first mic buffer" is dated when the buffer was captured. `tMs + deliveryMs`
+is when the tap was called with it, before the tap converted it for the
+recognizer[^5]. When the buffer was queued for the recognizer, and when the
+recognizer read it, are not measured: conversion can return without queueing
+anything, and at startup buffers wait in the queue until the recognizer
+starts reading, which "recognizer started" shows.
 
 **Differences from the first draft of this section:**
 
