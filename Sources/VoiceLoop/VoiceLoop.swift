@@ -48,7 +48,7 @@ public final class VoiceLoop {
     /// The `VoiceOption.id` to speak with; nil picks the best installed system voice. Choosing a
     /// Kokoro voice downloads and loads its model if needed (see `kokoroModelState`), and until
     /// it is ready, the best system voice speaks instead. Choosing any other voice frees the
-    /// loaded model's memory; it stays downloaded.
+    /// loaded model's memory; it stays downloaded for a day (see `removeUnusedKokoroModel()`).
     public var voiceIdentifier: String? {
         didSet {
             guard voiceIdentifier != oldValue else { return }
@@ -182,7 +182,7 @@ public final class VoiceLoop {
     package init(environment: VoiceEnvironment) {
         self.environment = environment
         previewPlayer = PreviewPlayer(environment: environment)
-        kokoroModel = KokoroModel(engine: environment.kokoro)
+        kokoroModel = KokoroModel(environment: environment)
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
         previewSynthesizer.delegate = previewSynthesisObserver
@@ -517,6 +517,15 @@ public final class VoiceLoop {
     /// a retry after `kokoroModelState` shows `.failed`.
     public func loadKokoroModel() {
         loadKokoroModelIfChosen()
+    }
+
+    /// Deletes the Kokoro voices' stored model, about 335 MB, if no Kokoro voice has been chosen
+    /// for a day. Choosing one again downloads it again. Without a record of when the last one
+    /// was unchosen (a model downloaded by an earlier version), the day starts now. Does nothing
+    /// while a Kokoro voice is chosen or the model is loading. For the app to call at launch,
+    /// once it has set the saved `voiceIdentifier`, and when it returns to the foreground.
+    public func removeUnusedKokoroModel() {
+        kokoroModel.removeIfUnused()
     }
 
     /// The system voices of `voices`, from `systemVoiceCache` if it holds `language`'s.

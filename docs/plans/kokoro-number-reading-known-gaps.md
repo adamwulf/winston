@@ -49,8 +49,10 @@ are probably dropped. Each fix would go in `KokoroNumbers`, with a case in
 - **Pause between sentences.** Kokoro leaves about 0.2–0.45 s of silence at
   the end of each sentence, and it is kept as the pause between sentences. Trim
   it if replies sound slow.
-- **No way to delete the model.** The roughly 335 MB model stays in Application
-  Support. Settings has no "Remove download" button.
+- **No way to delete the model by hand.** The roughly 335 MB model in
+  Application Support is deleted a day after the last Kokoro voice is unchosen
+  (see the README's Kokoro voices section), but Settings has no "Remove
+  download" button.
 - **Pinned to a fork.** speech-swift is pinned to `adamwulf/speech-swift`
   `7cc2ddb` (branch `fix/kokoro-x86_64-float16`), which is upstream `31d676c`
   plus a fix that lets `KokoroTTS` compile for x86_64. Upstream reads float16

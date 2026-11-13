@@ -6,6 +6,8 @@ import TelegramLink
 import VoiceLoop
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 /// UserDefaults keys for the settings AppModel persists.
@@ -100,10 +102,16 @@ public final class AppModel {
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
     public convenience init() {
+        self.init(voiceLoop: VoiceLoop(), defaults: .standard)
+    }
+
+    /// The app's model with a Telegram session if `Secrets.xcconfig` supplied credentials. Tests pass a voice
+    /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone.
+    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults) {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
-            voiceLoop: VoiceLoop(),
-            defaults: .standard
+            voiceLoop: voiceLoop,
+            defaults: defaults
         )
     }
 
@@ -121,12 +129,26 @@ public final class AppModel {
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
         applyVoiceSettings()
+        // After the saved voice is set: a Kokoro voice keeps its model.
+        voiceLoop.removeUnusedKokoroModel()
+        observeAppActivation()
     }
 
     #if DEBUG
     /// A model with sample data and no Telegram session, for SwiftUI previews.
     public convenience init(previewChats: [BotChat], messages: [ChatID: [ChatMessage]], authState: AuthState) {
-        self.init(link: nil, voiceLoop: VoiceLoop(), defaults: .standard, hasCredentials: true)
+        self.init(previewChats: previewChats, messages: messages, authState: authState, voiceLoop: VoiceLoop(), defaults: .standard)
+    }
+
+    /// The same, on the voice loop and defaults a test passes.
+    package convenience init(
+        previewChats: [BotChat],
+        messages: [ChatID: [ChatMessage]],
+        authState: AuthState,
+        voiceLoop: VoiceLoop,
+        defaults: UserDefaults
+    ) {
+        self.init(link: nil, voiceLoop: voiceLoop, defaults: defaults, hasCredentials: true)
         self.authState = authState
         chats = previewChats
         chatsLoaded = true
@@ -141,6 +163,22 @@ public final class AppModel {
         voiceLoop.speechRate = speechRate
         voiceLoop.speechPitch = speechPitch
         voiceLoop.pausesOtherAudio = pausesOtherAudio
+    }
+
+    /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has
+    /// gone unused for a day, as launching does.
+    private func observeAppActivation() {
+        #if os(iOS)
+        let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
+        #elseif os(macOS)
+        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+        #endif
+        Task { [weak self] in
+            for await _ in activations {
+                guard let self else { return }
+                self.voiceLoop.removeUnusedKokoroModel()
+            }
+        }
     }
 
     /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the

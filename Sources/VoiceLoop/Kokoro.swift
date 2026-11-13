@@ -7,7 +7,8 @@ import Observation
 
 // Kokoro-82M neural voices, alongside the system's `AVSpeechSynthesizer` voices. The model is
 // downloaded the first time a Kokoro voice is used, and until it is ready, the best system voice
-// speaks instead. The real engine is speech-swift's KokoroTTS; see `LiveKokoro.swift`.
+// speaks instead. Once no Kokoro voice has been chosen for a day, the model is deleted. The real
+// engine is speech-swift's KokoroTTS; see `LiveKokoro.swift`.
 
 /// Text-to-speech with the Kokoro-82M model. In the app it is speech-swift's KokoroTTS, with the
 /// model stored under Application Support. Tests use a fake that needs no model or network.
@@ -19,6 +20,9 @@ package protocol KokoroEngine: Sendable {
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
+    /// Deletes the stored model, freeing it first if it is loaded, so the next `load` downloads
+    /// it again. Returns whether any of it was stored.
+    func removeStoredModel() async throws -> Bool
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
@@ -41,28 +45,46 @@ public enum KokoroModelState: Sendable, Equatable {
     case failed
 }
 
-/// The model's state, and loading it while a Kokoro voice is chosen. One per voice loop.
+/// The model's state, and loading it while a Kokoro voice is chosen. One per voice loop. Once no
+/// Kokoro voice has been chosen for `unusedLifetime`, it also deletes the stored model.
 @MainActor
 @Observable
 final class KokoroModel {
     private static let log = Logger(label: "voice.kokoro")
+    /// How long the model stays stored after the last Kokoro voice is unchosen: a day.
+    static let unusedLifetime: TimeInterval = 24 * 60 * 60
 
     private(set) var state: KokoroModelState = .notLoaded
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
-    /// The latest load or unload. Each waits for the one before, so that an unload and the
-    /// load after it reach the engine in order.
+    /// The latest load, unload or removal. Each waits for the one before, so that an unload and
+    /// the load after it reach the engine in order, and a removal never runs during a load.
     @ObservationIgnored private var lastEngineCall: Task<Void, Never>?
+    @ObservationIgnored private let now: @MainActor () -> Date
+    @ObservationIgnored private let readUnchosenSince: @MainActor () -> Date?
+    @ObservationIgnored private let writeUnchosenSince: @MainActor (Date?) -> Void
 
-    init(engine: any KokoroEngine) {
-        self.engine = engine
+    /// The engine is `environment.kokoro`. The environment's clock and record of when the last
+    /// Kokoro voice was unchosen time the removal of the stored model.
+    init(environment: VoiceEnvironment) {
+        engine = environment.kokoro
+        now = environment.now
+        readUnchosenSince = environment.kokoroUnchosenSince
+        writeUnchosenSince = environment.setKokoroUnchosenSince
+    }
+
+    /// When the last Kokoro voice was unchosen, kept across launches. Nil while one is chosen.
+    private var unchosenSince: Date? {
+        get { readUnchosenSince() }
+        set { writeUnchosenSince(newValue) }
     }
 
     /// Downloads and loads the model, unless it is ready or already on its way. After a failure,
-    /// tries again.
+    /// tries again. While a Kokoro voice is chosen the stored model is never removed.
     func load() {
         isWanted = true
+        unchosenSince = nil
         switch state {
         case .loading, .downloading, .ready:
             return
@@ -103,9 +125,14 @@ final class KokoroModel {
     /// Frees the loaded model's memory, now that no Kokoro voice is chosen. A load in progress
     /// isn't cancelled, so a download isn't lost: the model is freed when it finishes, unless a
     /// Kokoro voice is chosen again by then. A failure is forgotten: settings offers a retry
-    /// only while a Kokoro voice is chosen.
+    /// only while a Kokoro voice is chosen. The model stays stored for `unusedLifetime`, counted
+    /// from the first release after a Kokoro voice was chosen: see `removeIfUnused()`.
     func release() {
         isWanted = false
+        // Switching from one system voice to another doesn't restart the count.
+        if unchosenSince == nil {
+            unchosenSince = now()
+        }
         switch state {
         case .ready:
             state = .notLoaded
@@ -120,7 +147,38 @@ final class KokoroModel {
         }
     }
 
-    /// Runs `call` once the previous load or unload has finished.
+    /// Deletes the stored model if no Kokoro voice has been chosen for `unusedLifetime`. Without
+    /// a record of when the last one was unchosen (a model downloaded before the record was
+    /// kept), the count starts now instead. Does nothing while a Kokoro voice is chosen or the
+    /// model is loading. The deletion waits for any unload still running, and is dropped if a
+    /// Kokoro voice is chosen while it waits.
+    func removeIfUnused() {
+        guard hasGoneUnused() else { return }
+        callEngine { [engine] in
+            guard self.hasGoneUnused() else { return }
+            do {
+                if try await engine.removeStoredModel() {
+                    Self.log.notice("kokoro model removed after going unused")
+                }
+            } catch {
+                // Codes only: a file error's message names the model's folder.
+                Self.log.error("removing the kokoro model failed", error.logCodes())
+            }
+        }
+    }
+
+    /// Whether no Kokoro voice has been chosen for `unusedLifetime` and nothing is loading.
+    /// Starts the count if there is no record of when the last one was unchosen.
+    private func hasGoneUnused() -> Bool {
+        guard !isWanted, state == .notLoaded else { return false }
+        guard let unchosenSince else {
+            self.unchosenSince = now()
+            return false
+        }
+        return now().timeIntervalSince(unchosenSince) >= Self.unusedLifetime
+    }
+
+    /// Runs `call` once the previous engine call has finished.
     private func callEngine(_ call: @escaping @MainActor () async -> Void) {
         let previous = lastEngineCall
         lastEngineCall = Task {

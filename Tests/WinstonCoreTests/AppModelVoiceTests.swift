@@ -553,6 +553,61 @@ struct VoiceSettingsTests {
         #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
     }
 
+    @Test func aLaunchADayAfterTheLastKokoroVoiceWasUnchosenDeletesItsModel() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        model.voiceIdentifier = nil
+
+        // Relaunched on the same device, which keeps the model and the record of when it was
+        // last unchosen.
+        harness.bed.now += 23 * 60 * 60
+        let early = harness.relaunchedModel(on: harness.bed)
+        try await settle()
+        #expect(harness.bed.kokoro.isStored)
+
+        harness.bed.now += 60 * 60
+        let later = harness.relaunchedModel(on: harness.bed)
+        #expect(await eventually { !harness.bed.kokoro.isStored })
+        #expect(early.voiceLoop.kokoroModelState == .notLoaded)
+        #expect(later.voiceLoop.kokoroModelState == .notLoaded)
+    }
+
+    @Test func aModelLeftByAnEarlierVersionIsDeletedADayAfterTheFirstLaunchNotAtIt() async throws {
+        let harness = Harness()
+        let bed = VoiceTestBed()
+        // Downloaded by a version that kept no record of when it was last used.
+        bed.kokoro.isStored = true
+
+        let launched = harness.relaunchedModel(on: bed)
+        try await settle()
+        #expect(bed.kokoro.isStored)
+        #expect(bed.kokoroUnchosenSince == bed.now)
+
+        bed.now += 24 * 60 * 60
+        let relaunched = harness.relaunchedModel(on: bed)
+        #expect(await eventually { !bed.kokoro.isStored })
+        #expect(launched.voiceLoop.kokoroModelState == .notLoaded)
+        #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
+    }
+
+    @Test func aLaunchWithAKokoroVoiceKeepsItsModelHoweverOldTheRecord() async throws {
+        let harness = Harness()
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+        let bed = VoiceTestBed()
+        bed.kokoro.isStored = true
+        bed.kokoroUnchosenSince = bed.now - 7 * 24 * 60 * 60
+
+        let relaunched = harness.relaunchedModel(on: bed)
+
+        #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        #expect(bed.kokoro.isStored)
+        #expect(bed.kokoroUnchosenSince == nil)
+    }
+
     @Test func repliesAreSpokenAtNormalSpeedAndOtherAudioPausesByDefault() async throws {
         let harness = Harness()
         let model = harness.model

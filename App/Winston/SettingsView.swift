@@ -131,7 +131,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 335 MB. Until it's ready, the best system voice speaks.")
+                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 335 MB. Until it's ready, the best system voice speaks. The model is removed after a day without a Kokoro voice.")
                 }
             }
             Section {

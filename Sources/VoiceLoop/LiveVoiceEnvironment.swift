@@ -3,15 +3,16 @@ import Logging
 import LogSupport
 import Speech
 
-// The real permission prompts, speech model and audio hardware behind `VoiceEnvironment`.
-// A test process has none of them: a permission prompt needs the app's usage strings, the
-// speech model may not be installed, and there may be no audio device. So this file is the
+// The real permission prompts, speech model, audio hardware, clock and user defaults behind
+// `VoiceEnvironment`. A test process has none of them: a permission prompt needs the app's
+// usage strings, the speech model may not be installed, there may be no audio device, a test
+// can't wait a day, and the app's user defaults aren't a test's to change. So this file is the
 // one part of VoiceLoop the tests don't run. Keep it to calls into the system, with no logic
 // of its own.
 
 extension VoiceEnvironment {
-    /// The microphone, the on-device speech model, the audio hardware, and Kokoro with its model
-    /// under Application Support.
+    /// The microphone, the on-device speech model, the audio hardware, Kokoro with its model
+    /// under Application Support, the system clock, and the standard user defaults.
     package static let live = VoiceEnvironment(
         requestPermissions: { try await LiveSpeech.requestPermissions() },
         makeRecognizer: { try await LiveSpeech.makeRecognizer() },
@@ -19,9 +20,15 @@ extension VoiceEnvironment {
         enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) },
         kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory)),
         languageCode: { AVSpeechSynthesisVoice.currentLanguageCode() },
-        systemVoices: { VoiceLoop.systemVoices(language: $0) }
+        systemVoices: { VoiceLoop.systemVoices(language: $0) },
+        now: { Date.now },
+        kokoroUnchosenSince: { UserDefaults.standard.object(forKey: kokoroUnchosenSinceKey) as? Date },
+        setKokoroUnchosenSince: { UserDefaults.standard.set($0, forKey: kokoroUnchosenSinceKey) }
     )
 }
+
+/// Where `VoiceEnvironment.live` keeps `kokoroUnchosenSince` in the standard user defaults.
+private let kokoroUnchosenSinceKey = "kokoroUnchosenSince"
 
 /// A `SpeechAnalyzer` running a `SpeechTranscriber`.
 private struct LiveRecognizer: Recognizer {

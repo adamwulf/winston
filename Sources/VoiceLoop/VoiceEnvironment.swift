@@ -17,11 +17,13 @@ package protocol Recognizer: Sendable {
 }
 
 /// The system services the voice loop runs on: the permission prompts, the speech recognizer,
-/// the audio hardware, the Kokoro voices' model, the language and the installed voices. None of
-/// the first four is available to a test, and a test can't change the last two, so the loop
-/// takes them from here. `live` is the real thing. Tests pass a scripted recognizer, an engine
-/// that renders offline and a fake Kokoro, and everything else (the loop, the pipeline, speech
-/// playback) runs as it does in the app.
+/// the audio hardware, the Kokoro voices' model, the language, the installed voices, the clock,
+/// and the app's user defaults. A test can't have the first four, can't change the language or
+/// the installed voices, can't wait a day, and mustn't touch the app's user defaults, so the
+/// loop takes them from here. `live` is the real thing. Tests pass a scripted recognizer, an
+/// engine that renders offline, a fake Kokoro, a clock they move by hand and a record kept in
+/// memory, and everything else (the loop, the pipeline, speech playback) runs as it does in the
+/// app.
 package struct VoiceEnvironment: Sendable {
     /// Asks for microphone and speech permission. Throws a `VoiceLoopError` when one is missing.
     package var requestPermissions: @MainActor @Sendable () async throws -> Void
@@ -40,6 +42,14 @@ package struct VoiceEnvironment: Sendable {
     /// The installed system voices for a language code, as `VoiceLoop.systemVoices(language:)`
     /// lists them.
     package var systemVoices: @MainActor @Sendable (String) -> [VoiceOption]
+    /// The time by the wall clock, which measures how long the Kokoro model has gone unused,
+    /// across launches.
+    package var now: @MainActor @Sendable () -> Date
+    /// When the last Kokoro voice was unchosen, kept across launches. Nil while a Kokoro voice
+    /// is chosen. See `VoiceLoop.removeUnusedKokoroModel()`.
+    package var kokoroUnchosenSince: @MainActor @Sendable () -> Date?
+    /// Saves `kokoroUnchosenSince`. Nil clears it.
+    package var setKokoroUnchosenSince: @MainActor @Sendable (Date?) -> Void
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
@@ -48,7 +58,10 @@ package struct VoiceEnvironment: Sendable {
         enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void,
         kokoro: any KokoroEngine,
         languageCode: @escaping @MainActor @Sendable () -> String,
-        systemVoices: @escaping @MainActor @Sendable (String) -> [VoiceOption]
+        systemVoices: @escaping @MainActor @Sendable (String) -> [VoiceOption],
+        now: @escaping @MainActor @Sendable () -> Date,
+        kokoroUnchosenSince: @escaping @MainActor @Sendable () -> Date?,
+        setKokoroUnchosenSince: @escaping @MainActor @Sendable (Date?) -> Void
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
@@ -57,5 +70,8 @@ package struct VoiceEnvironment: Sendable {
         self.kokoro = kokoro
         self.languageCode = languageCode
         self.systemVoices = systemVoices
+        self.now = now
+        self.kokoroUnchosenSince = kokoroUnchosenSince
+        self.setKokoroUnchosenSince = setKokoroUnchosenSince
     }
 }

@@ -39,7 +39,9 @@ package final class FakeKokoro: KokoroEngine {
         var loadBehavior = LoadBehavior.succeeds
         var loads = 0
         var unloads = 0
+        var removals = 0
         var isLoaded = false
+        var isStored = false
         var waitingLoads: [CheckedContinuation<Void, any Error>] = []
         var downloadProgress: (@Sendable (Double) -> Void)?
         var requests: [Request] = []
@@ -64,8 +66,18 @@ package final class FakeKokoro: KokoroEngine {
     /// How many times the loop has freed the model.
     package var unloads: Int { state.withLock { $0.unloads } }
 
+    /// How many times the loop has deleted the stored model.
+    package var removals: Int { state.withLock { $0.removals } }
+
     /// Whether the model is in memory.
     package var isLoaded: Bool { state.withLock { $0.isLoaded } }
+
+    /// Whether the model is downloaded. A load that succeeds stores it; a test can store it
+    /// beforehand, as an earlier launch would have.
+    package var isStored: Bool {
+        get { state.withLock { $0.isStored } }
+        set { state.withLock { $0.isStored = newValue } }
+    }
 
     /// Every sentence rendered or rendering, oldest first.
     package var requests: [Request] { state.withLock { $0.requests } }
@@ -103,7 +115,10 @@ package final class FakeKokoro: KokoroEngine {
     package func finishLoading(succeeding: Bool) {
         let waiting = state.withLock { state in
             defer { state.waitingLoads = [] }
-            if succeeding { state.isLoaded = true }
+            if succeeding {
+                state.isLoaded = true
+                state.isStored = true
+            }
             return state.waitingLoads
         }
         for load in waiting {
@@ -123,7 +138,10 @@ package final class FakeKokoro: KokoroEngine {
         }
         switch behavior {
         case .succeeds:
-            state.withLock { $0.isLoaded = true }
+            state.withLock { state in
+                state.isLoaded = true
+                state.isStored = true
+            }
         case .fails:
             throw FakeKokoroError.loadFailed
         case .waits:
@@ -137,6 +155,17 @@ package final class FakeKokoro: KokoroEngine {
         state.withLock { state in
             state.unloads += 1
             state.isLoaded = false
+        }
+    }
+
+    package func removeStoredModel() async -> Bool {
+        state.withLock { state in
+            defer {
+                state.isLoaded = false
+                state.isStored = false
+            }
+            state.removals += 1
+            return state.isStored
         }
     }
 
