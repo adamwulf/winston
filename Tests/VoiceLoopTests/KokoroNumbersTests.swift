@@ -39,8 +39,20 @@ import Testing
         #expect(say("5-10k users") == "five to ten thousand users")
         #expect(say("$5-10M") == "five to ten million dollars")
         #expect(say("€2-3bn") == "two to three billion euros")
-        // Without money an "m" could be metres, so it stays a letter.
+        // Without money an "m" could be metres, and a "K" a resolution, so they stay letters.
         #expect(say("5-10m") == "five to ten m")
+        #expect(say("5-10K") == "five to ten K")
+    }
+
+    @Test func aLowercaseKIsThousandsEvenWithoutMoney() {
+        #expect(say("10k users") == "ten thousand users")
+        #expect(say("2.5k stars") == "two point five thousand stars")
+        #expect(say("a 50k salary") == "a fifty thousand salary")
+        // An uppercase "K" without money stays a letter, as do letters that don't end the word.
+        #expect(say("a 4K screen") == "a four K screen")
+        #expect(say("a 10km run") == "a ten km run")
+        // In a name, the letter stays too.
+        #expect(say("GPT-4-32k") == "GPT four thirty-two k")
     }
 
     @Test func aPhoneNumberIsReadDigitByDigit() {

@@ -127,7 +127,8 @@ struct KokoroNumbers {
         let dashEnd = end(from: index, joinedBy: Self.isDash)
         let group = matches[index...dashEnd]
         if Self.isGluedToWord(match, in: text) {
-            return (group.count, group.map { words(for: $0, in: text) }.joined(separator: " "))
+            // A name's letters stay letters: "GPT-4-32k" is "thirty-two k".
+            return (group.count, group.map { words(for: $0, in: text, inName: true) }.joined(separator: " "))
         }
         if isPhone(index, dashEnd) {
             return (2, group.map { digitByDigit(text[$0.range]) }.joined(separator: ", "))
@@ -152,7 +153,7 @@ struct KokoroNumbers {
 
     /// "3-2" is "three to two". A scale after the second number applies to the first too: "5-10k"
     /// is "five to ten thousand", "$5-10M" "five to ten million dollars". Without money, only a
-    /// "k" counts as a scale, since "5-10m" may well be metres.
+    /// lowercase "k" is a scale, as for a number on its own.
     private func range(_ from: Match, _ to: Match, in text: String) -> String {
         if let scale = Self.scale(of: to), Self.scale(of: from) == nil,
            let low = amount(from), let high = amount(to) {
@@ -160,7 +161,7 @@ struct KokoroNumbers {
             if let units {
                 return low + " to " + high + " " + scale + " " + units.plural
             }
-            if scale == "thousand" {
+            if to.output.integerScale == "k" {
                 return low + " to " + high + " " + scale
             }
         }
@@ -209,8 +210,8 @@ struct KokoroNumbers {
 
     // MARK: - A number on its own
 
-    /// One number's words.
-    private func words(for match: Match, in text: String) -> String {
+    /// One number's words. `inName` keeps a letter after it a letter, as in "GPT-4-32k".
+    private func words(for match: Match, in text: String, inName: Bool = false) -> String {
         let output = match.output
         if let hour = output.hour, let minute = output.minute {
             return time(hour: hour, minute: minute, following: text[match.range.upperBound...])
@@ -229,8 +230,10 @@ struct KokoroNumbers {
                 isOrdinal: output.ordinal != nil,
                 preceding: text[..<match.range.lowerBound]
             )
-            // On its own, "4K" is a K, not thousands: see `range`.
-            return output.integerScale.map { words + " " + $0 } ?? words
+            guard let letters = output.integerScale else { return words }
+            // In chat, a lowercase "k" is thousands: "10k users", "2.5k stars". Other letters,
+            // even "K" ("4K screen"), stay letters without money: see `range` and `money`.
+            return letters == "k" && !inName ? words + " thousand" : words + " " + letters
         }
         if let point = output.point {
             // A decimal without its leading zero (".5"), unless the dot follows a word or a
