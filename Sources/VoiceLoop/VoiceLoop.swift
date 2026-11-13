@@ -724,8 +724,10 @@ public final class VoiceLoop {
         updateListeningState()
     }
 
-    /// Logs how a reply ended and what the microphone picked up while it played, to show how
-    /// much of the reply gets through echo cancellation. Counts and levels only.
+    /// Logs how a reply ended and the loudest microphone level while it played, after echo
+    /// cancellation. That level includes the user talking and room noise as well as any of the
+    /// reply that got through, so it only measures leakage for a reply that played to the end
+    /// in a quiet room. Counts and levels only.
     private func logReplyEnded(_ playback: SpeechPlayback, reason: String) {
         Self.log.info("reply ended", [
             "reason": reason,
