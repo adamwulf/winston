@@ -48,24 +48,30 @@ final class Pipeline {
                 )
             }
         }
-        #if os(macOS)
-        if voiceProcessing {
-            // On a MacBook Pro with voice processing on, the input reports 9 identical channels,
-            // and the engine won't start (-10875, "client-side input and output formats do not
-            // match") while the output keeps its default stereo format. A mono output works.
-            let inputFormat = input.outputFormat(forBus: 0)
-            guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
-                throw AudioFormatError()
-            }
-            engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
-        }
-        #endif
+        try connectOutputForVoiceProcessing()
         try installMicrophoneTap()
 
         engine.attach(player)
         // Mono into the mixer, which spreads it to every output channel.
         engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
         engine.prepare()
+    }
+
+    /// On a MacBook Pro with voice processing on, the input reports 9 identical channels, and
+    /// the engine won't start (-10875, "client-side input and output formats do not match")
+    /// while the output keeps its default stereo format. A mono output at the input's rate
+    /// works. The engine keeps this connection's format through a hardware change, so
+    /// `restartEngine()` connects it again for the new rate. Does nothing on iOS or without
+    /// voice processing.
+    private func connectOutputForVoiceProcessing() throws {
+        #if os(macOS)
+        guard hasVoiceProcessing else { return }
+        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
+        guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
+            throw AudioFormatError()
+        }
+        engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
+        #endif
     }
 
     /// Taps the microphone in its current format, replacing any earlier tap. The format can
@@ -100,6 +106,7 @@ final class Pipeline {
     /// keeping voice processing, the player, and the analyzer's input stream, rather than
     /// building a new engine, which turns voice processing off and on again.
     func restartEngine() throws {
+        try connectOutputForVoiceProcessing()
         try installMicrophoneTap()
         engine.prepare()
         try engine.start()
