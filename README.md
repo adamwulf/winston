@@ -77,7 +77,7 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   skips that file:
 
   ```sh
-  grep -rn -E "os.Logger|import OSLog|NSLog|print\(" --exclude=WinstonLog.swift App/Winston Sources
+  grep -rn -E "import os|OSLog|os_log|os\.Logger|Logger\(subsystem|NSLog|print\(" --exclude=WinstonLog.swift App/Winston Sources
   ```
 - One `private static let log = Logger(label: "<area>.<feature>")` per type,
   such as `app.model`, `telegram.link`, or `voice.loop`. A swift-log `Logger`
@@ -88,6 +88,11 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   `error.logCodes(...)` instead when the description could hold a path or
   something the user typed, such as a file error, and `error.tdlibLogCodes(...)`
   (which keeps TDLib's error code) for TDLib file, upload, and database errors.
+- `TelegramLinkError.tdlib` keeps TDLib's message in `logContext`'s `errorCase`
+  on purpose: login and send calls return server codes such as
+  `PHONE_CODE_INVALID`, which make their failures diagnosable. TDLib calls that
+  involve files, uploads, or the database must use `tdlibLogCodes`, because
+  their messages can hold a local path.
 - Privacy: metadata holds IDs, counts, and states only. Never log message
   text, transcripts, spoken text, phone numbers, login codes, passwords, names,
   usernames, file names, URLs, or the API ID or hash. Identify chats and

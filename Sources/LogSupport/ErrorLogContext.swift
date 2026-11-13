@@ -15,7 +15,12 @@ extension Error {
         // Only an enum is reflected. NSError and the Foundation wrappers around
         // it (CocoaError, URLError) would print their userInfo, which can hold
         // file paths and URLs. An enum whose payload can hold user data must
-        // define a `debugDescription` that leaves it out.
+        // define a `debugDescription` that leaves it out, or its call sites must
+        // use `logCodes`. `TelegramLinkError.tdlib` keeps TDLib's message on
+        // purpose: login and send calls return server codes such as
+        // PHONE_CODE_INVALID, which make those failures diagnosable. TDLib calls
+        // that involve files, uploads, or the database, whose messages can hold a
+        // local path, use TelegramLink's `tdlibLogCodes` instead.
         if Mirror(reflecting: self).displayStyle == .enum {
             context["errorCase"] = String(reflecting: self)
         }
