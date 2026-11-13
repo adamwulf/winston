@@ -1,0 +1,9 @@
+.DS_Store
+/.build/
+/DerivedData/
+/.swiftpm/
+xcuserdata/
+*.xcuserstate
+
+# Telegram API credentials (see App/Config/Secrets.example.xcconfig)
+App/Config/Secrets.xcconfig
