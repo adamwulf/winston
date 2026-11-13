@@ -21,7 +21,7 @@ import UIKit
 @MainActor
 @Observable
 public final class VoiceLoop {
-    private nonisolated static let log = Logger(label: "voice.loop")
+    nonisolated static let log = Logger(label: "voice.loop")
 
     public enum State: Sendable, Equatable {
         case off
@@ -115,8 +115,16 @@ public final class VoiceLoop {
     /// Set once voice processing fails to start, so later starts go straight to an engine
     /// without it (a failed attempt can block the main thread for seconds).
     @ObservationIgnored private var skipVoiceProcessing = false
+    /// The permission prompts, the speech recognizer and the audio hardware.
+    @ObservationIgnored private let environment: VoiceEnvironment
 
-    public init() {
+    public convenience init() {
+        self.init(environment: .live)
+    }
+
+    /// Tests pass a scripted recognizer and an audio engine that renders offline.
+    package init(environment: VoiceEnvironment) {
+        self.environment = environment
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
         #if os(iOS)
@@ -172,35 +180,31 @@ public final class VoiceLoop {
 
     /// The body of `start()`. Returns quietly if `runID` moves on while it waits.
     private func startPipeline(run: Int) async throws {
-        try await Self.requestPermissions()
-        let transcriber = try await Self.makeTranscriber()
-        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
-            throw VoiceLoopError.speechModelUnavailable
-        }
+        try await environment.requestPermissions()
+        let recognizer = try await environment.makeRecognizer()
         guard run == runID else { return }
 
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
         var newPipeline: Pipeline?
         do {
-            let pipeline = try makeRunningPipeline(analyzerFormat: analyzerFormat)
+            let pipeline = try makeRunningPipeline(analyzerFormat: recognizer.audioFormat)
             newPipeline = pipeline
-            // Microphone buffers queue in `pipeline.inputs` until the analyzer starts reading.
-            try await analyzer.start(inputSequence: pipeline.inputs)
+            // Microphone buffers queue in `pipeline.inputs` until the recognizer starts reading.
+            try await recognizer.start(inputs: pipeline.inputs)
         } catch {
             newPipeline?.tearDown()
-            await analyzer.cancelAndFinishNow()
+            await recognizer.cancel()
             Self.deactivateAudioSession()
             throw error
         }
         guard let pipeline = newPipeline, run == runID else {
-            // stop() or an interruption came while the analyzer was starting.
+            // stop() or an interruption came while the recognizer was starting.
             newPipeline?.tearDown()
-            await analyzer.cancelAndFinishNow()
+            await recognizer.cancel()
             Self.deactivateAudioSession()
             return
         }
 
-        pipeline.analyzer = analyzer
+        pipeline.recognizer = recognizer
         self.pipeline = pipeline
         resumeAfterInterruption = false
         state = .listening(partial: "")
@@ -216,7 +220,7 @@ public final class VoiceLoop {
         )
         pipeline.tasks = [
             Task { [weak self] in
-                await self?.listen(to: transcriber, in: pipeline)
+                await self?.listen(to: recognizer, in: pipeline)
             },
             Task { [weak self] in
                 while !Task.isCancelled {
@@ -252,7 +256,7 @@ public final class VoiceLoop {
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
         let pausingOtherAudio = pausesOtherAudio
         func started(voiceProcessing: Bool) throws -> Pipeline {
-            try Self.startedPipeline(
+            try startedPipeline(
                 analyzerFormat: analyzerFormat,
                 voiceProcessing: voiceProcessing,
                 ducksOtherAudio: pausingOtherAudio
@@ -279,7 +283,7 @@ public final class VoiceLoop {
         return try started(voiceProcessing: false)
     }
 
-    private static func startedPipeline(
+    private func startedPipeline(
         analyzerFormat: AVAudioFormat,
         voiceProcessing: Bool,
         ducksOtherAudio: Bool
@@ -287,7 +291,8 @@ public final class VoiceLoop {
         let pipeline = try Pipeline(
             analyzerFormat: analyzerFormat,
             voiceProcessing: voiceProcessing,
-            ducksOtherAudio: ducksOtherAudio
+            ducksOtherAudio: ducksOtherAudio,
+            environment: environment
         )
         do {
             try pipeline.engine.start()
@@ -365,13 +370,13 @@ public final class VoiceLoop {
 
     // MARK: - Listening
 
-    /// Feeds transcriber results into the transcript until the pipeline is torn down.
-    private func listen(to transcriber: SpeechTranscriber, in pipeline: Pipeline) async {
+    /// Feeds the recognizer's results into the transcript until the pipeline is torn down.
+    private func listen(to recognizer: any Recognizer, in pipeline: Pipeline) async {
         do {
-            for try await result in transcriber.results {
+            for try await piece in recognizer.results {
                 // Results can still arrive after a teardown; they belong to the old session.
                 guard self.pipeline === pipeline else { return }
-                handle(TranscriptPiece(result))
+                handle(piece)
             }
         } catch {
             // Falls through: an error ends the results just like the stream finishing.
@@ -433,46 +438,6 @@ public final class VoiceLoop {
         state = currentSpeech == nil ? .listening(partial: transcript.text) : .speaking
     }
 
-    private static func requestPermissions() async throws {
-        guard await AVAudioApplication.requestRecordPermission() else {
-            throw VoiceLoopError.microphonePermissionDenied
-        }
-        guard await requestSpeechAuthorization() == .authorized else {
-            throw VoiceLoopError.speechPermissionDenied
-        }
-    }
-
-    private nonisolated static func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        let status = SFSpeechRecognizer.authorizationStatus()
-        guard status == .notDetermined else { return status }
-        return await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
-        }
-    }
-
-    /// A transcriber for the current locale, with its model installed.
-    private static func makeTranscriber() async throws -> SpeechTranscriber {
-        guard SpeechTranscriber.isAvailable,
-              let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) else {
-            throw VoiceLoopError.speechModelUnavailable
-        }
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults, .alternativeTranscriptions],
-            attributeOptions: [.audioTimeRange]
-        )
-        do {
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                try await request.downloadAndInstall()
-            }
-        } catch {
-            log.error("speech model install failed", error.logContext())
-            throw VoiceLoopError.speechModelUnavailable
-        }
-        return transcriber
-    }
-
     private enum Teardown {
         /// Voice mode ends: the queue is cleared, the iOS session deactivated, no resume is
         /// pending after an interruption, and `state` is `.off`.
@@ -498,8 +463,8 @@ public final class VoiceLoop {
         if let pipeline {
             self.pipeline = nil
             pipeline.tearDown()
-            if let analyzer = pipeline.analyzer {
-                Task { await analyzer.cancelAndFinishNow() }
+            if let recognizer = pipeline.recognizer {
+                Task { await recognizer.cancel() }
             }
         }
         if kind == .stop {
@@ -683,7 +648,12 @@ public final class VoiceLoop {
               !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
         let utterance = makeUtterance(text)
-        let playback = SpeechPlayback(text: text, player: pipeline.player, format: pipeline.speechFormat) { [weak self] playback in
+        let playback = SpeechPlayback(
+            text: text,
+            player: pipeline.player,
+            format: pipeline.speechFormat,
+            completion: pipeline.playbackCompletion
+        ) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
@@ -805,12 +775,6 @@ public enum VoiceLoopError: Error, Sendable, Equatable {
     case microphonePermissionDenied
     case speechPermissionDenied
     case speechModelUnavailable
-}
-
-extension TranscriptPiece {
-    init(_ result: SpeechTranscriber.Result) {
-        self.init(text: result.text, alternatives: result.alternatives, range: result.range, isFinal: result.isFinal)
-    }
 }
 
 #if os(iOS)

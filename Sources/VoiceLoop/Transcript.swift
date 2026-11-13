@@ -4,14 +4,21 @@ import Speech
 
 /// One transcriber result, reduced to what the voice loop needs. Built from a
 /// `SpeechTranscriber.Result`, or directly in tests.
-struct TranscriptPiece {
+package struct TranscriptPiece: Sendable {
     /// Most likely reading, with `audioTimeRange` attributes on its runs.
-    var text: AttributedString
+    package var text: AttributedString
     /// All readings of the same audio, most likely first (may include `text` itself).
-    var alternatives: [AttributedString]
+    package var alternatives: [AttributedString]
     /// The audio this result covers, on the analyzer's timeline.
-    var range: CMTimeRange
-    var isFinal: Bool
+    package var range: CMTimeRange
+    package var isFinal: Bool
+
+    package init(text: AttributedString, alternatives: [AttributedString], range: CMTimeRange, isFinal: Bool) {
+        self.text = text
+        self.alternatives = alternatives
+        self.range = range
+        self.isFinal = isFinal
+    }
 }
 
 /// The utterance in progress, assembled from transcriber results.

@@ -6,7 +6,7 @@ import Synchronization
 /// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
 @MainActor
 final class Pipeline {
-    let engine = AVAudioEngine()
+    let engine: AVAudioEngine
     let player = AVAudioPlayerNode()
     /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
     /// the speech the player plays.
@@ -20,13 +20,26 @@ final class Pipeline {
     let fedAudio: FedAudioClock
     /// Whether the microphone has heard someone talking, from its loudness.
     let voiceActivity = VoiceActivity()
-    var analyzer: SpeechAnalyzer?
+    var recognizer: (any Recognizer)?
     var tasks: [Task<Void, Never>] = []
     private let analyzerFormat: AVAudioFormat
 
+    /// When a spoken buffer counts as played. `.dataPlayedBack` waits until the sound has left
+    /// the speaker, but it only fires for an engine that renders to an audio device. An engine
+    /// rendering offline, as in the tests, is done with a buffer once it is rendered.
+    var playbackCompletion: AVAudioPlayerNodeCompletionCallbackType {
+        engine.isInManualRenderingMode ? .dataRendered : .dataPlayedBack
+    }
+
     /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
     /// When false, it ducks them as little as it can.
-    init(analyzerFormat: AVAudioFormat, voiceProcessing: Bool, ducksOtherAudio: Bool) throws {
+    init(
+        analyzerFormat: AVAudioFormat,
+        voiceProcessing: Bool,
+        ducksOtherAudio: Bool,
+        environment: VoiceEnvironment
+    ) throws {
+        engine = try environment.makeEngine()
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
         hasVoiceProcessing = voiceProcessing
@@ -39,7 +52,7 @@ final class Pipeline {
         let input = engine.inputNode
         if voiceProcessing {
             // Echo cancellation: removes the player's output from the microphone signal.
-            try input.setVoiceProcessingEnabled(true)
+            try environment.enableVoiceProcessing(input)
             if !ducksOtherAudio {
                 // Voice processing turns other audio down while it runs. `.min` is the least it offers.
                 input.voiceProcessingOtherAudioDuckingConfiguration = .init(
@@ -209,6 +222,8 @@ final class SpeechPlayback: Sendable {
     /// When playback was set up, for the logs.
     let started = ContinuousClock.now
     private let state: Mutex<State>
+    /// When the last buffer counts as played. See `Pipeline.playbackCompletion`.
+    private let completion: AVAudioPlayerNodeCompletionCallbackType
     private let onFinished: @Sendable (SpeechPlayback) -> Void
 
     /// `format` is the player's connection format. `onFinished` is called, on an arbitrary
@@ -217,10 +232,12 @@ final class SpeechPlayback: Sendable {
         text: String,
         player: AVAudioPlayerNode,
         format: AVAudioFormat,
+        completion: AVAudioPlayerNodeCompletionCallbackType,
         onFinished: @escaping @Sendable (SpeechPlayback) -> Void
     ) {
         self.text = text
         state = Mutex(State(player: player, format: format))
+        self.completion = completion
         self.onFinished = onFinished
     }
 
@@ -264,7 +281,7 @@ final class SpeechPlayback: Sendable {
     }
 
     private func scheduleLast(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode) {
-        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [self] _ in
+        player.scheduleBuffer(buffer, completionCallbackType: completion) { [self] _ in
             onFinished(self)
         }
     }

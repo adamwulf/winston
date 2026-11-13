@@ -71,7 +71,14 @@ let package = Package(
                 .product(name: "TDLibKit", package: "TDLibKit"),
             ]
         ),
-        .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop"]),
+        // Shared by the test targets: offline audio hardware and a scripted recognizer behind
+        // VoiceLoop's `package` seam.
+        .target(
+            name: "VoiceLoopTestSupport",
+            dependencies: ["VoiceLoop"],
+            path: "Tests/VoiceLoopTestSupport"
+        ),
+        .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]),
         .testTarget(
             name: "WinstonLoggingTests",
             dependencies: [
