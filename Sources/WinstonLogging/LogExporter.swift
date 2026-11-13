@@ -1,4 +1,6 @@
 import Foundation
+import Logging
+import LogSupport
 
 /// Zips the whole `Logs/Winston/` folder (every retained day's file) into one file for
 /// "Export Debug Logs…".
@@ -6,6 +8,7 @@ import Foundation
 /// Uses Foundation-only zipping via `NSFileCoordinator` with the `.forUploading` reading
 /// intent, which produces a **zip** of the directory at a temporary URL.
 public enum LogExporter {
+    private static let log = Logger(label: "logging.export")
 
     public enum ExportError: Error, LocalizedError {
         case zipNotProduced
@@ -40,6 +43,27 @@ public enum LogExporter {
         await WinstonLog.flush()
         let logsDir = try directoryOverride ?? LogDirectory.logsDirectoryURL()
         return try await zip(logsDir, into: outputDirectory, named: archiveName(for: timestamp))
+    }
+
+    /// Copies an exported zip to `destination`, the place the user chose in a save panel. A
+    /// file already there is replaced: the panel has asked whether to.
+    public static func save(_ archive: URL, to destination: URL) throws {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: destination.path(percentEncoded: false)) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: archive, to: destination)
+    }
+
+    /// Removes an exported zip once it has been saved or shared. A failure is only logged: the
+    /// next export empties the folder anyway.
+    public static func remove(_ archive: URL) {
+        do {
+            try FileManager.default.removeItem(at: archive)
+        } catch {
+            // Codes only: a file error's description names the file.
+            log.warning("removing the exported zip failed", error.logCodes())
+        }
     }
 
     /// The zip's file name: `Winston-Logs-yyyyMMdd-HHmmss.zip`, in `timeZone`.

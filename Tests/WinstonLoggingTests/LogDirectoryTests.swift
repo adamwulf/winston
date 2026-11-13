@@ -42,6 +42,32 @@ struct LogDirectoryTests {
             try LogDirectory.logsDirectoryURL(baseOverride: notAFolder)
         }
     }
+
+    #if os(macOS)
+    /// Without an override it resolves the user's real Library, so it runs in an exit test's child
+    /// process with the home folder moved to a temporary one. macOS only: iOS has no exit tests.
+    @Test
+    func withoutAnOverrideResolvesLogsWinstonUnderTheLibraryAndCreatesIt() async {
+        await #expect(processExitsWith: .success) {
+            let home = try TemporaryFolder()
+            defer { home.remove() }
+            let library = try home.becomeTheHomeFolder()
+
+            let logs = try LogDirectory.logsDirectoryURL()
+
+            let expected = library.appending(path: "Logs/Winston", directoryHint: .isDirectory)
+            #expect(logs.standardizedFileURL == expected.standardizedFileURL)
+            var isDirectory: ObjCBool = false
+            #expect(FileManager.default.fileExists(atPath: expected.path(percentEncoded: false), isDirectory: &isDirectory))
+            #expect(isDirectory.boolValue)
+        }
+    }
+    #endif
+
+    @Test
+    func libraryUnavailableSaysSo() {
+        #expect(LogDirectory.Failure.libraryDirectoryUnavailable.localizedDescription == "The Library folder isn't available.")
+    }
 }
 
 /// A unique folder under the temporary directory, removed by `remove()`.
@@ -56,5 +82,22 @@ struct TemporaryFolder {
 
     func remove() {
         try? FileManager.default.removeItem(at: url)
+    }
+
+    /// Makes this folder Foundation's home folder for the rest of the process, and returns the
+    /// `Library` folder `FileManager` now resolves: `<this folder>/Library`. It throws, through
+    /// `#require`, if the Library folder isn't inside this one, so a caller never goes on to code
+    /// that would use the real `~/Library`.
+    ///
+    /// Process-wide and permanent: call it only in an exit test's child process.
+    func becomeTheHomeFolder() throws -> URL {
+        try #require(setenv("CFFIXED_USER_HOME", url.path(percentEncoded: false), 1) == 0)
+        let library = try #require(FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask).first)
+        let expected = url.appending(path: "Library", directoryHint: .isDirectory)
+        try #require(
+            library.standardizedFileURL == expected.standardizedFileURL,
+            "the home folder didn't move: Library is \(library.path(percentEncoded: false))"
+        )
+        return library
     }
 }

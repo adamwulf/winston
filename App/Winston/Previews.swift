@@ -1,6 +1,7 @@
 #if DEBUG
 import SwiftUI
 import TelegramLink
+import WinstonCore
 
 /// Sample data so the screens preview without TDLib.
 extension AppModel {

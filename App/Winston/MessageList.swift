@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonCore
 import WinstonLogging
 #if os(iOS)
 import QuickLook
@@ -68,15 +69,11 @@ struct MessageRow: View {
         }
         .contextMenu {
             if message.sendState == .sent {
-                Button(hasMyThumbsUp ? "Remove 👍" : "React 👍") {
+                Button(message.hasMyThumbsUp ? "Remove 👍" : "React 👍") {
                     Task { await model.toggleThumbsUp(on: message) }
                 }
             }
         }
-    }
-
-    private var hasMyThumbsUp: Bool {
-        message.reactions.contains { $0.emoji == "👍" && $0.isChosen }
     }
 
     private var bubble: some View {

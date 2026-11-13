@@ -3,8 +3,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 /// Image file work done off the main actor with ImageIO, the same way on iOS and macOS.
-enum PhotoFiles {
-    enum Failure: Error {
+public enum PhotoFiles {
+    public enum Failure: Error {
         case unreadableImage
         case encodingFailed
     }
@@ -12,7 +12,7 @@ enum PhotoFiles {
     /// Downscales an image to at most 2560 px on its long side, encodes it as JPEG at quality 0.85,
     /// and writes it to a temporary file to pass to `sendPhoto`.
     @concurrent
-    nonisolated static func jpegForSending(from data: Data) async throws -> URL {
+    public static func jpegForSending(from data: Data) async throws -> URL {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw Failure.unreadableImage
         }
@@ -38,13 +38,13 @@ enum PhotoFiles {
 
     /// Decodes an image file at a display size, upright. Nil if the file isn't a readable image.
     @concurrent
-    nonisolated static func displayImage(at url: URL, maxPixelSize: Int) async -> CGImage? {
+    public static func displayImage(at url: URL, maxPixelSize: Int) async -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return thumbnail(of: source, maxPixelSize: maxPixelSize)
     }
 
     /// A copy of the image no larger than `maxPixelSize` on its long side, with its EXIF orientation applied.
-    nonisolated private static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+    private static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
         let options = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,

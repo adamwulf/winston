@@ -150,7 +150,7 @@ public struct ChatMessage: Identifiable, Hashable, Sendable {
     }
 }
 
-public enum ChatEvent: Sendable {
+public enum ChatEvent: Sendable, Equatable {
     /// A new message in any chat, incoming or outgoing (outgoing ones start as `.pending`).
     case newMessage(ChatMessage)
     /// The reactions on a message changed.

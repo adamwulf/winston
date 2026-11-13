@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "TelegramLink", targets: ["TelegramLink"]),
         .library(name: "VoiceLoop", targets: ["VoiceLoop"]),
         .library(name: "WinstonLogging", targets: ["WinstonLogging"]),
+        .library(name: "WinstonCore", targets: ["WinstonCore"]),
     ],
     dependencies: [
         // TDLibKit release tags are prerelease-style versions, so they must be pinned exactly.
@@ -53,14 +54,60 @@ let package = Package(
                 "LogSupport",
             ]
         ),
+        // The app's state and logic, with no UI: AppModel, AppSecrets and PhotoFiles. The app
+        // target keeps only SwiftUI views and AppKit/UIKit glue. Like the other libraries, it
+        // logs through swift-log and LogSupport only.
+        .target(
+            name: "WinstonCore",
+            dependencies: [
+                "TelegramLink",
+                "VoiceLoop",
+                .product(name: "Logging", package: "swift-log"),
+                "LogSupport",
+            ]
+        ),
+        .testTarget(
+            name: "WinstonCoreTests",
+            dependencies: [
+                "WinstonCore",
+                "TelegramLink",
+                "VoiceLoop",
+                "TelegramLinkTestSupport",
+                "VoiceLoopTestSupport",
+            ]
+        ),
+        // Shared by the test targets: a fake TDLib behind TelegramLink's `package` seam, and
+        // builders for TDLibKit values.
+        .target(
+            name: "TelegramLinkTestSupport",
+            dependencies: [
+                "TelegramLink",
+                .product(name: "TDLibKit", package: "TDLibKit"),
+            ],
+            path: "Tests/TelegramLinkTestSupport"
+        ),
         .testTarget(
             name: "TelegramLinkTests",
             dependencies: [
                 "TelegramLink",
+                "TelegramLinkTestSupport",
                 .product(name: "TDLibKit", package: "TDLibKit"),
             ]
         ),
-        .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop"]),
+        // Shared by the test targets: offline audio hardware and a scripted recognizer behind
+        // VoiceLoop's `package` seam.
+        .target(
+            name: "VoiceLoopTestSupport",
+            dependencies: ["VoiceLoop"],
+            path: "Tests/VoiceLoopTestSupport"
+        ),
+        .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]),
+        // iOS only (audio-session interruptions), and a target of its own so it gets its own
+        // process: the voice loop hears interruptions process-wide.
+        .testTarget(
+            name: "VoiceLoopInterruptionTests",
+            dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]
+        ),
         .testTarget(
             name: "WinstonLoggingTests",
             dependencies: [

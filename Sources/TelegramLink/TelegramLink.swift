@@ -34,20 +34,32 @@ public actor TelegramLink {
     private let updateContinuation: AsyncStream<Data>.Continuation
     private let decoder = JSONDecoder()
 
-    private var manager: TDLibClientManager?
-    private var client: TDLibClient?
+    private let makeClientSource: @Sendable () -> any TDLibClientSource
+    private var manager: (any TDLibClientSource)?
+    private var client: (any TDLibRequests)?
     /// Set by `closeForTermination()`, so the closed client isn't replaced with a fresh one.
     private var isClosingForTermination = false
     /// Ends "typing" for a chat when TDLib's action expires without a refresh.
     private var typingTimeouts: [ChatID: Task<Void, Never>] = [:]
 
     /// TDLib chat actions last about 5 seconds unless refreshed.
-    private static let typingTimeout: Duration = .seconds(6)
+    private let typingTimeout: Duration
     /// How many chats from the top of the main chat list `botChats()` looks at.
     private static let chatListLimit = 100
 
     public init(config: TelegramConfig) {
+        self.init(config: config, typingTimeout: .seconds(6)) { TDLibClientManager() }
+    }
+
+    /// Tests pass a fake in place of TDLib, and a short typing timeout.
+    package init(
+        config: TelegramConfig,
+        typingTimeout: Duration,
+        makeClientSource: @escaping @Sendable () -> any TDLibClientSource
+    ) {
         self.config = config
+        self.typingTimeout = typingTimeout
+        self.makeClientSource = makeClientSource
         (authStates, authContinuation) = AsyncStream.makeStream(of: AuthState.self)
         (events, eventContinuation) = AsyncStream.makeStream(of: ChatEvent.self)
         (updates, updateContinuation) = AsyncStream.makeStream(of: Data.self)
@@ -57,7 +69,7 @@ public actor TelegramLink {
     /// Creates the TDLib client and starts the login state machine. Watch `authStates`.
     public func start() async throws {
         guard manager == nil else { return }
-        let manager = TDLibClientManager()
+        let manager = makeClientSource()
         self.manager = manager
         Task {
             for await data in updates {
@@ -248,10 +260,10 @@ public actor TelegramLink {
 
     // MARK: - TDLib plumbing
 
-    private func makeClient(_ manager: TDLibClientManager) -> TDLibClient {
+    private func makeClient(_ manager: any TDLibClientSource) -> any TDLibRequests {
         let continuation = updateContinuation
         // TDLib calls this on its own queue; the stream carries updates into the actor in order.
-        let client = manager.createClient { @Sendable data, _ in
+        let client = manager.makeClient { data in
             continuation.yield(data)
         }
         self.client = client
@@ -260,7 +272,7 @@ public actor TelegramLink {
 
     /// Runs a TDLib request and turns TDLib errors into `TelegramLinkError.tdlib`.
     @discardableResult
-    private func perform<T>(_ request: (TDLibClient) async throws -> T) async throws -> T {
+    private func perform<T>(_ request: (any TDLibRequests) async throws -> T) async throws -> T {
         guard let client else { throw TelegramLinkError.notStarted }
         do {
             return try await request(client)
@@ -383,7 +395,8 @@ public actor TelegramLink {
     }
 
     /// Why `setTdlibParameters` failed, as a fixed string for the log, from TDLib's message.
-    private static func setupFailureReason(_ tdlibMessage: String?) -> String {
+    /// Internal so the tests can check it: it only reaches the log.
+    static func setupFailureReason(_ tdlibMessage: String?) -> String {
         guard let tdlibMessage else { return "notTDLib" }
         if tdlibMessage.contains("api_id") || tdlibMessage.contains("api_hash") {
             return "apiCredentials"
@@ -411,7 +424,7 @@ public actor TelegramLink {
         case .chatActionTyping:
             typingTimeouts[chat]?.cancel()
             typingTimeouts[chat] = Task {
-                try? await Task.sleep(for: Self.typingTimeout)
+                try? await Task.sleep(for: typingTimeout)
                 typingExpired(in: chat)
             }
             eventContinuation.yield(.typing(chat: chat, isTyping: true))

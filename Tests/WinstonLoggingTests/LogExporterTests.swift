@@ -59,6 +59,64 @@ struct LogExporterTests {
     }
 
     @Test
+    func savingCopiesTheZipToTheChosenPlaceAndLeavesTheExport() throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let zip = base.url.appending(path: "Winston-Logs.zip")
+        try Data("the zip".utf8).write(to: zip)
+        let destination = base.url.appending(path: "Saved Logs.zip")
+
+        try LogExporter.save(zip, to: destination)
+
+        #expect(try Data(contentsOf: destination) == Data("the zip".utf8))
+        // Removing the export afterwards is the caller's job.
+        #expect(FileManager.default.fileExists(atPath: zip.path(percentEncoded: false)))
+    }
+
+    @Test
+    func savingOverAFileAlreadyThereReplacesIt() throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let zip = base.url.appending(path: "Winston-Logs.zip")
+        try Data("the new zip".utf8).write(to: zip)
+        let destination = base.url.appending(path: "Saved Logs.zip")
+        try Data("last week's zip".utf8).write(to: destination)
+
+        try LogExporter.save(zip, to: destination)
+
+        #expect(try Data(contentsOf: destination) == Data("the new zip".utf8))
+    }
+
+    @Test
+    func savingIntoAFolderThatDoesNotExistThrows() throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let zip = base.url.appending(path: "Winston-Logs.zip")
+        try Data("the zip".utf8).write(to: zip)
+        let destination = base.url.appending(path: "No Such Folder/Saved Logs.zip")
+
+        #expect(throws: CocoaError.self) {
+            try LogExporter.save(zip, to: destination)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path(percentEncoded: false)))
+    }
+
+    @Test
+    func removingDeletesTheExportAndToleratesOneAlreadyGone() throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let zip = base.url.appending(path: "Winston-Logs.zip")
+        try Data("the zip".utf8).write(to: zip)
+
+        LogExporter.remove(zip)
+        #expect(!FileManager.default.fileExists(atPath: zip.path(percentEncoded: false)))
+
+        // Already gone, say because the next export emptied the folder: only logged.
+        LogExporter.remove(zip)
+        #expect(!FileManager.default.fileExists(atPath: zip.path(percentEncoded: false)))
+    }
+
+    @Test
     func eachExportRemovesTheEarlierOnes() async throws {
         let base = try TemporaryFolder()
         defer { base.remove() }
@@ -88,6 +146,53 @@ struct LogExporterTests {
 
         #expect(first == second)
         #expect(FileManager.default.fileExists(atPath: second.path(percentEncoded: false)))
+    }
+
+    #if os(macOS)
+    /// Without an override it zips the user's real Logs folder, so it runs in an exit test's child
+    /// process with the home folder moved to a temporary one. macOS only: iOS has no exit tests.
+    @Test
+    func withoutADirectoryOverrideZipsTheLibraryLogsFolder() async {
+        await #expect(processExitsWith: .success) {
+            let home = try TemporaryFolder()
+            defer { home.remove() }
+            let library = try home.becomeTheHomeFolder()
+            let logs = library.appending(path: "Logs/Winston", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+            try Data("line\n".utf8).write(to: logs.appending(path: "app-2026-11-13.log"))
+            let timestamp = Date(timeIntervalSince1970: 1_794_551_444)
+
+            let zip = try await LogExporter.exportLogs(timestamp: timestamp, outputDirectory: home.exports)
+
+            #expect(zip.lastPathComponent == LogExporter.archiveName(for: timestamp))
+            #expect(zip.deletingLastPathComponent().standardizedFileURL == home.exports.standardizedFileURL)
+            let files = try zipEntryNames(Data(contentsOf: zip))
+                .filter { !$0.hasPrefix("__MACOSX/") && !$0.hasSuffix("/") }
+            #expect(files == ["Winston/app-2026-11-13.log"])
+        }
+    }
+    #endif
+
+    @Test
+    func exportingAFolderThatDoesNotExistThrowsAndLeavesNoZip() async throws {
+        let base = try TemporaryFolder()
+        defer { base.remove() }
+        let missing = base.url.appending(path: "Missing", directoryHint: .isDirectory)
+
+        // The file coordinator's error, about the folder it was asked to read.
+        let error = await #expect(throws: CocoaError.self) {
+            try await LogExporter.exportLogs(directoryOverride: missing, outputDirectory: base.exports)
+        }
+        #expect(error?.code == .fileReadNoSuchFile)
+        #expect(error?.url?.standardizedFileURL == missing.standardizedFileURL)
+
+        let left = (try? FileManager.default.contentsOfDirectory(atPath: base.exports.path(percentEncoded: false))) ?? []
+        #expect(left.isEmpty)
+    }
+
+    @Test
+    func zipNotProducedSaysTheLogsCouldNotBePackaged() {
+        #expect(LogExporter.ExportError.zipNotProduced.localizedDescription == "Couldn't package the logs.")
     }
 
     @Test

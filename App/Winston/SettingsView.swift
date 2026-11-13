@@ -1,5 +1,6 @@
 import SwiftUI
 import VoiceLoop
+import WinstonCore
 import WinstonLogging
 
 /// The pause threshold, the voice and its speed, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
@@ -31,7 +32,7 @@ struct SettingsView: View {
             ShareSheet(url: file.url) {
                 // Shared or cancelled, the temporary zip isn't needed afterwards. (If the sheet is
                 // swiped away instead, the next export empties the folder.)
-                removeExportedLogs(file.url)
+                LogExporter.remove(file.url)
                 exportedLogs = nil
             }
             .presentationDetents([.medium, .large])
@@ -136,14 +137,6 @@ struct SettingsView: View {
                 Self.log.error("debug log export failed", error.logCodes())
                 exportError = error.localizedDescription
             }
-        }
-    }
-
-    private func removeExportedLogs(_ zip: URL) {
-        do {
-            try FileManager.default.removeItem(at: zip)
-        } catch {
-            Self.log.warning("removing the exported zip failed", error.logCodes())
         }
     }
 
