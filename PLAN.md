@@ -263,7 +263,8 @@ Inside it:
 
 - **Outgoing:** the 👍 button toggles a 👍 on the bot's latest incoming message
   with `addMessageReaction` / `removeMessageReaction`. Long-pressing any
-  message offers the same 👍 toggle. The coordinator sees both adding and
+  message offers the same 👍 toggle, and double-tapping its bubble toggles
+  it directly. The coordinator sees both adding and
   removing a reaction, with a preview of the message text. No bot changes are
   needed.
 - **Incoming:** reactions the coordinator adds (`ib tgreact`) arrive as

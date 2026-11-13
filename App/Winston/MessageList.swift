@@ -60,6 +60,12 @@ struct MessageRow: View {
             if message.isOutgoing { Spacer(minLength: 48) }
             VStack(alignment: message.isOutgoing ? .trailing : .leading, spacing: 4) {
                 bubble
+                    .contentShape(.rect(cornerRadius: 16))
+                    .onTapGesture(count: 2) {
+                        // Same 👍 toggle as the context menu, and only on sent messages like it.
+                        guard message.sendState == .sent else { return }
+                        Task { await model.toggleThumbsUp(on: message) }
+                    }
                 if !message.reactions.isEmpty {
                     ReactionsRow(reactions: message.reactions)
                 }
