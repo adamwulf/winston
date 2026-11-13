@@ -20,7 +20,8 @@ package protocol KokoroEngine: Sendable {
     /// again without downloading.
     func unload() async
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
-    /// as 24 kHz mono samples. Throws if the model isn't loaded.
+    /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
+    /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
     func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float]
 }
 

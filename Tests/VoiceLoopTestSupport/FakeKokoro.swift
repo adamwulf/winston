@@ -141,6 +141,8 @@ package final class FakeKokoro: KokoroEngine {
     }
 
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
+        // As `KokoroEngine` promises: a cancelled request renders nothing.
+        try Task.checkCancellation()
         let (index, holds, isLoaded) = state.withLock { state in
             state.requests.append(Request(text: text, voice: voice, speed: speed))
             return (state.requests.count - 1, state.holdsSynthesis, state.isLoaded)

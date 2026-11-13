@@ -87,6 +87,9 @@ package actor LiveKokoro: KokoroEngine {
     }
 
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
+        // A request waits here while an earlier one renders. If its speech was stopped meanwhile
+        // (a newer preview, say), rendering it would only delay the next one.
+        try Task.checkCancellation()
         guard let model else { throw KokoroEngineError.notLoaded }
         return try model.synthesize(text: text, voice: voice, speed: speed)
     }

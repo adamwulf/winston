@@ -596,6 +596,24 @@ struct KokoroCancellingTests {
     }
 }
 
+// MARK: - The real engine
+
+@Suite struct LiveKokoroTests {
+    @Test func aRequestCancelledBeforeItsTurnNeverReachesTheModel() async throws {
+        // Nothing is loaded or stored here: a request that reached the model would fail with
+        // `notLoaded` instead.
+        let engine = LiveKokoro(directory: FileManager.default.temporaryDirectory.appending(path: "winston-unused-\(UUID())"))
+
+        let result = await Task {
+            // Stopped while it waits for an earlier request to render.
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await engine.synthesize("Hello.", voice: "af_heart", speed: 1)
+        }.result
+
+        #expect(throws: CancellationError.self) { try result.get() }
+    }
+}
+
 // MARK: - The real model
 
 /// Where `KokoroRealModelTests` looks for the downloaded model: `WINSTON_KOKORO_MODEL_DIR`, or
