@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 // TDLibKit predates Swift concurrency, so its types aren't marked Sendable. `TDLibClient`
 // is safe to share: requests go through its own dispatch queues and a concurrent dictionary.
 @preconcurrency import TDLibKit
@@ -9,6 +10,8 @@ import Foundation
 /// The app never touches TDLibKit types directly.
 ///
 /// `authStates` and `events` are single-consumer streams created once per instance.
+/// Consume each one from a single long-lived task, such as the app model's: an
+/// `AsyncStream` finishes for good if the task iterating it is cancelled.
 ///
 /// Create one instance and keep it for the life of the app: once `start()` has run, the
 /// TDLib client stays alive for the rest of the process. After `logOut()`, TDLib closes the
@@ -56,8 +59,9 @@ public actor TelegramLink {
             }
         }
         let client = makeClient(manager)
-        // TDLib logs verbosely by default; keep only errors.
-        _ = try? client.execute(query: DTO(SetLogVerbosityLevel(newVerbosityLevel: 1)))
+        // TDLib logs verbosely by default; keep only errors. The client's encoder writes the
+        // snake_case keys TDLib expects.
+        _ = try? client.execute(query: DTO(SetLogVerbosityLevel(newVerbosityLevel: 1), encoder: client.encoder))
     }
 
     // MARK: - Login
@@ -139,13 +143,14 @@ public actor TelegramLink {
     /// Sends a local image file. TDLib uploads it after this returns, so leave the file
     /// in place until `.sendSucceeded` or `.sendFailed` arrives for the message.
     public func sendPhoto(fileURL: URL, caption: String?, to chat: ChatID) async throws {
+        let size = Self.pixelSize(of: fileURL)
         let photo = InputPhoto(
             addedStickerFileIds: [],
-            height: 0,
+            height: size.height,
             photo: .inputFileLocal(InputFileLocal(path: fileURL.path(percentEncoded: false))),
             thumbnail: nil,
             video: nil,
-            width: 0
+            width: size.width
         )
         let content = InputMessageContent.inputMessagePhoto(InputMessagePhoto(
             caption: caption.map { FormattedText(entities: [], text: $0) },
@@ -204,6 +209,17 @@ public actor TelegramLink {
                 source: nil
             )
         }
+    }
+
+    /// The image's pixel size, so the pending message shows the right shape before the
+    /// server replies. Zero when the file can't be read; the server fills it in then.
+    private static func pixelSize(of url: URL) -> (width: Int, height: Int) {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int
+        else { return (0, 0) }
+        return (width, height)
     }
 
     // MARK: - TDLib plumbing

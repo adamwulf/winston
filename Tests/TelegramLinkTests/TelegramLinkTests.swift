@@ -211,6 +211,22 @@ import Testing
     #expect(Mapping.authState(.authorizationStateWaitEmailAddress(email)) == .unsupported("authorizationStateWaitEmailAddress"))
 }
 
+// MARK: - Bot chats
+
+@Test func privateChatWithBotMapsToBotChat() {
+    let bot = user(id: 5, type: .userTypeBot(botType()), username: "winston_bot")
+    let chat = chat(id: 5, title: "Winston", type: .chatTypePrivate(ChatTypePrivate(userId: 5)))
+
+    #expect(Mapping.botChat(chat: chat, user: bot) == BotChat(id: ChatID(5), title: "Winston", username: "winston_bot"))
+}
+
+@Test func privateChatWithPersonIsNotABotChat() {
+    let person = user(id: 6, type: .userTypeRegular, username: "adam")
+    let chat = chat(id: 6, title: "Adam", type: .chatTypePrivate(ChatTypePrivate(userId: 6)))
+
+    #expect(Mapping.botChat(chat: chat, user: person) == nil)
+}
+
 // MARK: - Builders
 
 private func formatted(_ text: String) -> FormattedText {
@@ -256,6 +272,148 @@ private func interactionInfo(_ reactions: [MessageReaction]) -> MessageInteracti
         reactions: MessageReactions(areTags: false, canGetAddedReactions: false, paidReactors: [], reactions: reactions),
         replyInfo: nil,
         viewCount: 0
+    )
+}
+
+private func botType() -> UserTypeBot {
+    UserTypeBot(
+        activeUserCount: 0,
+        allowsUsersToCreateTopics: false,
+        canBeAddedToAttachmentMenu: false,
+        canBeEdited: false,
+        canConnectToBusiness: false,
+        canJoinGroups: false,
+        canManageBots: false,
+        canReadAllGroupMessages: false,
+        hasMainWebApp: false,
+        hasTopicSidebar: false,
+        hasTopics: false,
+        inlineQueryPlaceholder: "",
+        isGuard: false,
+        isInline: false,
+        needLocation: false,
+        supportsGuestQueries: false
+    )
+}
+
+private func user(id: Int64, type: UserType, username: String) -> User {
+    User(
+        accentColorId: 0,
+        activeStoryState: nil,
+        addedToAttachmentMenu: false,
+        backgroundCustomEmojiId: 0,
+        emojiStatus: nil,
+        firstName: "",
+        haveAccess: true,
+        id: id,
+        isCloseFriend: false,
+        isContact: false,
+        isMutualContact: false,
+        isPremium: false,
+        isSupport: false,
+        languageCode: "",
+        lastName: "",
+        paidMessageStarCount: 0,
+        phoneNumber: "",
+        profileAccentColorId: 0,
+        profileBackgroundCustomEmojiId: 0,
+        profilePhoto: nil,
+        restrictionInfo: nil,
+        restrictsNewChats: false,
+        status: .userStatusEmpty,
+        type: type,
+        upgradedGiftColors: nil,
+        usernames: Usernames(
+            activeUsernames: [username],
+            collectibleUsernames: [],
+            disabledUsernames: [],
+            editableUsername: username,
+            secondaryUsername: ""
+        ),
+        verificationStatus: nil
+    )
+}
+
+private func chat(id: Int64, title: String, type: ChatType) -> Chat {
+    Chat(
+        accentColorId: 0,
+        actionBar: nil,
+        availableReactions: .chatAvailableReactionsAll(ChatAvailableReactionsAll(maxReactionCount: 1)),
+        background: nil,
+        backgroundCustomEmojiId: 0,
+        blockList: nil,
+        businessBotManageBar: nil,
+        canBeDeletedForAllUsers: false,
+        canBeDeletedOnlyForSelf: true,
+        canBeReported: false,
+        chatLists: [.chatListMain],
+        clientData: "",
+        defaultDisableNotification: false,
+        draftMessage: nil,
+        emojiStatus: nil,
+        hasProtectedContent: false,
+        hasScheduledMessages: false,
+        hasWelcomeMessages: false,
+        id: id,
+        isMarkedAsUnread: false,
+        isTranslatable: false,
+        lastMessage: nil,
+        lastReadInboxMessageId: 0,
+        lastReadOutboxMessageId: 0,
+        messageAutoDeleteTime: 0,
+        messageSenderId: nil,
+        notificationSettings: ChatNotificationSettings(
+            disableMentionNotifications: false,
+            disablePinnedMessageNotifications: false,
+            muteFor: 0,
+            muteStories: false,
+            showPreview: true,
+            showStoryPoster: false,
+            soundId: 0,
+            storySoundId: 0,
+            useDefaultDisableMentionNotifications: true,
+            useDefaultDisablePinnedMessageNotifications: true,
+            useDefaultMuteFor: true,
+            useDefaultMuteStories: true,
+            useDefaultShowPreview: true,
+            useDefaultShowStoryPoster: true,
+            useDefaultSound: true,
+            useDefaultStorySound: true
+        ),
+        pendingJoinRequests: nil,
+        permissions: ChatPermissions(
+            canAddLinkPreviews: true,
+            canChangeInfo: false,
+            canCreateTopics: false,
+            canEditTag: false,
+            canInviteUsers: false,
+            canPinMessages: true,
+            canReactToMessages: true,
+            canSendAudios: true,
+            canSendBasicMessages: true,
+            canSendDocuments: true,
+            canSendOtherMessages: true,
+            canSendPhotos: true,
+            canSendPolls: true,
+            canSendVideoNotes: true,
+            canSendVideos: true,
+            canSendVoiceNotes: true
+        ),
+        photo: nil,
+        positions: [],
+        profileAccentColorId: 0,
+        profileBackgroundCustomEmojiId: 0,
+        replyMarkupMessageId: 0,
+        theme: nil,
+        title: title,
+        type: type,
+        unreadCount: 0,
+        unreadMentionCount: 0,
+        unreadPollVoteCount: 0,
+        unreadReactionCount: 0,
+        upgradedGiftColors: nil,
+        videoChat: VideoChat(defaultParticipantId: nil, groupCallId: 0, hasParticipants: false),
+        viewAsTopics: false
     )
 }
 

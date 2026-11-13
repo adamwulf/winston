@@ -62,6 +62,8 @@ public enum AuthState: Sendable, Equatable {
     case loggingOut
     case closed
     /// A rare TDLib state the app doesn't handle (e.g. email setup). The string names it.
+    /// It also carries a startup error, such as "setTdlibParameters failed: …", when the
+    /// api_id / api_hash is bad or the database is locked.
     case unsupported(String)
 }
 
