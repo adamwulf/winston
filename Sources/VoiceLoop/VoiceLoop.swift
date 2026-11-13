@@ -194,6 +194,13 @@ public final class VoiceLoop {
                 }
             },
         ]
+        // The engine started before the analyzer, while nothing watched for configuration
+        // changes; if one stopped it in that window, rebuild now. restart()'s new start runs in
+        // a Task, after this start has finished and cleared `isStarting`.
+        if !pipeline.engine.isRunning {
+            restart()
+            return
+        }
         // Replies carried over a rebuild, or queued while starting.
         speakNextIfIdle()
     }
@@ -206,8 +213,12 @@ public final class VoiceLoop {
             do {
                 return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: true)
             } catch {
-                // A failed attempt can take seconds, so don't try again in this session.
+                let pipeline = try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
+                // Only voice processing failed, and a failed attempt can take seconds, so don't
+                // try it again in this session. A start that fails either way (a route change
+                // or call mid-start) leaves it on for next time.
                 skipVoiceProcessing = true
+                return pipeline
             }
         }
         return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
