@@ -20,6 +20,13 @@ struct WinstonApp: App {
             // One window: a second one would share the same model and Telegram session.
             CommandGroup(replacing: .newItem) {}
         }
+        #if os(macOS)
+        // The standard Settings window, opened with Cmd-, or Winston > Settings…
+        Settings {
+            SettingsView()
+                .environment(model)
+        }
+        #endif
     }
 }
 

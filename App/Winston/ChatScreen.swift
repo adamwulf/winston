@@ -5,7 +5,9 @@ import TelegramLink
 struct ChatScreen: View {
     @Environment(AppModel.self) private var model
     @State private var draft = ""
+    #if os(iOS)
     @State private var showingSettings = false
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -14,19 +16,24 @@ struct ChatScreen: View {
                     ToolbarItem(placement: .principal) {
                         chatPicker
                     }
+                    #if os(iOS)
+                    // On the Mac, settings live in the standard Settings window (Cmd-,).
                     ToolbarItem(placement: .primaryAction) {
                         Button("Settings", systemImage: "gear") {
                             showingSettings = true
                         }
                     }
+                    #endif
                 }
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
         }
+        #if os(iOS)
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        #endif
         .alert("Winston", isPresented: showingError) {
             Button("OK") {}
         } message: {
