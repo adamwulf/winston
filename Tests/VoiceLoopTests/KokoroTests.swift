@@ -6,8 +6,61 @@ import Testing
 import VoiceLoopTestSupport
 
 // Kokoro voices. The session tests run the real `VoiceLoop` on a `VoiceTestBed`, whose
-// `FakeKokoro` renders each sentence as 0.2 s of steady sound, so `bed.audio.playedFrames` tells
+// `FakeKokoro` renders each sentence as a 0.2 s tone, so `bed.audio.playedFrames` tells
 // Kokoro's audio from the system voice's.
+
+/// Runs the tests of the suites it marks one at a time, across those suites. Each test bed
+/// renders its audio on the main actor, which every suite in the process shares, and the
+/// listening tests time their pauses by the clock: with these suites' loops all rendering at
+/// once as well, the main actor fell behind and `aVoiceStillTalkingKeepsTheUtteranceOpen` heard
+/// its pretend voice too late.
+private struct OneVoiceLoopAtATime: SuiteTrait, TestTrait, TestScoping {
+    var isRecursive: Bool { true }
+
+    func provideScope(
+        for test: Test,
+        testCase: Test.Case?,
+        performing function: @Sendable () async throws -> Void
+    ) async throws {
+        await turns.take()
+        do {
+            try await function()
+        } catch {
+            await turns.pass()
+            throw error
+        }
+        await turns.pass()
+    }
+}
+
+/// Hands out turns in the order they are asked for.
+private actor Turns {
+    private var isTaken = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    func take() async {
+        guard isTaken else {
+            isTaken = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    func pass() {
+        if waiting.isEmpty {
+            isTaken = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+}
+
+private let turns = Turns()
+
+extension Trait where Self == OneVoiceLoopAtATime {
+    /// See `OneVoiceLoopAtATime`.
+    fileprivate static var oneVoiceLoopAtATime: Self { Self() }
+}
 
 /// What the speaker plays for one sentence from `FakeKokoro`, at 48 kHz.
 private let fakeSentenceFrames = Int(FakeKokoro.secondsPerSentence * 48_000)
@@ -70,7 +123,7 @@ private func framesPlayed(saying text: String, by loop: VoiceLoop, on bed: Voice
 // MARK: - Speaking
 
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroSpeakingTests {
     @Test func aKokoroVoiceSpeaksEachSentenceWithKokoroOnceItsModelIsReady() async throws {
         let bed = VoiceTestBed()
@@ -240,7 +293,7 @@ struct KokoroSpeakingTests {
 /// A preview while voice mode is off plays on the preview player's engine of its own, which
 /// is the test bed's offline audio too.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroPreviewTests {
     /// A loop that is off, with the Heart voice chosen and its model loaded.
     private func offLoopWithKokoro(on bed: VoiceTestBed) async -> VoiceLoop {
@@ -328,7 +381,7 @@ struct KokoroPreviewTests {
 /// The model is freed from memory while no Kokoro voice is chosen. It stays downloaded, so
 /// choosing a Kokoro voice again loads it without the network.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroReleaseTests {
     @Test func choosingASystemVoiceFreesTheModelAndAKokoroVoiceLoadsItAgain() async throws {
         let bed = VoiceTestBed()
@@ -442,7 +495,7 @@ struct KokoroReleaseTests {
 /// Speaking stops while Kokoro is still rendering a sentence. Nothing more is rendered, and the
 /// sentence that was rendering is dropped when it arrives.
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroCancellingTests {
     /// Starts saying two sentences, and waits until the first is rendering.
     private func startSpeaking(by loop: VoiceLoop, on bed: VoiceTestBed) async {
@@ -612,7 +665,7 @@ struct KokoroCancellingTests {
 /// A Kokoro voice chosen in one language, with the system then in another (as after the user
 /// changes the system language and the app relaunches).
 @MainActor
-@Suite(.serialized, .timeLimit(.minutes(1)))
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroLanguageTests {
     @Test func aKokoroVoiceNotOfferedInTheLanguageIsSetAsideUntilItIsOfferedAgain() async throws {
         let bed = VoiceTestBed()
@@ -726,6 +779,7 @@ private final class RecordingKokoro: KokoroEngine {
 @MainActor
 @Suite(
     .serialized,
+    .oneVoiceLoopAtATime,
     .enabled(if: realModelIsDownloaded, "the Kokoro model hasn't been downloaded"),
     .timeLimit(.minutes(2))
 )
