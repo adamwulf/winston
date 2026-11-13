@@ -195,6 +195,8 @@ final class SpeechPlayback: Sendable {
         /// The player's connection format.
         let format: AVAudioFormat
         var converter: AVAudioConverter?
+        /// Frames converted so far, for the fade-in.
+        var framesConverted: AVAudioFrameCount = 0
         /// Held back until the next buffer arrives, so the last one can carry the completion handler.
         var pending: AVAudioPCMBuffer?
         /// The synthesizer has delivered every buffer.
@@ -231,6 +233,8 @@ final class SpeechPlayback: Sendable {
                 state.converter?.primeMethod = .none
             }
             guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return }
+            Self.fadeIn(converted, at: state.framesConverted)
+            state.framesConverted += converted.frameLength
             if state.isSynthesized {
                 // Arrived after the synthesizer said it was done; this buffer now ends the message.
                 scheduleLast(converted, on: state.player)
@@ -270,6 +274,25 @@ final class SpeechPlayback: Sendable {
         state.withLock { state in
             state.isCancelled = true
             state.pending = nil
+        }
+    }
+
+    /// How long each message fades in, in seconds. Echo cancellation needs about 200 ms of
+    /// playback to adapt, and until then the microphone hears the reply. Apple's advice is
+    /// to ramp the volume up over that time.
+    static let fadeInDuration = 0.2
+
+    /// Scales the part of `buffer` inside the fade-in up from silence. `offset` is how many
+    /// frames of the message came before it. `buffer` is deinterleaved float, as the player's
+    /// format is.
+    static func fadeIn(_ buffer: AVAudioPCMBuffer, at offset: AVAudioFrameCount) {
+        let rampFrames = AVAudioFrameCount(buffer.format.sampleRate * fadeInDuration)
+        guard offset < rampFrames, let channels = buffer.floatChannelData else { return }
+        let count = Int(min(buffer.frameLength, rampFrames - offset))
+        for channel in 0..<Int(buffer.format.channelCount) {
+            for index in 0..<count {
+                channels[channel][index] *= Float(Int(offset) + index) / Float(rampFrames)
+            }
         }
     }
 }

@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreMedia
 import Foundation
 import Speech
@@ -167,6 +168,48 @@ import Testing
         #expect(activity.takePeakDecibels() == -20)
         // Taking it starts over; nothing heard since reads as silence.
         #expect(activity.takePeakDecibels() == -120)
+    }
+}
+
+@Suite struct SpeechFadeInTests {
+    /// A 48 kHz mono buffer of `frames` full-scale samples. The fade-in lasts 9,600 frames.
+    private func fullScale(frames: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        let samples = try #require(buffer.floatChannelData)[0]
+        for index in 0..<Int(frames) { samples[index] = 1 }
+        return buffer
+    }
+
+    private func samples(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
+    }
+
+    @Test func rampsUpFromSilenceOverTheFirstBuffers() throws {
+        let first = try fullScale(frames: 4_800)
+        SpeechPlayback.fadeIn(first, at: 0)
+        #expect(samples(first)[0] == 0)
+        #expect(samples(first)[2_400] == 0.25)
+        // The next buffer carries on from where the first left off.
+        let second = try fullScale(frames: 4_800)
+        SpeechPlayback.fadeIn(second, at: 4_800)
+        #expect(samples(second)[0] == 0.5)
+        #expect(samples(second)[4_799] < 1)
+    }
+
+    @Test func aBufferStraddlingTheEndIsOnlyScaledUpToIt() throws {
+        let buffer = try fullScale(frames: 4_800)
+        SpeechPlayback.fadeIn(buffer, at: 7_200)
+        #expect(samples(buffer)[0] == 0.75)
+        #expect(samples(buffer)[2_399] < 1)
+        #expect(samples(buffer)[2_400...].allSatisfy { $0 == 1 })
+    }
+
+    @Test func laterBuffersAreUntouched() throws {
+        let buffer = try fullScale(frames: 4_800)
+        SpeechPlayback.fadeIn(buffer, at: 9_600)
+        #expect(samples(buffer).allSatisfy { $0 == 1 })
     }
 }
 
