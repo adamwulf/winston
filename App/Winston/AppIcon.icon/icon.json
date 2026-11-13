@@ -4,23 +4,52 @@
   },
   "groups" : [
     {
+      "blend-mode-specializations" : [
+        {
+          "appearance" : "dark",
+          "value" : "normal"
+        },
+        {
+          "appearance" : "tinted",
+          "value" : "normal"
+        }
+      ],
+      "blur-material" : null,
       "layers" : [
         {
-          "image-name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162.png",
-          "name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162",
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            },
+            {
+              "appearance" : "tinted",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : "automatic"
+            }
+          ],
+          "image-name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162 2.png",
+          "name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162 2",
           "position" : {
             "scale" : 1.62,
             "translation-in-points" : [
-              7.875,
-              -44.3359375
+              341.484375,
+              73.3
             ]
           }
         }
       ],
+      "lighting" : "individual",
       "shadow" : {
         "kind" : "neutral",
         "opacity" : 0.5
       },
+      "specular" : true,
       "translucency" : {
         "enabled" : true,
         "value" : 0.5
