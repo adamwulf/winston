@@ -27,7 +27,7 @@ struct TranscriptPiece {
 struct Transcript {
     private struct Segment {
         var text: String
-        /// Readings that differ from `text`, most likely first.
+        /// Other readings of the same words (see `Utterance.isRereading`), most likely first.
         var alternatives: [String]
         /// The audio the result covers.
         var range: CMTimeRange
@@ -68,7 +68,7 @@ struct Transcript {
             text: line,
             alternatives: alternatives
                 .map(Utterance.singleLine)
-                .filter { !$0.isEmpty && $0.lowercased() != line.lowercased() },
+                .filter { Utterance.isRereading($0, of: line) },
             range: piece.range
         )
         if let earlier = volatile, earlier.range.end <= piece.range.start {

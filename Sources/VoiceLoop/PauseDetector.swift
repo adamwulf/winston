@@ -1,7 +1,10 @@
 import Foundation
 
 /// Decides when an utterance is finished: there is text, and it hasn't changed for
-/// `pauseThreshold`. Pure: callers pass in the times, so it never reads a clock.
+/// `pauseThreshold`. Text that doesn't end a sentence (no closing `.`, `?` or `!`, as in
+/// "but it's uh") waits twice as long, so a mid-thought pause doesn't split the message; the
+/// transcriber adds the closing punctuation once the speaker has finished. Pure: callers pass
+/// in the times, so it never reads a clock.
 struct PauseDetector {
     typealias Instant = ContinuousClock.Instant
 
@@ -21,10 +24,18 @@ struct PauseDetector {
         lastChange = time
     }
 
-    /// True once there is non-empty text that hasn't changed for `pauseThreshold`.
+    /// True once there is non-empty text that hasn't changed for `pauseThreshold`, or twice
+    /// that when the text doesn't end a sentence.
     func isComplete(at now: Instant) -> Bool {
         guard let lastChange, !text.allSatisfy(\.isWhitespace) else { return false }
-        return lastChange.duration(to: now) >= pauseThreshold
+        let threshold = Self.endsSentence(text) ? pauseThreshold : pauseThreshold * 2
+        return lastChange.duration(to: now) >= threshold
+    }
+
+    /// Whether `text` ends with sentence-final punctuation, ignoring closing quotes and brackets.
+    static func endsSentence(_ text: String) -> Bool {
+        let trailing = text.reversed().first { !$0.isWhitespace && !"\"')]”’".contains($0) }
+        return trailing.map { ".?!…".contains($0) } ?? false
     }
 
     /// Forgets the current text, ready for the next utterance.

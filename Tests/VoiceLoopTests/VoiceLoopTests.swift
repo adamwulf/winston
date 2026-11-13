@@ -129,22 +129,45 @@ import Testing
 
     @Test func completesOnceTextIsUnchangedForThreshold() {
         var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
-        detector.update(text: "hello", at: at(0))
+        detector.update(text: "hello.", at: at(0))
         #expect(!detector.isComplete(at: at(1199)))
         #expect(detector.isComplete(at: at(1200)))
     }
 
+    @Test func unfinishedSentenceWaitsTwiceAsLong() {
+        var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
+        detector.update(text: "It does seem I'm able to talk, but it's uh", at: at(0))
+        #expect(!detector.isComplete(at: at(2399)))
+        #expect(detector.isComplete(at: at(2400)))
+    }
+
+    @Test func closingPunctuationRestartsTheShorterPause() {
+        var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
+        detector.update(text: "if I can talk over you", at: at(0))
+        detector.update(text: "if I can talk over you?", at: at(500))
+        #expect(!detector.isComplete(at: at(1699)))
+        #expect(detector.isComplete(at: at(1700)))
+    }
+
+    @Test func sentenceEndingsIgnoreClosingQuotesAndBrackets() {
+        #expect(PauseDetector.endsSentence("He said \"done.\""))
+        #expect(PauseDetector.endsSentence("(really!) "))
+        #expect(PauseDetector.endsSentence("wait…"))
+        #expect(!PauseDetector.endsSentence("Great. I want"))
+        #expect(!PauseDetector.endsSentence("one, two,"))
+    }
+
     @Test func sameTextDoesNotRestartThePause() {
         var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
-        detector.update(text: "hello", at: at(0))
-        detector.update(text: "hello", at: at(1000))
+        detector.update(text: "hello.", at: at(0))
+        detector.update(text: "hello.", at: at(1000))
         #expect(detector.isComplete(at: at(1200)))
     }
 
     @Test func changedTextRestartsThePause() {
         var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
-        detector.update(text: "hello", at: at(0))
-        detector.update(text: "hello there", at: at(1000))
+        detector.update(text: "hello.", at: at(0))
+        detector.update(text: "hello there.", at: at(1000))
         #expect(!detector.isComplete(at: at(2199)))
         #expect(detector.isComplete(at: at(2200)))
     }
@@ -159,7 +182,7 @@ import Testing
 
     @Test func thresholdChangesApply() {
         var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
-        detector.update(text: "hello", at: at(0))
+        detector.update(text: "hello.", at: at(0))
         detector.pauseThreshold = .milliseconds(500)
         #expect(detector.isComplete(at: at(500)))
     }
@@ -228,6 +251,33 @@ import Testing
         _ = transcript.apply(piece([("two", 1)], end: 2, final: true,
                                    alternatives: [[("two", 1)], [("too", 1)]]))
         #expect(transcript.take().alternatives == ["won", "too", "wan"])
+    }
+
+    @Test func alternatesThatOnlyChangePunctuationFillersOrLengthAreDropped() {
+        var transcript = Transcript()
+        // From a real session: none of these is another reading of the same words.
+        _ = transcript.apply(piece([("Uh,", 0), ("still", 0.2), ("just", 0.4)], end: 0.6, final: true,
+                                   alternatives: [[("Still,", 0), ("just", 0.4)]]))
+        _ = transcript.apply(piece([("Great.", 1)], end: 1.5, final: true,
+                                   alternatives: [[("Great,", 1)], [("Great", 1)]]))
+        _ = transcript.apply(piece([("checking", 2), ("if", 2.3), ("it", 2.5), ("works.", 2.7)], end: 3, final: true,
+                                   alternatives: [[("works?", 2.7)]]))
+        let utterance = transcript.take()
+        #expect(utterance.alternatives.isEmpty)
+        #expect(utterance.messageText == "🎙️ Uh, still just Great. checking if it works.")
+    }
+
+    @Test func rereadingsAreRecognizedIgnoringCaseAndPunctuation() {
+        #expect(Utterance.isRereading("mark that read.", of: "Mark that red"))
+        #expect(!Utterance.isRereading("Mark, that red?", of: "mark that red."))
+        #expect(!Utterance.isRereading("uh mark that red", of: "mark that red"))
+        #expect(!Utterance.isRereading("works?", of: "checking if it works."))
+        #expect(!Utterance.isRereading("", of: "red"))
+    }
+
+    @Test func messageTextDropsAlternatesThatOnlyChangePunctuation() {
+        let utterance = Utterance(text: "hopefully.", alternatives: ["hopefully..", "Hopefully!"])
+        #expect(utterance.messageText == "🎙️ hopefully.")
     }
 
     @Test func lateResultsForTakenAudioAreIgnored() {
