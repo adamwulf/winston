@@ -1,6 +1,33 @@
 {
-  "originHash" : "5c80c430d1e64005cc90c20853da6c51fbdf08391648def56f55ae09058b7bd9",
+  "originHash" : "f3e7a360aaf5075f8d7739705d96ada6f159dbd69af652c01d7e97767bf2b3c9",
   "pins" : [
+    {
+      "identity" : "fellerbuncher",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/adamwulf/FellerBuncher.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "2e24570d248d04c5811d8c6b9cfb733387312e03"
+      }
+    },
+    {
+      "identity" : "logfmt",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/adamwulf/Logfmt.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "a6d6eb29177f65f3e252610a2176d318026d634c"
+      }
+    },
+    {
+      "identity" : "swift-log",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-log.git",
+      "state" : {
+        "revision" : "a878e7f8f46cfc0e1125e565b5c08e7d5272dc9a",
+        "version" : "1.14.0"
+      }
+    },
     {
       "identity" : "tdlibframework",
       "kind" : "remoteSourceControl",

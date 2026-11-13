@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A10000000000000000000023 /* TelegramLink in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000021 /* TelegramLink */; };
 		A10000000000000000000024 /* VoiceLoop in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000022 /* VoiceLoop */; };
+		A10000000000000000000026 /* WinstonLogging in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000025 /* WinstonLogging */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -33,6 +34,7 @@
 			files = (
 				A10000000000000000000023 /* TelegramLink in Frameworks */,
 				A10000000000000000000024 /* VoiceLoop in Frameworks */,
+				A10000000000000000000026 /* WinstonLogging in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +90,7 @@
 			packageProductDependencies = (
 				A10000000000000000000021 /* TelegramLink */,
 				A10000000000000000000022 /* VoiceLoop */,
+				A10000000000000000000025 /* WinstonLogging */,
 			);
 			productName = Winston;
 			productReference = A10000000000000000000005 /* Winston.app */;
@@ -328,6 +331,10 @@
 		A10000000000000000000022 /* VoiceLoop */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = VoiceLoop;
+		};
+		A10000000000000000000025 /* WinstonLogging */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = WinstonLogging;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
