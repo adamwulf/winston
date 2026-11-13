@@ -63,7 +63,9 @@ public enum AuthState: Sendable, Equatable {
     case closed
     /// A rare TDLib state the app doesn't handle (e.g. email setup). The string names it.
     /// It also carries a startup error, such as "setTdlibParameters failed: …", when the
-    /// api_id / api_hash is bad or the database is locked.
+    /// api_id / api_hash is missing or the database is locked. TDLib only checks here that
+    /// they are present (api_id > 0, non-empty hash); a wrong but non-empty value fails later,
+    /// as a `TelegramLinkError.tdlib` thrown from `submitPhoneNumber`.
     case unsupported(String)
 }
 

@@ -142,6 +142,8 @@ public actor TelegramLink {
 
     /// Sends a local image file. TDLib uploads it after this returns, so leave the file
     /// in place until `.sendSucceeded` or `.sendFailed` arrives for the message.
+    /// The image should be upright with no EXIF orientation tag (the app's export bakes the
+    /// orientation in), because the width and height passed to TDLib are the stored pixel size.
     public func sendPhoto(fileURL: URL, caption: String?, to chat: ChatID) async throws {
         let size = Self.pixelSize(of: fileURL)
         let photo = InputPhoto(
@@ -330,7 +332,9 @@ public actor TelegramLink {
                     useTestDc: false
                 )
             } catch {
-                // Usually a missing or invalid api_id / api_hash. Login can't go further.
+                // Usually a missing api_id / api_hash: TDLib only checks here that they are
+                // present. A wrong but non-empty value fails later, as a TelegramLinkError.tdlib
+                // thrown from submitPhoneNumber. Login can't go further.
                 let message = (error as? TDLibKit.Error)?.message ?? error.localizedDescription
                 authContinuation.yield(.unsupported("setTdlibParameters failed: \(message)"))
             }
