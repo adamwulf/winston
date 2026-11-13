@@ -223,8 +223,10 @@ child process (logging bootstrap, the real `Library` folder) only run on macOS.
 The `Winston` scheme tests with `App/Winston.xctestplan`: every test target,
 with code coverage on. Xcode Cloud reaches it through the workspace, so the
 workflow uses `App/Winston.xcworkspace`, with a Test action for an iOS
-simulator and one for macOS, since some tests only run on one of them. The
-same run, locally:
+simulator and one for macOS, since some tests only run on one of them. Its
+environment needs `TG_API_ID` and `TG_API_HASH` (mark the hash Secret), as
+every workflow does: `ci_post_clone.sh` fails without them. The same run,
+locally:
 
 ```sh
 xcodebuild test -workspace App/Winston.xcworkspace -scheme Winston \
