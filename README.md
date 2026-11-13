@@ -71,7 +71,7 @@ Rules for new tests:
 ### Coverage
 
 ```sh
-sh Scripts/coverage.sh
+Scripts/coverage.sh
 ```
 
 runs the tests on macOS and prints line coverage for every file in `Sources/`.
