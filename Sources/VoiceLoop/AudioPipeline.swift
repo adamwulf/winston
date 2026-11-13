@@ -22,6 +22,7 @@ final class Pipeline {
     let voiceActivity = VoiceActivity()
     var analyzer: SpeechAnalyzer?
     var tasks: [Task<Void, Never>] = []
+    private let analyzerFormat: AVAudioFormat
 
     /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
     /// When false, it ducks them as little as it can.
@@ -29,6 +30,11 @@ final class Pipeline {
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
         hasVoiceProcessing = voiceProcessing
+        self.analyzerFormat = analyzerFormat
+        guard let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
+            throw AudioFormatError()
+        }
+        self.speechFormat = speechFormat
 
         let input = engine.inputNode
         if voiceProcessing {
@@ -42,29 +48,41 @@ final class Pipeline {
                 )
             }
         }
-        let inputFormat = input.outputFormat(forBus: 0)
         #if os(macOS)
         if voiceProcessing {
             // On a MacBook Pro with voice processing on, the input reports 9 identical channels,
             // and the engine won't start (-10875, "client-side input and output formats do not
             // match") while the output keeps its default stereo format. A mono output works.
+            let inputFormat = input.outputFormat(forBus: 0)
             guard let outputFormat = AVAudioFormat(standardFormatWithSampleRate: inputFormat.sampleRate, channels: 1) else {
                 throw AudioFormatError()
             }
             engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
         }
         #endif
-        guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat),
-              let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
+        try installMicrophoneTap()
+
+        engine.attach(player)
+        // Mono into the mixer, which spreads it to every output channel.
+        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+        engine.prepare()
+    }
+
+    /// Taps the microphone in its current format, replacing any earlier tap. The format can
+    /// change with the audio hardware, so `restartEngine()` taps it again.
+    private func installMicrophoneTap() throws {
+        let input = engine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
             throw AudioFormatError()
         }
-        self.speechFormat = speechFormat
         converter.primeMethod = .none
         if inputFormat.channelCount > 1 {
             // Use the first channel rather than a downmix; with voice processing on, the extra
             // channels repeat it.
             converter.channelMap = [0]
         }
+        input.removeTap(onBus: 0)
         input.installTap(
             onBus: 0,
             bufferSize: 4096,
@@ -76,11 +94,36 @@ final class Pipeline {
                 voiceActivity: voiceActivity
             )
         )
+    }
 
-        engine.attach(player)
-        // Mono into the mixer, which spreads it to every output channel.
-        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
+    /// Starts the engine again after it stopped itself because the audio hardware changed,
+    /// keeping voice processing, the player, and the analyzer's input stream, rather than
+    /// building a new engine, which turns voice processing off and on again.
+    func restartEngine() throws {
+        try installMicrophoneTap()
         engine.prepare()
+        try engine.start()
+    }
+
+    /// The audio formats and route the engine is using, for logs.
+    var formatContext: [String: String] {
+        let micFormat = engine.inputNode.inputFormat(forBus: 0)
+        let tapFormat = engine.inputNode.outputFormat(forBus: 0)
+        let outputFormat = engine.outputNode.outputFormat(forBus: 0)
+        var context = [
+            "micFormat": "\(micFormat.sampleRate)/\(micFormat.channelCount)",
+            "tapFormat": "\(tapFormat.sampleRate)/\(tapFormat.channelCount)",
+            "outputFormat": "\(outputFormat.sampleRate)/\(outputFormat.channelCount)",
+        ]
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        context["sessionRate"] = "\(session.sampleRate)"
+        context["sessionMode"] = session.mode.rawValue
+        context["route"] = (session.currentRoute.inputs + session.currentRoute.outputs)
+            .map(\.portType.rawValue)
+            .joined(separator: "+")
+        #endif
+        return context
     }
 
     func tearDown() {
