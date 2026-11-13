@@ -42,6 +42,19 @@ import Testing
         // Without money an "m" could be metres, and a "K" a resolution, so they stay letters.
         #expect(say("5-10m") == "five to ten m")
         #expect(say("5-10K") == "five to ten K")
+        // A scale written out works the same way.
+        #expect(say("$5-10 million") == "five to ten million dollars")
+        #expect(say("$2.5-3.5 billion") == "two point five to three point five billion dollars")
+        #expect(say("5-10 million users") == "five to ten million users")
+        #expect(say("10 million users") == "ten million users")
+    }
+
+    @Test func aNumberGluedToTheWordAfterItByADash() {
+        #expect(say("a 10-minute walk") == "a ten minute walk")
+        #expect(say("a 3-step plan") == "a three step plan")
+        #expect(say("5-day forecast") == "five day forecast")
+        #expect(say("a 3rd-party app") == "a third party app")
+        #expect(say("a 10-20-minute wait") == "a ten to twenty minute wait")
     }
 
     @Test func aLowercaseKIsThousandsEvenWithoutMoney() {
@@ -83,6 +96,8 @@ import Testing
         #expect(say("the 1990's") == "the nineteen nineties")
         #expect(say("the 2000s") == "the two thousands")
         #expect(say("in their 20s") == "in their twenties")
+        #expect(say("the 80s-90s") == "the eighties to nineties")
+        #expect(say("the 1980s-1990s") == "the nineteen eighties to nineteen nineties")
         // Two digits with an "s" otherwise are more likely seconds.
         #expect(say("wait 30s") == "wait thirty s")
     }
@@ -95,6 +110,10 @@ import Testing
         #expect(say("1-1/2") == "one and a half")
         #expect(say("1 1/2 hours") == "one and a half hours")
         #expect(say("2 3/4") == "two and three quarters")
+        #expect(say("1 1/8") == "one and an eighth")
+        // A range of them.
+        #expect(say("1/2-3/4 cup") == "one half to three quarters cup")
+        #expect(say("2 1/2-3 hours") == "two and a half to three hours")
         // Not a common fraction: a space for the slash.
         #expect(say("24/7") == "twenty-four seven")
         #expect(say("50/50") == "fifty fifty")

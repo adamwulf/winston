@@ -38,16 +38,23 @@ struct KokoroNumbers {
     /// 2. Numbers joined by slashes: a common fraction (denominator 2 to 10, numerator smaller)
     ///    is "three quarters"; anything else is read with a space for each slash ("24/7" is
     ///    "twenty-four seven").
+    ///
+    ///    A dash between such a number and another is a range: "1/2-3/4" is "one half to three
+    ///    quarters", "2 1/2-3" "two and a half to three".
     /// 3. Numbers joined by dashes (a hyphen or an en dash):
     ///    1. Glued to a word on the left, they name something: each dash is a space ("GPT-4-32k"
     ///       is "GPT four thirty-two k", "COVID-19" "COVID nineteen").
     ///    2. Three digits, a dash and four digits is a phone number, as is an area code in
     ///       parentheses before it: digit by digit, with a comma between groups.
-    ///    3. Two numbers are a range: "3-2" is "three to two". A scale after the second applies
-    ///       to both: "5-10k" is "five to ten thousand", "$5-10M" "five to ten million dollars".
+    ///    3. Two numbers are a range: "3-2" is "three to two", "the 80s-90s" "the eighties to
+    ///       nineties". A scale after the second applies to both: "5-10k" is "five to ten
+    ///       thousand", "$5-10M" and "$5-10 million" "five to ten million dollars".
     ///    4. Three or more are read digit by digit when every one is a plain run of digits (an
     ///       ISO date, a phone number), and otherwise each in its own words; a comma goes between.
     /// 4. Anything else is read on its own.
+    ///
+    /// A dash between a number and the word after it is a space too: "a 10-minute walk" is "a
+    /// ten minute walk". KokoroTTS would glue the two words together.
     func spelledOut(_ text: String) -> String {
         let matches = Array(text.matches(of: pattern))
         var result = ""
@@ -76,10 +83,15 @@ struct KokoroNumbers {
                 result += " "
             }
             result += words
+            cursor = end
             if end < text.endIndex, text[end].isLetter {
                 result += " "
+            } else if end < text.endIndex, Self.isDash(text[end...end]), text.index(after: end) < text.endIndex,
+                      text[text.index(after: end)].isLetter {
+                // "10-minute": the dash goes, a space takes its place.
+                result += " "
+                cursor = text.index(after: end)
             }
-            cursor = end
             index += count
         }
         result += text[cursor...]
@@ -104,23 +116,29 @@ struct KokoroNumbers {
         func isPhone(_ first: Int, _ last: Int) -> Bool {
             last == first + 1 && Self.plainDigits(matches[first])?.count == 3 && Self.plainDigits(matches[last])?.count == 4
         }
-        let match = matches[index]
-
-        // 1. A mixed number.
-        if let between = link(index), between == " " || Self.isDash(between), link(index + 1) == "/",
-           let whole = Self.plainDigits(match),
-           let fraction = fraction(matches[index + 1], matches[index + 2], afterWholeNumber: true) {
-            return (3, cardinal(whole) + " and " + fraction)
-        }
-
-        // 2. Slashes.
-        let slashEnd = end(from: index) { $0 == "/" }
-        if slashEnd > index {
-            if slashEnd == index + 1, let fraction = fraction(match, matches[slashEnd], afterWholeNumber: false) {
+        /// Rules 1 and 2: a mixed number, or numbers joined by slashes, from `matches[start]`.
+        func slashed(at start: Int) -> (count: Int, words: String)? {
+            if let between = link(start), between == " " || Self.isDash(between), link(start + 1) == "/",
+               let whole = Self.plainDigits(matches[start]),
+               let fraction = fraction(matches[start + 1], matches[start + 2], afterWholeNumber: true) {
+                return (3, cardinal(whole) + " and " + fraction)
+            }
+            let slashEnd = end(from: start) { $0 == "/" }
+            guard slashEnd > start else { return nil }
+            if slashEnd == start + 1, let fraction = fraction(matches[start], matches[slashEnd], afterWholeNumber: false) {
                 return (2, fraction)
             }
-            let all = matches[index...slashEnd].map { words(for: $0, in: text) }
+            let all = matches[start...slashEnd].map { words(for: $0, in: text) }
             return (all.count, all.joined(separator: " "))
+        }
+        let match = matches[index]
+
+        // 1 and 2, and a range of them: "1/2-3/4", "2 1/2-3".
+        if let (count, words) = slashed(at: index) {
+            let last = index + count - 1
+            guard let between = link(last), Self.isDash(between) else { return (count, words) }
+            let (nextCount, nextWords) = slashed(at: last + 1) ?? (1, self.words(for: matches[last + 1], in: text))
+            return (count + nextCount, words + " to " + nextWords)
         }
 
         // 3. Dashes.
@@ -152,8 +170,9 @@ struct KokoroNumbers {
     }
 
     /// "3-2" is "three to two". A scale after the second number applies to the first too: "5-10k"
-    /// is "five to ten thousand", "$5-10M" "five to ten million dollars". Without money, only a
-    /// lowercase "k" is a scale, as for a number on its own.
+    /// is "five to ten thousand", "$5-10M" and "$5-10 million" "five to ten million dollars".
+    /// Without money, only a lowercase "k" or a word is a scale, as for a number on its own. A
+    /// decade makes the second one a decade too: "the 80s-90s" is "the eighties to nineties".
     private func range(_ from: Match, _ to: Match, in text: String) -> String {
         if let scale = Self.scale(of: to), Self.scale(of: from) == nil,
            let low = amount(from), let high = amount(to) {
@@ -161,9 +180,12 @@ struct KokoroNumbers {
             if let units {
                 return low + " to " + high + " " + scale + " " + units.plural
             }
-            if to.output.integerScale == "k" {
+            if let written = to.output.integerScale, written == "k" || written.first == " " {
                 return low + " to " + high + " " + scale
             }
+        }
+        if from.output.decade != nil, let decade = to.output.decade {
+            return words(for: from, in: text) + " to " + self.decade(decade, quoted: true, preceding: "")
         }
         return words(for: from, in: text) + " to " + words(for: to, in: text)
     }
@@ -175,7 +197,9 @@ struct KokoroNumbers {
               let bottom = Self.plainDigits(denominator).flatMap({ Int($0) }),
               let names = Self.fractionNames[bottom], (1..<bottom).contains(top) else { return nil }
         if top == 1 {
-            return (afterWholeNumber ? "a " : "one ") + names.singular
+            // "one and an eighth".
+            let article = names.singular.hasPrefix("e") ? "an " : "a "
+            return (afterWholeNumber ? article : "one ") + names.singular
         }
         return cardinal(top) + " " + names.plural
     }
@@ -231,6 +255,10 @@ struct KokoroNumbers {
                 preceding: text[..<match.range.lowerBound]
             )
             guard let letters = output.integerScale else { return words }
+            // A scale written out ("10 million") stays as written.
+            if letters.first == " " {
+                return words + letters
+            }
             // In chat, a lowercase "k" is thousands: "10k users", "2.5k stars". Other letters,
             // even "K" ("4K screen"), stay letters without money: see `range` and `money`.
             return letters == "k" && !inName ? words + " thousand" : words + " " + letters
@@ -474,7 +502,8 @@ struct KokoroNumbers {
         (?<decadeQuote>['’])?(?<decade>[0-9]{1,3}0)['’]?s\b
         |
         (?<integer>[0-9]{1,3}(?:,[0-9]{3})+(?![0-9])|[0-9]+)(?<fraction>(?:\.[0-9]+)+)?
-            (?:(?<percent>%)|(?<ordinal>(?i:st|nd|rd|th))\b|(?<integerScale>(?:[kKmMbB]|bn|BN|Bn)\b))?
+            (?:(?<percent>%)|(?<ordinal>(?i:st|nd|rd|th))\b
+                |(?<integerScale>(?:[kKmMbB]|bn|BN|Bn)\b|\ +(?i:thousand|million|billion|trillion)\b))?
         |
         (?<point>\.[0-9]+)(?<pointPercent>%)?
         /#
