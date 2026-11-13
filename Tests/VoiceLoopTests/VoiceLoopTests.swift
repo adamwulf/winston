@@ -162,9 +162,9 @@ import Testing
         let activity = VoiceActivity()
         let quiet = [Float](repeating: 0.01, count: 256)
         let loud = [Float](repeating: -0.1, count: 256)
-        quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
-        loud.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
-        quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        _ = quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        _ = loud.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        _ = quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
         #expect(activity.takePeakDecibels() == -20)
         // Taking it starts over; nothing heard since reads as silence.
         #expect(activity.takePeakDecibels() == -120)
@@ -526,5 +526,13 @@ import Testing
 
     @Test func wordsWithoutTimingAreDroppedWhenTrimming() {
         #expect(Transcript.words(of: AttributedString("untimed words"), startingAt: time(1)) == "")
+    }
+
+    @Test func whereTheKeptWordsStartIsReadFromTheirTiming() {
+        let text = timed([("mark", 0), ("that", 0.4), ("red", 0.8)], end: 1.2)
+        #expect(Transcript.start(of: text, startingAt: .zero) == time(0))
+        #expect(Transcript.start(of: text, startingAt: time(0.3)) == time(0.4))
+        #expect(Transcript.start(of: text, startingAt: time(1)) == nil)
+        #expect(Transcript.start(of: AttributedString("untimed words"), startingAt: .zero) == nil)
     }
 }

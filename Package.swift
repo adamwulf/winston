@@ -101,7 +101,15 @@ let package = Package(
             dependencies: ["VoiceLoop"],
             path: "Tests/VoiceLoopTestSupport"
         ),
-        .testTarget(name: "VoiceLoopTests", dependencies: ["VoiceLoop", "VoiceLoopTestSupport"]),
+        .testTarget(
+            name: "VoiceLoopTests",
+            dependencies: [
+                "VoiceLoop",
+                "VoiceLoopTestSupport",
+                // A recording handler for the voice timeline's lines; no LoggingSystem.bootstrap.
+                .product(name: "Logging", package: "swift-log"),
+            ]
+        ),
         // iOS only (audio-session interruptions), and a target of its own so it gets its own
         // process: the voice loop hears interruptions process-wide.
         .testTarget(

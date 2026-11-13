@@ -185,11 +185,15 @@ public final class VoiceLoop {
         guard run == runID else { return }
 
         var newPipeline: Pipeline?
+        // When `recognizer.start(inputs:)` was called and returned, for the timeline log.
+        var recognizerStart = (called: UInt64(0), returned: UInt64(0))
         do {
-            let pipeline = try makeRunningPipeline(analyzerFormat: recognizer.audioFormat)
+            let pipeline = try makeRunningPipeline(analyzerFormat: recognizer.audioFormat, session: run)
             newPipeline = pipeline
             // Microphone buffers queue in `pipeline.inputs` until the recognizer starts reading.
+            recognizerStart.called = TimelineClock.now()
             try await recognizer.start(inputs: pipeline.inputs)
+            recognizerStart.returned = TimelineClock.now()
         } catch {
             newPipeline?.tearDown()
             await recognizer.cancel()
@@ -213,6 +217,13 @@ public final class VoiceLoop {
             "voice mode started",
             pipeline.formatContext.merging(["echoCancellation": "\(pipeline.hasVoiceProcessing)"]) { $1 }
         )
+        pipeline.timeline.started(
+            echoCancellation: pipeline.hasVoiceProcessing,
+            fastResults: recognizer.reportsFastResults,
+            tapFramesRequested: Pipeline.tapBufferSize,
+            analyzerRate: recognizer.audioFormat.sampleRate
+        )
+        pipeline.timeline.recognizerStarted(called: recognizerStart.called, returned: recognizerStart.returned)
 
         let configurationChanges = NotificationCenter.default.notifications(
             named: .AVAudioEngineConfigurationChange,
@@ -253,13 +264,14 @@ public final class VoiceLoop {
     /// Activates the iOS session and builds and starts the engine with voice processing (echo
     /// cancellation), or without it if voice processing can't start. Without echo cancellation
     /// the loop is half-duplex: replies can't be interrupted by voice.
-    private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
+    private func makeRunningPipeline(analyzerFormat: AVAudioFormat, session: Int) throws -> Pipeline {
         let pausingOtherAudio = pausesOtherAudio
         func started(voiceProcessing: Bool) throws -> Pipeline {
             try startedPipeline(
                 analyzerFormat: analyzerFormat,
                 voiceProcessing: voiceProcessing,
-                ducksOtherAudio: pausingOtherAudio
+                ducksOtherAudio: pausingOtherAudio,
+                session: session
             )
         }
         if !skipVoiceProcessing {
@@ -286,12 +298,14 @@ public final class VoiceLoop {
     private func startedPipeline(
         analyzerFormat: AVAudioFormat,
         voiceProcessing: Bool,
-        ducksOtherAudio: Bool
+        ducksOtherAudio: Bool,
+        session: Int
     ) throws -> Pipeline {
         let pipeline = try Pipeline(
             analyzerFormat: analyzerFormat,
             voiceProcessing: voiceProcessing,
             ducksOtherAudio: ducksOtherAudio,
+            session: session,
             environment: environment
         )
         do {
@@ -310,6 +324,7 @@ public final class VoiceLoop {
 
     /// Drops the utterance in progress without sending it.
     public func discardCurrentUtterance() {
+        pipeline?.timeline.utteranceDiscarded(words: transcript.wordCount)
         transcript.discard()
         pauseDetector.reset()
         updateListeningState()
@@ -401,15 +416,23 @@ public final class VoiceLoop {
             // spoken interrupts it (the app's stop button still does).
             let echoCancelled = pipeline?.hasVoiceProcessing ?? false
             guard echoCancelled, candidate.wordCount >= max(1, bargeInMinimumWords) else {
+                pipeline?.timeline.resultIgnored(
+                    reason: echoCancelled ? "tooFewWords" : "noEchoCancellation",
+                    words: candidate.wordCount
+                )
                 ignoredWhileSpeaking = true
                 ignoredResultsThisReply += 1
                 return
             }
+            logResult(piece, applied: candidate)
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
             // ignored so far may be this utterance's first words, so no audio is consumed.
             Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
+            pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
+        } else {
+            logResult(piece, applied: candidate)
         }
         transcript = candidate
         pauseDetector.update(text: transcript.text, at: .now)
@@ -418,15 +441,36 @@ public final class VoiceLoop {
         speakNextIfIdle()
     }
 
+    /// Logs a result on the timeline as the transcript is about to become `candidate`.
+    private func logResult(_ piece: TranscriptPiece, applied candidate: Transcript) {
+        pipeline?.timeline.result(
+            piece,
+            words: candidate.wordCount,
+            isFirst: transcript.isEmpty && !candidate.isEmpty,
+            firstWordStart: Transcript.start(of: piece.text, startingAt: transcript.consumedThrough)
+        )
+    }
+
     private func checkForPause() {
+        // What the audio and synthesizer threads recorded, written here on the main actor.
+        pipeline?.timeline.writeRecorded()
         pauseDetector.pauseThreshold = pauseThreshold
         if pipeline?.voiceActivity.takeHeardVoice() == true {
             pauseDetector.heardVoice(at: .now)
         }
         guard pauseDetector.isComplete(at: .now) else { return }
+        // For the timeline log, before they are cleared.
+        let words = transcript.wordCount
+        let pause = pauseDetector
         let utterance = transcript.take()
         pauseDetector.reset()
         if !utterance.text.isEmpty {
+            pipeline?.timeline.utteranceSent(
+                words: words,
+                lastVoice: pause.lastVoice,
+                lastChange: pause.lastChange,
+                endsSentence: PauseDetector.endsSentence(utterance.text)
+            )
             utteranceContinuation.yield(utterance)
         }
         updateListeningState()
@@ -463,6 +507,8 @@ public final class VoiceLoop {
         if let pipeline {
             self.pipeline = nil
             pipeline.tearDown()
+            // What its tap recorded since the last 100 ms poll, now that the tap is gone.
+            pipeline.timeline.writeRecorded()
             if let recognizer = pipeline.recognizer {
                 Task { await recognizer.cancel() }
             }
@@ -662,15 +708,21 @@ public final class VoiceLoop {
         _ = pipeline.voiceActivity.takePeakDecibels()
         ignoredResultsThisReply = 0
         synthesisObserver.track(utterance, playback: playback)
+        // Right before synthesis starts: the timeline measures the reply from here.
+        let started = TimelineClock.now()
         synthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
         }
         pipeline.player.play()
+        pipeline.timeline.speechStarted(at: started, chars: text.count, queued: speechQueue.count) {
+            playback.firstAudioHostTime
+        }
     }
 
     private func speechFinished(_ playback: SpeechPlayback) {
         guard currentSpeech === playback else { return }
-        logReplyEnded(playback, reason: "finished")
+        let replyEnded = logReplyEnded(playback, reason: "finished")
+        pipeline?.timeline.speechFinished(replyEnded)
         currentSpeech = nil
         consumeEcho()
         updateListeningState()
@@ -682,11 +734,15 @@ public final class VoiceLoop {
     /// says why, for the logs.
     private func silence(consumingEcho: Bool, reason: String) {
         guard let currentSpeech else { return }
+        pipeline?.timeline.speechStopRequested(reason: reason)
         logReplyEnded(currentSpeech, reason: reason)
         self.currentSpeech = nil
         currentSpeech.cancel()
         synthesizer.stopSpeaking(at: .immediate)
-        pipeline?.player.stop()
+        if let pipeline {
+            pipeline.player.stop()
+            pipeline.timeline.speechStopped(outputLatency: pipeline.engine.outputNode.presentationLatency)
+        }
         if consumingEcho {
             consumeEcho()
         }
@@ -697,15 +753,19 @@ public final class VoiceLoop {
     /// Logs how a reply ended and the loudest microphone level while it played, after echo
     /// cancellation. That level includes the user talking and room noise as well as any of the
     /// reply that got through, so it only measures leakage for a reply that played to the end
-    /// in a quiet room. Counts and levels only.
-    private func logReplyEnded(_ playback: SpeechPlayback, reason: String) {
-        Self.log.info("reply ended", [
+    /// in a quiet room. Counts and levels only. Returns the line's fields, which "speech
+    /// finished" on the timeline repeats: taking the peak level resets it.
+    @discardableResult
+    private func logReplyEnded(_ playback: SpeechPlayback, reason: String) -> [String: CustomStringConvertible] {
+        let fields: [String: CustomStringConvertible] = [
             "reason": reason,
             "ms": Int(playback.started.duration(to: .now) / .milliseconds(1)),
             "ignoredResults": ignoredResultsThisReply,
             "micPeakDb": pipeline?.voiceActivity.takePeakDecibels() ?? -120,
             "echoCancellation": pipeline?.hasVoiceProcessing ?? false,
-        ])
+        ]
+        Self.log.info("reply ended", fields)
+        return fields
     }
 
     /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for

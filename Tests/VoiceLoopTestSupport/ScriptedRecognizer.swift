@@ -48,6 +48,11 @@ package final class ScriptedRecognizer: Recognizer {
         stream
     }
 
+    /// It reports whenever the test says, so it has no option to make that sooner.
+    package var reportsFastResults: Bool {
+        false
+    }
+
     package func start(inputs: AsyncStream<AnalyzerInput>) async throws {
         await whenStarting()
         if let error = state.withLock({ $0.startError }) {
