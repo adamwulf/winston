@@ -456,4 +456,45 @@ private struct TimelineBed {
         ]])
         #expect(recorder.metadata(of: "voice ended") == [["tMs": "1000", "session": "7", "audioMs": "1000", "voicedMs": "900"]])
     }
+
+    @Test func aTapReinstalledBeforeItsFirstBufferWasWrittenReportsBothFirstBuffers() {
+        let bed = TimelineBed()
+        bed.clock.set(30)
+        bed.timeline.microphone.record(
+            frames: 4096, sampleRate: 48_000, when: AVAudioTime(hostTime: bed.clock.at(20)), audioTime: .zero, voice: nil
+        )
+
+        // As on the iPhone, the engine stops and restarts before the first 100 ms poll.
+        bed.timeline.willReinstallTap()
+        bed.clock.set(85)
+        bed.timeline.microphone.record(
+            frames: 4410, sampleRate: 44_100, when: AVAudioTime(hostTime: bed.clock.at(70)), audioTime: .zero, voice: nil
+        )
+        bed.clock.set(100)
+        bed.timeline.writeRecorded()
+
+        #expect(bed.recorder.metadata(of: "first mic buffer") == [
+            ["tMs": "20", "session": "7", "audioMs": "0", "tapFrames": "4096", "tapRate": "48000", "deliveryMs": "10"],
+            ["tMs": "70", "session": "7", "audioMs": "0", "tapFrames": "4410", "tapRate": "44100", "deliveryMs": "15"],
+        ])
+    }
+
+    @Test func aFirstBufferScheduledWhileTheReplyIsBeingStoppedIsStillWritten() {
+        let bed = TimelineBed()
+        var firstAudio: UInt64?
+        bed.timeline.speechStarted(at: bed.clock.at(0), chars: 40, queued: 0) { firstAudio }
+        bed.clock.set(100)
+        bed.timeline.speechStopRequested(reason: "stopped")
+
+        // The synthesizer schedules its first buffer before the playback is cancelled.
+        firstAudio = bed.clock.at(102)
+        bed.clock.set(105)
+        bed.timeline.speechStopped(outputLatency: 0)
+
+        let recorder = bed.recorder
+        #expect(recorder.messages == ["speech started", "speech stop requested", "speech first audio", "speech stopped"])
+        #expect(recorder.metadata(of: "speech first audio") == [["tMs": "102", "session": "7", "reply": "1", "synthMs": "102"]])
+        // Timed from when the player stopped, before the late line was written.
+        #expect(recorder.metadata(of: "speech stopped").first?["stopMs"] == "5")
+    }
 }

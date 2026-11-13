@@ -507,6 +507,8 @@ public final class VoiceLoop {
         if let pipeline {
             self.pipeline = nil
             pipeline.tearDown()
+            // What its tap recorded since the last 100 ms poll, now that the tap is gone.
+            pipeline.timeline.writeRecorded()
             if let recognizer = pipeline.recognizer {
                 Task { await recognizer.cancel() }
             }
@@ -691,8 +693,6 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
-        // Before synthesis starts, so the time to its first audio is never negative.
-        let started = TimelineClock.now()
         let utterance = makeUtterance(text)
         let playback = SpeechPlayback(
             text: text,
@@ -708,6 +708,8 @@ public final class VoiceLoop {
         _ = pipeline.voiceActivity.takePeakDecibels()
         ignoredResultsThisReply = 0
         synthesisObserver.track(utterance, playback: playback)
+        // Right before synthesis starts: the timeline measures the reply from here.
+        let started = TimelineClock.now()
         synthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
         }

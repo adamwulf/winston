@@ -129,7 +129,7 @@ final class Pipeline {
     /// building a new engine, which turns voice processing off and on again.
     func restartEngine() throws {
         try connectOutputForVoiceProcessing()
-        timeline.microphone.reportNextBufferAsFirst()
+        timeline.willReinstallTap()
         try installMicrophoneTap()
         engine.prepare()
         try engine.start()

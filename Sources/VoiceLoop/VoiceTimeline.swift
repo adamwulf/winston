@@ -119,7 +119,14 @@ final class MicrophoneTimeline: Sendable {
         var awaitingFirstBuffer = true
         var firstBuffer: FirstBuffer?
         var spans = VoiceSpans<Mark>()
-        var events: [VoiceEvent] = []
+        /// Room is reserved so the tap doesn't allocate to append: a few events come each
+        /// second, and the main actor takes them every 100 ms.
+        var events: [VoiceEvent]
+
+        init() {
+            events = []
+            events.reserveCapacity(16)
+        }
     }
 
     private let state = Mutex(State())
@@ -183,6 +190,8 @@ final class MicrophoneTimeline: Sendable {
     /// Voice starts and ends since the last call, oldest first.
     func takeVoiceEvents() -> [VoiceEvent] {
         state.withLock { state in
+            guard !state.events.isEmpty else { return [] }
+            // The events go out in the old storage; the tap gets new storage of the same size.
             defer { state.events.removeAll(keepingCapacity: true) }
             return state.events
         }
@@ -261,6 +270,14 @@ final class VoiceTimeline {
             "tapFramesRequested": tapFramesRequested,
             "analyzerRate": Int(analyzerRate.rounded()),
         ]))
+    }
+
+    /// The microphone tap is about to be installed again. Writes what the old tap recorded, so
+    /// its first buffer isn't replaced unwritten, then reports the new tap's first buffer too:
+    /// its size and rate can change with the hardware.
+    func willReinstallTap() {
+        writeRecorded()
+        microphone.reportNextBufferAsFirst()
     }
 
     /// `Recognizer.start(inputs:)` was called at `called` and returned at `returned`.
@@ -384,6 +401,8 @@ final class VoiceTimeline {
     /// After a barge-in, also writes how long each part of it took.
     func speechStopped(outputLatency: TimeInterval) {
         let time = now()
+        // The synthesizer may have scheduled the first buffer since the stop was requested.
+        writeRecorded()
         guard let stopped = reply else { return }
         reply = nil
         var extra: [String: CustomStringConvertible] = [
