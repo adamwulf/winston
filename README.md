@@ -125,6 +125,16 @@ UTC), `.info` and above, kept for 7 days.
 FellerBuncher prunes every old `.log` file in its folder, so the logs get a
 `Winston` folder of their own rather than sharing `Logs/`.
 
+### Voice timing
+
+Voice mode logs each step from the microphone to the transcript, and from a
+reply starting to it stopping, under its own label, so
+`grep label=voice.timeline` on a log file shows where the time went. Every
+line has `tMs`, milliseconds since that listening session started on the
+monotonic host clock, and `session`. Section 5 of
+[the barge-in latency research](docs/research/voice-barge-in-latency.md)
+lists the lines and how to read them.
+
 ### Getting them out
 
 - Mac: Help → Open Log Folder shows the folder in Finder. Help → Export Debug
@@ -152,8 +162,12 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   grep -rn -E "import os|OSLog|os_log|os\.Logger|Logger\(subsystem|NSLog|print\(" --exclude=WinstonLog.swift App/Winston Sources
   ```
 - One `private static let log = Logger(label: "<area>.<feature>")` per type,
-  such as `app.model`, `telegram.link`, or `voice.loop`. A swift-log `Logger`
-  binds to its handler when it's created, so keep loggers lazy like this.
+  such as `app.model`, `telegram.link`, `voice.loop`, or `voice.timeline`. A
+  swift-log `Logger` binds to its handler when it's created, so keep loggers
+  lazy like this.
+- Never log on the audio thread or the speech synthesizer's thread. Record
+  times and levels there (in an atomic or a `Mutex`), and write the line on
+  the main actor, as `VoiceTimeline` does.
 - Messages are fixed strings. Values go in metadata with lowerCamelCase keys:
   `log.error("sending text failed", error.logContext(["chatID": chat.id.description]))`.
 - Log every caught error that isn't rethrown, with `error.logContext(...)`. Use

@@ -14,6 +14,7 @@ private func makePlayingPipeline(on bed: VoiceTestBed) throws -> Pipeline {
         analyzerFormat: ScriptedRecognizer().audioFormat,
         voiceProcessing: false,
         ducksOtherAudio: true,
+        session: 0,
         environment: bed.environment
     )
     try pipeline.engine.start()
@@ -134,6 +135,39 @@ struct SpeechPlaybackTests {
 
         #expect(finished.count == 0)
         #expect(bed.audio.playedFrames == 0)
+    }
+
+    @Test func theFirstBufferIsTimedWhenItIsScheduledNotWhenItArrives() async throws {
+        let bed = VoiceTestBed()
+        let pipeline = try makePlayingPipeline(on: bed)
+        defer { pipeline.tearDown() }
+        let playback = makePlayback(on: pipeline, finished: FinishCounter())
+        let before = TimelineClock.now()
+
+        playback.receive(try speechBuffer(seconds: 0.1))
+        // Held back until the next buffer arrives.
+        #expect(playback.firstAudioHostTime == nil)
+        playback.receive(try speechBuffer(seconds: 0.1))
+        let firstAudio = try #require(playback.firstAudioHostTime)
+        #expect(firstAudio >= before)
+
+        // Later buffers don't move it.
+        playback.receive(try speechBuffer(seconds: 0.1))
+        playback.synthesisFinished()
+        #expect(playback.firstAudioHostTime == firstAudio)
+    }
+
+    @Test func aOneBufferMessageIsTimedWhenSynthesisFinishes() async throws {
+        let bed = VoiceTestBed()
+        let pipeline = try makePlayingPipeline(on: bed)
+        defer { pipeline.tearDown() }
+        let playback = makePlayback(on: pipeline, finished: FinishCounter())
+
+        playback.receive(try speechBuffer(seconds: 0.1))
+        #expect(playback.firstAudioHostTime == nil)
+        playback.synthesisFinished()
+
+        #expect(playback.firstAudioHostTime != nil)
     }
 
     @Test func onlyTheTrackedUtterancesFinishReachesThePlayback() async throws {

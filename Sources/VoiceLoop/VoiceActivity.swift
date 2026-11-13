@@ -39,24 +39,39 @@ struct VoiceActivityDetector {
 /// The detector as the microphone tap uses it: written on the audio thread, read on the main
 /// actor, which asks whether voice was heard since it last looked.
 final class VoiceActivity: Sendable {
+    /// One buffer's loudness and what the detector made of it, for the timeline log.
+    struct Reading: Sendable {
+        /// The buffer's RMS level.
+        let level: Float
+        /// The noise floor it was judged against; nil for the first buffer, which sets it.
+        let noiseFloor: Float?
+        let isVoice: Bool
+    }
+
     private let detector = Mutex(VoiceActivityDetector())
     private let heardVoice = Atomic<Bool>(false)
     /// The loudest buffer's RMS level since `takePeakDecibels()` last ran, as its bit pattern.
     /// Non-negative floats order the same way as their bit patterns, so an integer max works.
     private let peakLevel = Atomic<UInt32>(0)
 
-    /// Runs on the audio thread for each microphone buffer.
-    func process(_ samples: UnsafePointer<Float>, count: Int) {
-        guard count > 0 else { return }
+    /// Runs on the audio thread for each microphone buffer. Returns nil for an empty buffer.
+    @discardableResult
+    func process(_ samples: UnsafePointer<Float>, count: Int) -> Reading? {
+        guard count > 0 else { return nil }
         var sum: Float = 0
         for index in 0..<count {
             sum += samples[index] * samples[index]
         }
         let rms = (sum / Float(count)).squareRoot()
         peakLevel.max(rms.bitPattern, ordering: .relaxed)
-        if detector.withLock({ $0.process(rms: rms) }) {
+        let (noiseFloor, isVoice) = detector.withLock { detector in
+            let noiseFloor = detector.noiseFloor
+            return (noiseFloor, detector.process(rms: rms))
+        }
+        if isVoice {
             heardVoice.store(true, ordering: .relaxed)
         }
+        return Reading(level: rms, noiseFloor: noiseFloor, isVoice: isVoice)
     }
 
     /// Whether voice was heard since the last call.
@@ -67,7 +82,11 @@ final class VoiceActivity: Sendable {
     /// The loudest microphone buffer since the last call, in dBFS rounded to a whole number,
     /// for the logs. -120 stands for silence or no buffers.
     func takePeakDecibels() -> Int {
-        let rms = Float(bitPattern: peakLevel.exchange(0, ordering: .relaxed))
-        return rms > 0 ? max(-120, Int((20 * log10(rms)).rounded())) : -120
+        Self.decibels(Float(bitPattern: peakLevel.exchange(0, ordering: .relaxed)))
+    }
+
+    /// An RMS level in dBFS rounded to a whole number, for the logs. -120 stands for silence.
+    static func decibels(_ level: Float) -> Int {
+        level > 0 ? max(-120, Int((20 * log10(level)).rounded())) : -120
     }
 }

@@ -20,6 +20,8 @@ final class Pipeline {
     let fedAudio: FedAudioClock
     /// Whether the microphone has heard someone talking, from its loudness.
     let voiceActivity = VoiceActivity()
+    /// The `voice.timeline` log for this listening session.
+    let timeline: VoiceTimeline
     var recognizer: (any Recognizer)?
     var tasks: [Task<Void, Never>] = []
     private let analyzerFormat: AVAudioFormat
@@ -32,16 +34,19 @@ final class Pipeline {
     }
 
     /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
-    /// When false, it ducks them as little as it can.
+    /// When false, it ducks them as little as it can. `session` names the listening session in
+    /// the timeline log.
     init(
         analyzerFormat: AVAudioFormat,
         voiceProcessing: Bool,
         ducksOtherAudio: Bool,
+        session: Int,
         environment: VoiceEnvironment
     ) throws {
         engine = try environment.makeEngine()
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
+        timeline = VoiceTimeline(session: session, fedAudio: fedAudio)
         hasVoiceProcessing = voiceProcessing
         self.analyzerFormat = analyzerFormat
         guard let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
@@ -87,6 +92,9 @@ final class Pipeline {
         engine.connect(engine.mainMixerNode, to: engine.outputNode, format: outputFormat)
     }
 
+    /// The tap buffer size asked for, in frames. The system may deliver another size.
+    static let tapBufferSize: AVAudioFrameCount = 4096
+
     /// Taps the microphone in its current format, replacing any earlier tap. The format can
     /// change with the audio hardware, so `restartEngine()` taps it again.
     private func installMicrophoneTap() throws {
@@ -104,13 +112,14 @@ final class Pipeline {
         input.removeTap(onBus: 0)
         input.installTap(
             onBus: 0,
-            bufferSize: 4096,
+            bufferSize: Self.tapBufferSize,
             format: inputFormat,
             block: Self.microphoneTap(
                 converter: converter,
                 continuation: inputContinuation,
                 clock: fedAudio,
-                voiceActivity: voiceActivity
+                voiceActivity: voiceActivity,
+                timeline: timeline.microphone
             )
         )
     }
@@ -120,6 +129,7 @@ final class Pipeline {
     /// building a new engine, which turns voice processing off and on again.
     func restartEngine() throws {
         try connectOutputForVoiceProcessing()
+        timeline.microphone.reportNextBufferAsFirst()
         try installMicrophoneTap()
         engine.prepare()
         try engine.start()
@@ -157,18 +167,28 @@ final class Pipeline {
         inputContinuation.finish()
     }
 
-    /// Runs on the audio thread: measures each microphone buffer's loudness and converts it
-    /// for the analyzer.
+    /// Runs on the audio thread: measures each microphone buffer's loudness, records its times
+    /// for the timeline log, and converts it for the analyzer.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
         continuation: AsyncStream<AnalyzerInput>.Continuation,
         clock: FedAudioClock,
-        voiceActivity: VoiceActivity
+        voiceActivity: VoiceActivity,
+        timeline: MicrophoneTimeline
     ) -> AVAudioNodeTapBlock {
-        { buffer, _ in
+        { buffer, when in
+            var reading: VoiceActivity.Reading?
             if let samples = buffer.floatChannelData?[0] {
-                voiceActivity.process(samples, count: Int(buffer.frameLength))
+                reading = voiceActivity.process(samples, count: Int(buffer.frameLength))
             }
+            // Before the clock moves on, so the buffer is placed where it starts.
+            timeline.record(
+                frames: buffer.frameLength,
+                sampleRate: buffer.format.sampleRate,
+                when: when,
+                audioTime: clock.time,
+                voice: reading
+            )
             guard let converted = convert(buffer, with: converter) else { return }
             clock.add(frames: converted.frameLength)
             continuation.yield(AnalyzerInput(buffer: converted))
@@ -215,6 +235,15 @@ final class SpeechPlayback: Sendable {
         /// The synthesizer has delivered every buffer.
         var isSynthesized = false
         var isCancelled = false
+        /// When the first buffer was scheduled on the player, in host time, for the timeline log.
+        var firstScheduled: UInt64?
+
+        /// Call before scheduling a buffer.
+        mutating func noteScheduling() {
+            if firstScheduled == nil {
+                firstScheduled = TimelineClock.now()
+            }
+        }
     }
 
     /// The message being spoken, so it can be queued again if playback is cut off.
@@ -254,14 +283,22 @@ final class SpeechPlayback: Sendable {
             state.framesConverted += converted.frameLength
             if state.isSynthesized {
                 // Arrived after the synthesizer said it was done; this buffer now ends the message.
+                state.noteScheduling()
                 scheduleLast(converted, on: state.player)
                 return
             }
             if let previous = state.pending {
+                state.noteScheduling()
                 state.player.scheduleBuffer(previous)
             }
             state.pending = converted
         }
+    }
+
+    /// When the first buffer was scheduled on the player, in host time; nil until then. For the
+    /// timeline log.
+    var firstAudioHostTime: UInt64? {
+        state.withLock { $0.firstScheduled }
     }
 
     /// Called when the synthesizer has delivered every buffer
@@ -274,6 +311,7 @@ final class SpeechPlayback: Sendable {
             state.isSynthesized = true
             guard let last = state.pending else { return true }
             state.pending = nil
+            state.noteScheduling()
             scheduleLast(last, on: state.player)
             return false
         }

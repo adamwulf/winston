@@ -24,6 +24,7 @@ private struct LiveRecognizer: Recognizer {
     let transcriber: SpeechTranscriber
     let analyzer: SpeechAnalyzer
     let audioFormat: AVAudioFormat
+    let reportsFastResults: Bool
 
     var results: any AsyncSequence<TranscriptPiece, any Error> {
         transcriber.results.map { TranscriptPiece($0) }
@@ -66,9 +67,17 @@ private enum LiveSpeech {
         return LiveRecognizer(
             transcriber: transcriber,
             analyzer: SpeechAnalyzer(modules: [transcriber]),
-            audioFormat: audioFormat
+            audioFormat: audioFormat,
+            reportsFastResults: reportingOptions.contains(.fastResults)
         )
     }
+
+    /// `.fastResults` reports about every second of audio instead of about every four, so
+    /// barge-in and the live transcript follow the speaker sooner. See
+    /// docs/research/voice-barge-in-latency.md.
+    private static let reportingOptions: Set<SpeechTranscriber.ReportingOption> = [
+        .volatileResults, .alternativeTranscriptions, .fastResults,
+    ]
 
     /// A transcriber for the current locale, with its model installed.
     private static func makeTranscriber() async throws -> SpeechTranscriber {
@@ -76,13 +85,10 @@ private enum LiveSpeech {
               let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) else {
             throw VoiceLoopError.speechModelUnavailable
         }
-        // `.fastResults` reports about every second of audio instead of about every four, so
-        // barge-in and the live transcript follow the speaker sooner. See
-        // docs/research/voice-barge-in-latency.md.
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults, .alternativeTranscriptions, .fastResults],
+            reportingOptions: reportingOptions,
             attributeOptions: [.audioTimeRange]
         )
         do {

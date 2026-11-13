@@ -15,8 +15,9 @@ struct PauseDetector {
     var pauseThreshold: Duration
     /// The latest transcript passed to `update(text:at:)`.
     private(set) var text = ""
-    private var lastChange: Instant?
-    private var lastVoice: Instant?
+    /// When the transcript last changed, and when voice was last heard.
+    private(set) var lastChange: Instant?
+    private(set) var lastVoice: Instant?
 
     init(pauseThreshold: Duration) {
         self.pauseThreshold = pauseThreshold

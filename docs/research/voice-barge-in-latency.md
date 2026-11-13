@@ -4,6 +4,11 @@ Research only, 2026-11-13. No app code was changed. Measurements were made on
 a Mac (macOS 27.3, Xcode SDK 27.2) with a throwaway script; nothing here has
 been measured on an iPhone or with a real voice.
 
+Since then, `.fastResults` has been turned on (half of step 2; not
+`prepareToAnalyze`) and the timeline logging of step 1 has been added.
+Sections 1 and 2 describe the app as it was before; section 5 describes the
+logging as built.
+
 ## Summary
 
 - **The delay is the speech recognizer, not the app's logic.** Barge-in fires
@@ -433,48 +438,83 @@ label, a category, the message and the metadata[^35].
   monotonic, and nothing ties a line to the audio timeline. Two debug-level
   messages never reach the file[^34].
 
-### What to add
+### What was added
+
+Built after this research, as step 1 of the implementation steps, and
+described here as built. The differences from the first draft of this section
+are listed after the table.
 
 One label, `voice.timeline`, at `.info`, so `grep label=voice.timeline` gives
 the whole story. (FellerBuncher's own `category=` field is set by a parameter
 on its logging calls[^39], which `VoiceLoop` can't use: only `WinstonLogging`
 may import FellerBuncher[^40]. The label is the repo's unit of filtering.)
+`VoiceTimeline` writes every line; there is one per listening session, owned by
+its `Pipeline`.
 
 **Every line carries:**
 
 | Key | Meaning |
 |---|---|
-| `tMs` | Monotonic milliseconds since this listening session started, from the host clock (`mach_absolute_time`, the same clock as `AVAudioTime.hostTime`). For events that begin on the audio thread it is the buffer's *capture* time, not the time the line was written |
-| `audioMs` | Position on the analyzer's timeline (`FedAudioClock.time`)[^41], where it applies |
+| `tMs` | Monotonic milliseconds since this listening session started, from the host clock (`mach_absolute_time`, the same clock as `AVAudioTime.hostTime`). The session starts when its pipeline is built, just before the engine starts. For what the microphone tap or the synthesizer recorded, it is when that happened (a buffer's *capture* time), not when the line was written. A buffer with no capture time (an offline engine in the tests) uses the time the tap was called |
+| `audioMs` | Position on the analyzer's timeline (`FedAudioClock.time`)[^41], on the lines about audio: 3 to 9, 15 and 16. For a microphone buffer it is where the buffer starts |
 | `session` | `runID`, so lines from a rebuilt engine can be told apart |
 
 Messages are fixed strings and keys are lowerCamelCase, as the README
 requires; counts, levels and times only, never text[^40].
 
-**Never log from the audio thread.** `Pipeline.microphoneTap` and
-`VoiceActivity.process` should record times and levels in atomics, as
-`VoiceActivity` already does for the peak level[^10], and the main actor
-writes the line.
+**Nothing logs from the audio thread or the synthesizer's thread.**
+`Pipeline.microphoneTap` hands each buffer's capture time, analyzer position
+and `VoiceActivity.process` reading to `MicrophoneTimeline`, which only records
+them under a `Mutex`; `SpeechPlayback` records when its first buffer is
+scheduled. `VoiceTimeline.writeRecorded()` writes those lines on the main
+actor: `VoiceLoop.checkForPause` calls it every 100 ms, and every other line
+calls it first, so the file stays in order.
 
-| # | Message | Where to log it | Extra keys |
+| # | Message | Where it is written | Extra keys |
 |---|---|---|---|
-| 1 | "timeline started" | `VoiceLoop.startPipeline`, beside "voice mode started"[^6] | `echoCancellation`, `fastResults`, `tapFramesRequested`, `analyzerRate` |
-| 2 | "recognizer started" | `VoiceLoop.startPipeline`, after `recognizer.start(inputs:)` returns[^6] | `startMs` |
-| 3 | "first mic buffer" | recorded in `Pipeline.microphoneTap`[^5]; written once by `VoiceLoop.checkForPause`[^11] | `tapFrames`, `tapRate`, `deliveryMs` (callback time minus capture time) |
-| 4 | "voice started" | detected in `VoiceActivity.process`[^10]; written on the main actor | `levelDb`, `floorDb`, `speaking`, `detectMs` (capture to main actor) |
+| 1 | "timeline started" | `VoiceLoop.startPipeline`, after "voice mode started"[^6] | `echoCancellation`, `fastResults`, `tapFramesRequested`, `analyzerRate`. Its `tMs` is 0 |
+| 2 | "recognizer started" | `VoiceLoop.startPipeline`, after line 1[^6] | `startMs` (how long `recognizer.start(inputs:)` took) |
+| 3 | "first mic buffer" | recorded in `Pipeline.microphoneTap`[^5]; written by `writeRecorded()`. Again after the engine restarts | `tapFrames`, `tapRate`, `deliveryMs` (callback time minus capture time; left out when the buffer has no capture time) |
+| 4 | "voice started" | recorded in `Pipeline.microphoneTap` from `VoiceActivity.process`[^10]; written by `writeRecorded()` | `levelDb`, `floorDb`, `speaking`, `detectMs` (capture to the line) |
 | 5 | "voice ended" | same | `voicedMs` |
-| 6 | "first result" | `VoiceLoop.handle`, when a result gives an empty transcript its first word[^1] | `rangeStartMs`, `rangeEndMs`, `lagMs` (`audioMs` minus `rangeStartMs`), `words`, `final`, `speaking`, `sinceVoiceMs` |
+| 6 | "first result" | `VoiceLoop.handle`, when a result gives an empty transcript its first word[^1] | `rangeStartMs`, `rangeEndMs`, `wordStartMs`, `lagMs` (`audioMs` minus `wordStartMs`), `words`, `final`, `speaking`, `sinceVoiceMs` |
 | 7 | "result" | `VoiceLoop.handle`, every other result applied[^1] | `rangeEndMs`, `words`, `final` |
 | 8 | "result ignored" | `VoiceLoop.handle`, the branch that ignores results while speaking[^1] | `reason` (`noEchoCancellation` or `tooFewWords`), `words` |
-| 9 | "barge-in decided" | `VoiceLoop.handle`, the barge-in branch[^1] (later also the VAD stage) | `trigger` (`words` or `voice`), `words`, `sinceVoiceMs`, `replyMs` |
-| 10 | "speech stop requested" | `VoiceLoop.silence`, on entry[^9] | `reason` |
-| 11 | "speech stopped" | `VoiceLoop.silence`, after `player.stop()` returns[^9] | `stopMs`, `outputLatencyMs` |
-| 12 | "speech started" | `VoiceLoop.speakNextIfIdle`, after `player.play()`[^3] | `reply` (a counter), `chars`, `queued`, `voiceActive` |
-| 13 | "speech first audio" | recorded in `SpeechPlayback.receive` when the first buffer is scheduled[^42]; written on the main actor | `synthMs` |
-| 14 | "speech finished" | `VoiceLoop.speechFinished`[^43] | the "reply ended" fields |
+| 9 | "barge-in decided" | `VoiceLoop.handle`, the barge-in branch[^1] | `trigger` (`words`; later also `voice`), `words`, `sinceVoiceMs`, `replyMs` |
+| 10 | "speech stop requested" | `VoiceLoop.silence`, once it has a reply to stop[^9] | `reason`, `reply` |
+| 11 | "speech stopped" | `VoiceLoop.silence`, after `player.stop()` returns[^9] | `reply`, `stopMs`, `outputLatencyMs` |
+| 12 | "speech started" | `VoiceLoop.speakNextIfIdle`, after `player.play()`[^3] | `reply` (counts replies in the session), `chars`, `queued`, `voiceActive` |
+| 13 | "speech first audio" | recorded in `SpeechPlayback` when the first buffer is scheduled[^42]; written by `writeRecorded()` | `reply`, `synthMs` |
+| 14 | "speech finished" | `VoiceLoop.speechFinished`[^43] | the "reply ended" fields, and `reply` |
 | 15 | "utterance sent" | `VoiceLoop.checkForPause`, where it yields[^11] | `words`, `sinceVoiceMs`, `sinceChangeMs`, `endsSentence` |
 | 16 | "utterance discarded" | `VoiceLoop.discardCurrentUtterance`[^44] | `words` |
-| 17 | "barge-in timeline" | `VoiceLoop.silence`, when the reason is `bargeIn`[^9] | `voiceToResultMs`, `resultToStopMs`, `voiceToStopMs` |
+| 17 | "barge-in timeline" | `VoiceLoop.silence`, after line 11, when a barge-in stopped the reply[^9] | `voiceToResultMs`, `resultToStopMs`, `voiceToStopMs` |
+
+What the keys measure:
+
+- "voice started" is the first buffer the existing detector calls voice after
+  quiet. `speaking` is whether a reply was playing when the line was written,
+  up to 100 ms after the buffer.
+- "voice ended" is written once the voice has been absent for 0.5 s of audio
+  (counted in frames, so the gaps between words don't end it). Its `tMs` and
+  `audioMs` are where that quiet began, so the voice stopped at `tMs` and the
+  line could only be written about 500 ms later. `voicedMs` is the span's
+  length on the analyzer's timeline.
+- `sinceVoiceMs` on lines 6 and 9, and the `voiceTo...` keys on line 17, count
+  from the latest "voice started". If the speaker paused for more than 0.5 s
+  before the words that were recognized, that is a later start than the one
+  that began the utterance; the "voice started" lines above show it.
+- `sinceVoiceMs` and `sinceChangeMs` on line 15 are the pause detector's own
+  view: since its 100 ms poll last heard voice, and since the transcript last
+  changed.
+- `wordStartMs` is where the result's first kept word starts, from the
+  word's `audioTimeRange`; it and `lagMs` are left out if the result has no
+  word timings.
+- `replyMs` is how long the reply had been playing; `synthMs` is from just
+  before `synthesizer.write` to the first buffer scheduled on the player;
+  `stopMs` is from line 10 to line 11.
+- `resultToStopMs` is from the barge-in decision (when the result was
+  handled) to the player having stopped.
 
 `outputLatencyMs` is `engine.outputNode.presentationLatency`, the hardware
 latency the system reports on both platforms[^20], so "the speaker went quiet"
@@ -482,19 +522,42 @@ is about `tMs + outputLatencyMs`. Measuring the real moment would need a tap
 on the output, which isn't worth it for diagnosis.
 
 "first mic buffer" is also when audio first reaches the recognizer: the same
-tap callback converts the buffer and queues it[^5]. "voice started" is the
-first buffer the detector calls voice after a quiet one.
+tap callback converts the buffer and queues it[^5].
+
+**Differences from the first draft of this section:**
+
+- "timeline started" has `tMs=0`, the session's start, though it is written
+  after the engine and the recognizer have started, beside "voice mode
+  started". Line 2 follows it.
+- "first mic buffer" is written again after the engine restarts, since the tap
+  is installed again and its size and rate can change with the hardware. On
+  the iPhone every new engine stops once right after starting, so the second
+  line is the one that describes the running tap.
+- `deliveryMs` is left out when the buffer has no capture time, rather than
+  showing 0.
+- "first result" has `wordStartMs`, and `lagMs` is measured from it, not from
+  `rangeStartMs`: a result's range can start seconds before its first word (in
+  appendix A, "Wait" spoken at 3.0 s came in a result for 0.000 to 3.910 s).
+- "speech stop requested" is written only when there is a reply to stop:
+  `silence` is also called on every teardown, when there may be none.
+- The speech lines carry `reply`, so the lines for one reply can be matched.
+- "barge-in timeline" is written when a barge-in decided the stop, which is
+  when `silence` has the reason `bargeIn`.
+- "speech finished" repeats the fields "reply ended" computed rather than
+  computing them again, because reading the peak level resets it.
+- `fastResults` comes from a new `Recognizer.reportsFastResults` property.
 
 **Format.** As the file writes it today[^35], for example:
 
 ```
-2026-11-13 17:20:01.123 [UI] INFO VoiceLoop.handle(_:):412 label=voice.timeline category=default msg="first result" tMs=18342 audioMs=18110 session=3 rangeStartMs=14320 rangeEndMs=18100 lagMs=3790 words=1 final=false speaking=true sinceVoiceMs=3788
-2026-11-13 17:20:01.131 [UI] INFO VoiceLoop.silence(consumingEcho:reason:):702 label=voice.timeline category=default msg="barge-in timeline" tMs=18350 session=3 voiceToResultMs=3788 resultToStopMs=8 voiceToStopMs=3796
+2026-11-13 17:20:01.123 [UI] INFO VoiceTimeline.result(_:words:isFirst:firstWordStart:):279 label=voice.timeline category=default msg="first result" tMs=18342 audioMs=18110 session=3 rangeStartMs=13900 rangeEndMs=18100 wordStartMs=14320 lagMs=3790 words=1 final=false speaking=true sinceVoiceMs=3788
+2026-11-13 17:20:01.131 [UI] INFO VoiceTimeline.speechStopped(outputLatency:):351 label=voice.timeline category=default msg="barge-in timeline" tMs=18350 session=3 voiceToResultMs=3788 resultToStopMs=8 voiceToStopMs=3796
 ```
 
 (The example values are made up. The exact form of the source field and the
 `category=default` value are assumed: the formatter writes both fields, but
-how it renders them when no category is given was not checked.)
+how it renders them when no category is given was not checked. The source is
+the `VoiceTimeline` method that wrote the line.)
 
 **Reading it.** `voiceToResultMs` is the recognizer's delay. `lagMs` on "first
 result" says how old the first word's audio was when the result arrived.
@@ -926,7 +989,7 @@ out("done wall=\(f3(box.elapsed()))")
 [^37]: [VoiceLoop.makeRunningPipeline](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.makeRunningPipeline)
 [^38]: [VoiceLoop.engineStopped](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.engineStopped)
 [^39]: [FellerBuncher, Logger+Convenience.swift, the category overloads](https://github.com/adamwulf/FellerBuncher/blob/main/Sources/FellerBuncher/Logger+Convenience.swift)
-[^40]: [README, Logging conventions](../../README.md:136-171)
+[^40]: [README, Logging conventions](../../README.md:146-185)
 [^41]: [FedAudioClock](../../Sources/VoiceLoop/AudioPipeline.swift:FedAudioClock)
 [^42]: [SpeechPlayback.receive](../../Sources/VoiceLoop/AudioPipeline.swift:SpeechPlayback.receive)
 [^43]: [VoiceLoop.speechFinished](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.speechFinished)
@@ -951,4 +1014,4 @@ out("done wall=\(f3(box.elapsed()))")
 [^62]: [FluidInference parakeet-realtime-eou-120m-coreml model card, read by a helper](https://huggingface.co/FluidInference/parakeet-realtime-eou-120m-coreml)
 [^63]: [LiveKit Agents docs, Turns and interruptions (and the Silero plugin's vad.py in the livekit/agents repository), read by a helper](https://docs.livekit.io/agents/build/turns/)
 [^64]: [Pipecat, vad_analyzer.py, VADParams defaults, read by a helper](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/audio/vad/vad_analyzer.py)
-[^65]: [PLAN.md, Barge-in behaviour and Risk 1](../../PLAN.md:244-324)
+[^65]: [PLAN.md, Barge-in behaviour and Risk 1](../../PLAN.md:247-327)

@@ -124,11 +124,20 @@ struct Transcript {
     /// The part of `text` whose first run starts at or after `time`, judged by the
     /// `audioTimeRange` attributes. Empty when no run qualifies or the timing is missing.
     static func words(of text: AttributedString, startingAt time: CMTime) -> String {
-        for run in text.runs {
-            if let range = run.audioTimeRange, range.start >= time {
-                return String(text[run.range.lowerBound...].characters)
-            }
+        guard let run = firstRun(of: text, startingAt: time) else { return "" }
+        return String(text[run.range.lowerBound...].characters)
+    }
+
+    /// Where that part of `text` starts on the audio timeline, for the logs. Nil when no run
+    /// qualifies or the timing is missing.
+    static func start(of text: AttributedString, startingAt time: CMTime) -> CMTime? {
+        firstRun(of: text, startingAt: time)?.audioTimeRange?.start
+    }
+
+    private static func firstRun(of text: AttributedString, startingAt time: CMTime) -> AttributedString.Runs.Run? {
+        text.runs.first { run in
+            guard let range = run.audioTimeRange else { return false }
+            return range.start >= time
         }
-        return ""
     }
 }

@@ -6,6 +6,8 @@ import Speech
 package protocol Recognizer: Sendable {
     /// The audio format it takes.
     var audioFormat: AVAudioFormat { get }
+    /// Whether it reports with `SpeechTranscriber`'s `.fastResults` option, for the logs.
+    var reportsFastResults: Bool { get }
     /// What it hears, until it is cancelled or fails.
     var results: any AsyncSequence<TranscriptPiece, any Error> { get }
     /// Starts reading microphone audio from `inputs`.
