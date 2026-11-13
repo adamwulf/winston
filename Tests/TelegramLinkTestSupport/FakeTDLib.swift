@@ -43,6 +43,8 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         var updateHandlers: [@Sendable (Data) -> Void] = []
         var requests: [Request] = []
         var failures: [Call: any Swift.Error] = [:]
+        /// Chats whose history can't be read, and the error `getChatHistory` gives for each.
+        var historyFailures: [Int64: any Swift.Error] = [:]
         var isLoggedIn: Bool
         var passwordHint: String?
         var chats: [Chat] = []
@@ -102,6 +104,12 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
 
     package func succeed(_ call: Call) {
         withState { $0.failures[call] = nil }
+    }
+
+    /// Makes every later `getChatHistory` of one chat fail with a TDLib error, as when that
+    /// chat can't be read. The other chats' histories still load.
+    package func failHistory(of chatID: Int64, code: Int, message: String) {
+        withState { $0.historyFailures[chatID] = TDLibKit.Error(code: code, message: message) }
     }
 
     /// Makes every later `call` wait, after it is recorded in `requests`, until `release(_:)`.
@@ -397,6 +405,9 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         onlyLocal: Bool?
     ) async throws -> Messages {
         try await begin(.getChatHistory(chatID: chatId, fromMessageID: fromMessageId, limit: limit), .getChatHistory)
+        if let failure = withState({ $0.historyFailures[chatId ?? 0] }) {
+            throw failure
+        }
         let page: [Message] = withState { state in
             let newestFirst = (state.messages[chatId ?? 0] ?? []).sorted { $0.id > $1.id }
             let from = fromMessageId ?? 0

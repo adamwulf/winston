@@ -271,6 +271,56 @@ package func textMessage(
     )
 }
 
+/// A photo message in the given sizes (TDLib sends a few), with a caption, or "" for none.
+package func photoMessage(
+    id: Int64,
+    chatID: Int64,
+    isOutgoing: Bool = false,
+    caption: String = "",
+    sizes: [PhotoSize]
+) -> Message {
+    makeMessage(
+        id: id,
+        chatID: chatID,
+        isOutgoing: isOutgoing,
+        content: .messagePhoto(MessagePhoto(
+            caption: formatted(caption),
+            hasSpoiler: false,
+            isSecret: false,
+            photo: Photo(hasStickers: false, minithumbnail: nil, sizes: sizes),
+            showCaptionAboveMedia: false,
+            video: nil
+        ))
+    )
+}
+
+/// A file sent as a document, with a caption, or "" for none.
+package func documentMessage(
+    id: Int64,
+    chatID: Int64,
+    isOutgoing: Bool = false,
+    caption: String = "",
+    document: File,
+    fileName: String,
+    mimeType: String
+) -> Message {
+    makeMessage(
+        id: id,
+        chatID: chatID,
+        isOutgoing: isOutgoing,
+        content: .messageDocument(MessageDocument(
+            caption: formatted(caption),
+            document: Document(
+                document: document,
+                fileName: fileName,
+                mimeType: mimeType,
+                minithumbnail: nil,
+                thumbnail: nil
+            )
+        ))
+    )
+}
+
 /// A private chat with a bot, and the bot's user, sharing `id`.
 package func botChat(id: Int64, title: String, username: String) -> (chat: Chat, user: User) {
     (

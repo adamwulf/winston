@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import TelegramLink
 import TelegramLinkTestSupport
 import VoiceLoop
@@ -52,7 +53,8 @@ final class Harness {
 
     /// Two bot chats, Home (chat 1) and Laptop (chat 2), listed newest first as TDLib does,
     /// each with a little history.
-    static func withTwoBots() -> Harness {
+    /// - Parameter settings: values already in the user defaults when the model starts up.
+    static func withTwoBots(settings: [String: Any] = [:]) -> Harness {
         let fake = FakeTDLib()
         fake.addBotChat(id: 2, title: "Laptop", username: "laptop_bot")
         fake.addBotChat(id: 1, title: "Home", username: "home_bot")
@@ -61,7 +63,7 @@ final class Harness {
             textMessage(id: 11, chatID: 1, "Two jobs are queued."),
             textMessage(id: 20, chatID: 2, "The coordinator is offline."),
         ])
-        return Harness(fake: fake)
+        return Harness(fake: fake, settings: settings)
     }
 
     /// Starts the model and waits until it is logged in with its chats and their history loaded.
@@ -72,4 +74,43 @@ final class Harness {
                 && model.chats.allSatisfy { model.messages[$0.id] != nil }
         }
     }
+}
+
+/// Every value a property of an observable model takes, in order, from when the log is made:
+/// what a view showing it would see change. For states that pass too quickly to catch with
+/// `eventually`, such as the login states of a logout.
+@MainActor
+final class ValueLog<Value> {
+    private let read: @MainActor () -> Value
+    /// The value before each change so far.
+    private var earlier: [Value] = []
+
+    init(_ read: @escaping @MainActor () -> Value) {
+        self.read = read
+        observe()
+    }
+
+    /// The values so far, the current one last.
+    var values: [Value] {
+        earlier + [read()]
+    }
+
+    private func observe() {
+        withObservationTracking {
+            _ = read()
+        } onChange: { [weak self] in
+            // Called on the main actor just before each change, so `read()` still gives the old value.
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.earlier.append(self.read())
+                self.observe()
+            }
+        }
+    }
+}
+
+/// Lets queued main-actor work, TDLib's updates and the audio engine run for a moment, before
+/// checking that something did NOT happen.
+func settle(_ duration: Duration = .milliseconds(250)) async throws {
+    try await Task.sleep(for: duration)
 }
