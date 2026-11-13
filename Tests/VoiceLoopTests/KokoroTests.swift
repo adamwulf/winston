@@ -730,6 +730,25 @@ struct KokoroLanguageTests {
 
         #expect(throws: CancellationError.self) { try result.get() }
     }
+
+    @Test func removingTheStoredModelDeletesItsFolderAndMarkerAndNothingElse() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // As a finished download leaves them, plus a file of someone else's.
+        let folder = directory.appending(path: "Kokoro-82M-CoreML", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
+        try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.bin"))
+        try Data().write(to: directory.appending(path: "Kokoro-82M-CoreML.downloaded"))
+        try Data().write(to: directory.appending(path: "other"))
+        let engine = LiveKokoro(directory: directory)
+
+        #expect(try await engine.removeStoredModel())
+
+        let left = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(left == ["other"])
+        // Nothing more to remove.
+        #expect(try await engine.removeStoredModel() == false)
+    }
 }
 
 // MARK: - The real model
@@ -765,6 +784,10 @@ private final class RecordingKokoro: KokoroEngine {
 
     func unload() async {
         await engine.unload()
+    }
+
+    func removeStoredModel() async throws -> Bool {
+        try await engine.removeStoredModel()
     }
 
     func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {

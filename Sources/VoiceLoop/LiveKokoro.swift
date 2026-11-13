@@ -89,6 +89,18 @@ package actor LiveKokoro: KokoroEngine {
         model = nil
     }
 
+    package func removeStoredModel() throws -> Bool {
+        model = nil
+        let manager = FileManager.default
+        // The marker first: if removing the folder fails partway, what is left counts as an
+        // unfinished download, which the next load completes.
+        let stored = [downloadedMarker, modelFolder].filter { manager.fileExists(atPath: $0.path) }
+        for item in stored {
+            try manager.removeItem(at: item)
+        }
+        return !stored.isEmpty
+    }
+
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         // A request waits here while an earlier one renders. If its speech was stopped meanwhile
         // (a newer preview, say), rendering it would only delay the next one.

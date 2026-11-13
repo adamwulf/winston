@@ -19,6 +19,9 @@ package protocol KokoroEngine: Sendable {
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
+    /// Deletes the stored model, freeing it first if it is loaded, so the next `load` downloads
+    /// it again. Returns whether any of it was stored.
+    func removeStoredModel() async throws -> Bool
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
