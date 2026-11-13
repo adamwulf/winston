@@ -165,6 +165,5 @@ public enum ChatEvent: Sendable {
 
 public enum TelegramLinkError: Error, Sendable, Equatable {
     case notStarted
-    case notImplemented
     case tdlib(code: Int, message: String)
 }

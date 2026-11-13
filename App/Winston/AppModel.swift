@@ -433,7 +433,6 @@ func userMessage(for error: any Error) -> String {
         switch error {
         case .tdlib(_, let message): return message
         case .notStarted: return "Telegram hasn't started yet."
-        case .notImplemented: return "Telegram support isn't implemented yet."
         }
     }
     if let error = error as? VoiceLoopError {
@@ -444,8 +443,6 @@ func userMessage(for error: any Error) -> String {
             return "Winston can't use speech recognition. Turn on speech recognition for Winston in Privacy & Security settings."
         case .speechModelUnavailable:
             return "The on-device speech model for your language isn't available."
-        case .notImplemented:
-            return "Voice mode isn't implemented yet."
         }
     }
     if let error = error as? PhotoFiles.Failure {

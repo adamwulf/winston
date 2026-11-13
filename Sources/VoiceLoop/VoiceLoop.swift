@@ -540,7 +540,6 @@ extension VoiceOption.Quality {
 }
 
 public enum VoiceLoopError: Error, Sendable, Equatable {
-    case notImplemented
     case microphonePermissionDenied
     case speechPermissionDenied
     case speechModelUnavailable
