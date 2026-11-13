@@ -121,6 +121,13 @@ struct SettingsView: View {
                     LabeledContent("Voice model") {
                         kokoroModelStatus
                     }
+                    // Its own row, full width under the status, like the sliders under theirs.
+                    if case .downloading(let progress) = model.voiceLoop.kokoroModelState, progress < 1 {
+                        ProgressView(value: progress) {
+                            Text("Download progress")
+                        }
+                        .labelsHidden()
+                    }
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
@@ -217,7 +224,8 @@ struct SettingsView: View {
     }
 
     /// Where the Kokoro model is: its size before anything has asked for it, the download's
-    /// progress, ready, or failed with a retry.
+    /// percentage (its progress bar is a row of its own), ready with a button that plays a
+    /// sample, or failed with a retry.
     @ViewBuilder
     private var kokoroModelStatus: some View {
         switch model.voiceLoop.kokoroModelState {
@@ -230,14 +238,23 @@ struct SettingsView: View {
                 Text("Loading…")
             }
         case .downloading(let progress):
-            HStack {
-                ProgressView(value: progress)
-                    .frame(width: 80)
-                Text("Downloading \(progress.formatted(.percent.precision(.fractionLength(0))))")
-                    .monospacedDigit()
-            }
+            // The progress bar is a row of its own, below.
+            Text("Downloading \(progress.formatted(.percent.precision(.fractionLength(0))))")
+                .monospacedDigit()
         case .ready:
-            Label("Ready", systemImage: "checkmark.circle.fill")
+            HStack {
+                Label("Ready", systemImage: "checkmark.circle.fill")
+                // Picking a Kokoro voice says nothing while its model downloads, so this
+                // plays the sample once it's ready.
+                Button {
+                    model.previewVoice()
+                } label: {
+                    Image(systemName: "play.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Play a sample")
+                .accessibilityLabel("Play a sample")
+            }
         case .failed:
             HStack {
                 Text("Couldn't download")
