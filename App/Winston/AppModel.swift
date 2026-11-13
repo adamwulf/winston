@@ -1,9 +1,9 @@
 import Foundation
-import OSLog
 import PhotosUI
 import SwiftUI
 import TelegramLink
 import VoiceLoop
+import WinstonLogging
 #if os(iOS)
 import UIKit
 #endif
@@ -15,11 +15,11 @@ private enum StorageKey {
     static let voiceIdentifier = "voiceIdentifier"
 }
 
-private let logger = Logger(subsystem: "com.milestonemade.winston", category: "AppModel")
-
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
 @Observable
 final class AppModel {
+    private static let log = Logger(label: "app.model")
+
     /// False when `Secrets.xcconfig` is missing, so there is no Telegram session.
     let hasCredentials: Bool
     let voiceLoop: VoiceLoop
@@ -157,6 +157,7 @@ final class AppModel {
             do {
                 try await link.start()
             } catch {
+                Self.log.error("Telegram start failed", error.logContext())
                 startError = userMessage(for: error)
             }
         }
@@ -199,6 +200,7 @@ final class AppModel {
         do {
             try await link?.logOut()
         } catch {
+            Self.log.error("log out failed", error.logContext())
             errorMessage = userMessage(for: error)
         }
     }
@@ -263,6 +265,7 @@ final class AppModel {
                 selectedChatID = chats.first?.id
             }
         } catch {
+            Self.log.error("loading bot chats failed", error.logContext())
             chatsError = userMessage(for: error)
             return
         }
@@ -274,6 +277,7 @@ final class AppModel {
                 let newer = (messages[chat.id] ?? []).filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
             } catch {
+                Self.log.error("loading chat history failed", error.logContext(["chatID": chat.id.description]))
                 errorMessage = "Couldn't load the history for \(chat.title): \(userMessage(for: error))"
             }
         }
@@ -343,6 +347,7 @@ final class AppModel {
             try await link.sendText(text, to: chat.id)
             return true
         } catch {
+            Self.log.error("sending text failed", error.logContext(["chatID": chat.id.description]))
             errorMessage = userMessage(for: error)
             return false
         }
@@ -364,6 +369,8 @@ final class AppModel {
             try await link.sendPhoto(fileURL: fileURL, caption: caption.isEmpty ? nil : caption, to: chat.id)
             return true
         } catch {
+            // Codes only: a picked photo's load error can name the file.
+            Self.log.error("sending photo failed", error.logCodes(["chatID": chat.id.description]))
             errorMessage = userMessage(for: error)
             return false
         }
@@ -374,6 +381,10 @@ final class AppModel {
         do {
             try await link.toggleReaction("👍", on: message.id, in: message.chatID)
         } catch {
+            Self.log.error("toggling reaction failed", error.logContext([
+                "chatID": message.chatID.description,
+                "messageID": message.id.description,
+            ]))
             errorMessage = userMessage(for: error)
         }
     }
@@ -385,7 +396,10 @@ final class AppModel {
             do {
                 try await link.markRead([message.id], in: message.chatID)
             } catch {
-                logger.error("markRead failed: \(String(describing: error))")
+                Self.log.error("marking message read failed", error.logContext([
+                    "chatID": message.chatID.description,
+                    "messageID": message.id.description,
+                ]))
             }
         }
     }
@@ -430,6 +444,7 @@ final class AppModel {
                 // Voice mode may have been turned off while start() waited for permission.
                 if !isVoiceMode { voiceLoop.stop() }
             } catch {
+                Self.log.error("starting voice mode failed", error.logContext())
                 isVoiceMode = false
                 errorMessage = userMessage(for: error)
             }

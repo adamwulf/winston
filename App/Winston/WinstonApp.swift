@@ -1,14 +1,38 @@
 import SwiftUI
+import WinstonLogging
 
 @main
 struct WinstonApp: App {
+    private static let log = Logger(label: "app.lifecycle")
+
     /// Lives as long as the app, which keeps its TelegramLink alive.
-    @State private var model = AppModel()
+    @State private var model: AppModel
     #if os(macOS)
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     #else
     @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
     #endif
+
+    init() {
+        // First, before anything creates a Logger: a swift-log Logger binds to its handler when
+        // it's created. The model is made here, after bootstrap, rather than in its property's
+        // initializer, which would run before this.
+        WinstonLog.bootstrap()
+        Self.logLaunch()
+        _model = State(initialValue: AppModel())
+    }
+
+    private static func logLaunch() {
+        let bundle = Bundle.main
+        let process = ProcessInfo.processInfo
+        log.notice("app started", [
+            "version": bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
+            "build": bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
+            "bundleID": bundle.bundleIdentifier ?? "unknown",
+            "pid": process.processIdentifier,
+            "osVersion": process.operatingSystemVersionString,
+        ])
+    }
 
     var body: some Scene {
         WindowGroup {

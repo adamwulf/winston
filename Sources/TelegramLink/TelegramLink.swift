@@ -1,5 +1,7 @@
 import Foundation
 import ImageIO
+import Logging
+import LogSupport
 // TDLibKit predates Swift concurrency, so its types aren't marked Sendable. `TDLibClient`
 // is safe to share: requests go through its own dispatch queues and a concurrent dictionary.
 @preconcurrency import TDLibKit
@@ -18,6 +20,8 @@ import ImageIO
 /// client and this actor creates a fresh one by itself, so `authStates` continues with
 /// `.loggingOut`, `.closed`, `.starting` and `.needsPhoneNumber`. Call `start()` only once.
 public actor TelegramLink {
+    private static let log = Logger(label: "telegram.link")
+
     public nonisolated let authStates: AsyncStream<AuthState>
     public nonisolated let events: AsyncStream<ChatEvent>
 
@@ -63,7 +67,11 @@ public actor TelegramLink {
         let client = makeClient(manager)
         // TDLib logs verbosely by default; keep only errors. The client's encoder writes the
         // snake_case keys TDLib expects.
-        _ = try? client.execute(query: DTO(SetLogVerbosityLevel(newVerbosityLevel: 1), encoder: client.encoder))
+        do {
+            _ = try client.execute(query: DTO(SetLogVerbosityLevel(newVerbosityLevel: 1), encoder: client.encoder))
+        } catch {
+            Self.log.warning("couldn't lower TDLib log verbosity", error.tdlibLogContext())
+        }
     }
 
     // MARK: - Login
@@ -104,6 +112,7 @@ public actor TelegramLink {
                 try await client.loadChats(chatList: .chatListMain, limit: Self.chatListLimit)
             } catch let error as TDLibKit.Error where error.code == 404 {
                 // Every chat in the main list is already loaded.
+                Self.log.debug("main chat list already loaded", error.tdlibLogContext())
             }
             let chats = try await client.getChats(chatList: .chatListMain, limit: Self.chatListLimit)
             var bots: [BotChat] = []
@@ -276,8 +285,15 @@ public actor TelegramLink {
     // MARK: - Updates
 
     private func handle(_ data: Data) {
-        // Updates this version of TDLibKit can't decode are ones the app doesn't use.
-        guard let update = try? decoder.decode(Update.self, from: data) else { return }
+        let update: Update
+        do {
+            update = try decoder.decode(Update.self, from: data)
+        } catch {
+            // Updates this version of TDLibKit can't decode are ones the app doesn't use. Codes
+            // only: a decoding error's description can quote the update's values.
+            Self.log.debug("skipped an update TDLibKit can't decode", error.logCodes(["bytes": String(data.count)]))
+            return
+        }
         switch update {
         case .updateAuthorizationState(let update):
             handleAuthorizationState(update.authorizationState)
@@ -309,7 +325,13 @@ public actor TelegramLink {
     }
 
     private func handleAuthorizationState(_ state: AuthorizationState) {
-        authContinuation.yield(Mapping.authState(state))
+        let mapped = Mapping.authState(state)
+        if case .unsupported(let tdlibState) = mapped {
+            // Mapping names the TDLib state the app doesn't handle.
+            publish(mapped, tdlibState: tdlibState)
+        } else {
+            publish(mapped)
+        }
         switch state {
         case .authorizationStateWaitTdlibParameters:
             setTdlibParameters()
@@ -348,10 +370,22 @@ public actor TelegramLink {
                 // Usually a missing api_id / api_hash: TDLib only checks here that they are
                 // present. A wrong but non-empty value fails later, as a TelegramLinkError.tdlib
                 // thrown from submitPhoneNumber. Login can't go further.
+                Self.log.error("setTdlibParameters failed", error.tdlibLogContext())
                 let message = (error as? TDLibKit.Error)?.message ?? error.localizedDescription
-                authContinuation.yield(.unsupported("setTdlibParameters failed: \(message)"))
+                publish(.unsupported("setTdlibParameters failed: \(message)"))
             }
         }
+    }
+
+    /// Hands a login state to `authStates`, and logs the transition. The state's name only: a
+    /// password hint or an error message stays out of the log.
+    private func publish(_ state: AuthState, tdlibState: String? = nil) {
+        var metadata = ["state": state.logName]
+        if let tdlibState {
+            metadata["tdlibState"] = tdlibState
+        }
+        Self.log.notice("auth state changed", metadata)
+        authContinuation.yield(state)
     }
 
     private func handleChatAction(_ action: ChatAction, in chat: ChatID) {
@@ -379,5 +413,35 @@ public actor TelegramLink {
     private func stopTyping(in chat: ChatID) {
         typingTimeouts.removeValue(forKey: chat)?.cancel()
         eventContinuation.yield(.typing(chat: chat, isTyping: false))
+    }
+}
+
+extension AuthState {
+    /// The state's name for logs, without its associated value (a password hint, or an error
+    /// message).
+    public var logName: String {
+        switch self {
+        case .starting: "starting"
+        case .needsPhoneNumber: "needsPhoneNumber"
+        case .needsCode: "needsCode"
+        case .needsPassword: "needsPassword"
+        case .ready: "ready"
+        case .loggingOut: "loggingOut"
+        case .closed: "closed"
+        case .unsupported: "unsupported"
+        }
+    }
+}
+
+private extension Swift.Error {
+    /// `logContext`, plus TDLib's code and message when this is a `TDLibKit.Error`, a struct
+    /// that `logContext` doesn't reflect.
+    func tdlibLogContext() -> [String: String] {
+        var context = logContext()
+        if let error = self as? TDLibKit.Error {
+            context["tdlibCode"] = String(error.code)
+            context["tdlibMessage"] = error.message
+        }
+        return context
     }
 }

@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonLogging
 #if os(iOS)
 import QuickLook
 #else
@@ -138,6 +139,7 @@ struct ReactionsRow: View {
 
 /// A photo shown inline. It downloads when it first appears.
 struct PhotoView: View {
+    private static let log = Logger(label: "app.photo")
     @Environment(AppModel.self) private var model
     let file: FileRef
     let width: Int
@@ -177,6 +179,7 @@ struct PhotoView: View {
                 image = await PhotoFiles.displayImage(at: url, maxPixelSize: 1024)
                 failed = image == nil
             } catch {
+                Self.log.error("photo download failed", error.logContext(["fileID": String(file.id)]))
                 failed = true
             }
         }
@@ -189,6 +192,7 @@ struct PhotoView: View {
 
 /// A document as a filename row. Tapping downloads it, then opens Quick Look (iOS) or the default app (macOS).
 struct DocumentRow: View {
+    private static let log = Logger(label: "app.document")
     @Environment(AppModel.self) private var model
     let file: FileRef
     let fileName: String
@@ -235,6 +239,7 @@ struct DocumentRow: View {
             NSWorkspace.shared.open(url)
             #endif
         } catch {
+            Self.log.error("document download failed", error.logContext(["fileID": String(file.id)]))
             model.errorMessage = userMessage(for: error)
         }
     }

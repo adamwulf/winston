@@ -1,5 +1,7 @@
 import AVFoundation
 import Foundation
+import Logging
+import LogSupport
 import Observation
 import Speech
 #if os(iOS)
@@ -19,6 +21,8 @@ import UIKit
 @MainActor
 @Observable
 public final class VoiceLoop {
+    private nonisolated static let log = Logger(label: "voice.loop")
+
     public enum State: Sendable, Equatable {
         case off
         /// Listening; `partial` is the live transcript of the current utterance (may be empty).
@@ -178,6 +182,8 @@ public final class VoiceLoop {
         self.pipeline = pipeline
         resumeAfterInterruption = false
         state = .listening(partial: "")
+        // Also after a rebuild (a route change or an interruption), which has no "stopped" before it.
+        Self.log.notice("voice mode started", ["echoCancellation": pipeline.hasVoiceProcessing])
 
         let configurationChanges = NotificationCenter.default.notifications(
             named: .AVAudioEngineConfigurationChange,
@@ -224,6 +230,7 @@ public final class VoiceLoop {
             do {
                 return try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: true)
             } catch {
+                Self.log.warning("voice processing failed to start; trying without echo cancellation", error.logContext())
                 let pipeline = try Self.startedPipeline(analyzerFormat: analyzerFormat, voiceProcessing: false)
                 // Only voice processing failed, and a failed attempt can take seconds, so don't
                 // try it again in this session. A start that fails either way (a route change
@@ -325,6 +332,7 @@ public final class VoiceLoop {
             }
         } catch {
             // Falls through: an error ends the results just like the stream finishing.
+            Self.log.error("transcriber results failed", error.logContext())
         }
         // The results ended while this pipeline is still running, so nothing more can be heard.
         if self.pipeline === pipeline {
@@ -409,6 +417,7 @@ public final class VoiceLoop {
                 try await request.downloadAndInstall()
             }
         } catch {
+            log.error("speech model install failed", error.logContext())
             throw VoiceLoopError.speechModelUnavailable
         }
         return transcriber
@@ -447,6 +456,9 @@ public final class VoiceLoop {
             // Also covers a failed restart, whose session was kept active across the rebuild.
             Self.deactivateAudioSession()
             resumeAfterInterruption = false
+            if state != .off {
+                Self.log.notice("voice mode stopped")
+            }
         }
         state = kind == .stop ? .off : .listening(partial: "")
     }
@@ -455,7 +467,13 @@ public final class VoiceLoop {
     /// turns the loop off.
     private func restart() {
         tearDown(.rebuild)
-        Task { try? await start() }
+        Task {
+            do {
+                try await start()
+            } catch {
+                Self.log.error("voice loop rebuild failed", error.logContext())
+            }
+        }
     }
 
     // MARK: - Audio session
@@ -472,7 +490,11 @@ public final class VoiceLoop {
         #if os(iOS)
         // Lets other apps' audio resume. It fails only if the session is already inactive
         // (after an interruption) or still busy, and there is nothing more to do either way.
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            log.debug("audio session deactivation failed", error.logContext())
+        }
         #endif
     }
 
@@ -505,7 +527,13 @@ public final class VoiceLoop {
     private func resumeIfInterruptionNeverEnded() {
         guard resumeAfterInterruption else { return }
         resumeAfterInterruption = false
-        Task { try? await start(isForegroundRetry: true) }
+        Task {
+            do {
+                try await start(isForegroundRetry: true)
+            } catch {
+                Self.log.warning("voice loop resume on foreground failed", error.logContext())
+            }
+        }
     }
 
     private func handleInterruption(_ event: InterruptionEvent?) {
@@ -525,7 +553,13 @@ public final class VoiceLoop {
                 return
             }
             // If starting fails, `start()` turns the loop off.
-            Task { try? await start() }
+            Task {
+                do {
+                    try await start()
+                } catch {
+                    Self.log.error("voice loop resume after interruption failed", error.logContext())
+                }
+            }
         case nil:
             break
         }
