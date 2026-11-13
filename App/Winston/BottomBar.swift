@@ -90,8 +90,8 @@ struct BottomBar: View {
 
     @ViewBuilder
     private var voiceControls: some View {
-        if model.voiceLoop.state == .off {
-            // VoiceLoop turns itself off only when it gives up, such as after an interruption it can't resume from.
+        if model.voiceLoop.state == .off && !model.isStartingVoice {
+            // Off while not starting means VoiceLoop gave up, such as after an interruption it can't resume from.
             Button("Resume Listening", systemImage: "mic.slash") {
                 Task { await model.setVoiceMode(true) }
             }
@@ -135,7 +135,7 @@ struct BottomBar: View {
 
     private var transcript: String {
         switch model.voiceLoop.state {
-        case .off: "Not listening"
+        case .off: "Starting…"
         case .listening(let partial): partial.isEmpty ? "Listening…" : partial
         case .speaking: "Speaking…"
         }

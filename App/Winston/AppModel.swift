@@ -43,6 +43,8 @@ final class AppModel {
     private(set) var isSendingPhoto = false
 
     private(set) var isVoiceMode = false
+    /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
+    private(set) var isStartingVoice = false
     /// Seconds the transcript must stay unchanged before voice mode sends it. Persisted.
     var pauseThreshold: Double = UserDefaults.standard.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2 {
         didSet {
@@ -392,6 +394,8 @@ final class AppModel {
             // VoiceLoop ignores a second start() while one is in progress.
             guard voiceLoop.state == .off else { return }
             isVoiceMode = true
+            isStartingVoice = true
+            defer { isStartingVoice = false }
             do {
                 try await voiceLoop.start()
                 // Voice mode may have been turned off while start() waited for permission.
