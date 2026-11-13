@@ -1,8 +1,10 @@
 import SwiftUI
 import TelegramLink
+import WinstonLogging
 
 /// The TDLib login steps: phone number, then code, then the 2FA password, driven by `AuthState`.
 struct LoginView: View {
+    private static let log = Logger(label: "app.login")
     @Environment(AppModel.self) private var model
     @State private var input = ""
     @State private var error: String?
@@ -99,6 +101,8 @@ struct LoginView: View {
             do {
                 try await action()
             } catch {
+                // The step's state only: never what was typed (phone number, code, or password).
+                Self.log.error("login step failed", error.logContext(["state": model.authState.logName]))
                 self.error = userMessage(for: error)
             }
         }
