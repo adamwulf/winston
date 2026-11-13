@@ -58,13 +58,13 @@ can't see them.
 Everything else is the production code: the `TelegramLink` actor with its
 update decoding and mapping, the `VoiceLoop` with its pipeline, converter,
 player and the real `AVSpeechSynthesizer`, and `AppModel` on top of both.
+`TelegramLinkTestSupport` and `VoiceLoopTestSupport` hold the stand-ins, so
+every test target shares them.
 
 `KokoroRealModelTests` runs the real model through the real `VoiceLoop`, but
 only once the model is in `.build/kokoro-model` (or `WINSTON_KOKORO_MODEL_DIR`);
 otherwise it is skipped. Running `LiveKokoro(directory:)` on that folder once
 downloads it.
-`TelegramLinkTestSupport` and `VoiceLoopTestSupport` hold the stand-ins, so
-every test target shares them.
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
 when listening starts and stops, a chime for the bot's 👍) would add to
