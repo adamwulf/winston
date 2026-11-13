@@ -53,10 +53,21 @@ let package = Package(
                 "LogSupport",
             ]
         ),
+        // Shared by the test targets: a fake TDLib behind TelegramLink's `package` seam, and
+        // builders for TDLibKit values.
+        .target(
+            name: "TelegramLinkTestSupport",
+            dependencies: [
+                "TelegramLink",
+                .product(name: "TDLibKit", package: "TDLibKit"),
+            ],
+            path: "Tests/TelegramLinkTestSupport"
+        ),
         .testTarget(
             name: "TelegramLinkTests",
             dependencies: [
                 "TelegramLink",
+                "TelegramLinkTestSupport",
                 .product(name: "TDLibKit", package: "TDLibKit"),
             ]
         ),
