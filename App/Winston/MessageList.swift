@@ -6,9 +6,16 @@ import QuickLook
 import AppKit
 #endif
 
-/// The current chat's messages, scrolled to the newest. Incoming messages are marked read as they appear.
+/// The current chat's messages, scrolled to the newest. Incoming messages are marked read as they appear,
+/// but only while the window is active, so replies that arrive while Adam is elsewhere stay unread.
 struct MessageList: View {
     @Environment(AppModel.self) private var model
+    #if os(macOS)
+    @Environment(\.appearsActive) private var isActive
+    #else
+    @Environment(\.scenePhase) private var scenePhase
+    private var isActive: Bool { scenePhase == .active }
+    #endif
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -17,7 +24,9 @@ struct MessageList: View {
                     ForEach(model.currentMessages) { message in
                         MessageRow(message: message)
                             .id(message.id)
-                            .onAppear { model.markRead(message) }
+                            .onAppear {
+                                if isActive { model.markRead(message) }
+                            }
                     }
                 }
                 .padding()
@@ -27,6 +36,12 @@ struct MessageList: View {
                 guard let newestID else { return }
                 withAnimation {
                     proxy.scrollTo(newestID, anchor: .bottom)
+                }
+            }
+            .onChange(of: isActive) {
+                // Private-chat read state is a watermark, so marking the newest message covers the earlier ones.
+                if isActive, let newest = model.latestIncomingMessage {
+                    model.markRead(newest)
                 }
             }
         }
@@ -155,6 +170,8 @@ struct PhotoView: View {
         .frame(maxWidth: 260)
         .clipShape(.rect(cornerRadius: 10))
         .task(id: attempt) {
+            // Scrolling back to a loaded photo shouldn't download and decode it again.
+            guard image == nil else { return }
             do {
                 let url = try await model.download(file)
                 image = await PhotoFiles.displayImage(at: url, maxPixelSize: 1024)
