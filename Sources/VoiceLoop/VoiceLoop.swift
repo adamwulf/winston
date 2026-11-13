@@ -110,6 +110,8 @@ public final class VoiceLoop {
     /// so words spoken right as a reply ends are kept; without it everything fed so far, plus
     /// a short margin, is consumed.
     @ObservationIgnored private var ignoredWhileSpeaking = false
+    /// Results ignored while the current reply plays, for the logs.
+    @ObservationIgnored private var ignoredResultsThisReply = 0
     /// Set once voice processing fails to start, so later starts go straight to an engine
     /// without it (a failed attempt can block the main thread for seconds).
     @ObservationIgnored private var skipVoiceProcessing = false
@@ -326,7 +328,7 @@ public final class VoiceLoop {
     /// Stops speaking and clears the queue.
     public func stopSpeaking() {
         speechQueue.removeAll()
-        silence(consumingEcho: true)
+        silence(consumingEcho: true, reason: "stopped")
     }
 
     /// Says `text` right away in the current voice and speed, for trying them in settings, cutting off
@@ -395,12 +397,14 @@ public final class VoiceLoop {
             let echoCancelled = pipeline?.hasVoiceProcessing ?? false
             guard echoCancelled, candidate.wordCount >= max(1, bargeInMinimumWords) else {
                 ignoredWhileSpeaking = true
+                ignoredResultsThisReply += 1
                 return
             }
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
             // ignored so far may be this utterance's first words, so no audio is consumed.
+            Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
             speechQueue.removeAll()
-            silence(consumingEcho: false)
+            silence(consumingEcho: false, reason: "bargeIn")
         }
         transcript = candidate
         pauseDetector.update(text: transcript.text, at: .now)
@@ -485,7 +489,7 @@ public final class VoiceLoop {
         if kind == .rebuild, let currentSpeech {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
-        silence(consumingEcho: true)
+        silence(consumingEcho: true, reason: "teardown")
         if kind == .stop {
             speechQueue.removeAll()
         }
@@ -531,7 +535,7 @@ public final class VoiceLoop {
         if let currentSpeech {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
-        silence(consumingEcho: true)
+        silence(consumingEcho: true, reason: "engineStopped")
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
@@ -684,6 +688,9 @@ public final class VoiceLoop {
         }
         currentSpeech = playback
         state = .speaking
+        // The reply's log reports what the microphone heard while it played.
+        _ = pipeline.voiceActivity.takePeakDecibels()
+        ignoredResultsThisReply = 0
         synthesisObserver.track(utterance, playback: playback)
         synthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
@@ -693,6 +700,7 @@ public final class VoiceLoop {
 
     private func speechFinished(_ playback: SpeechPlayback) {
         guard currentSpeech === playback else { return }
+        logReplyEnded(playback, reason: "finished")
         currentSpeech = nil
         consumeEcho()
         updateListeningState()
@@ -700,9 +708,11 @@ public final class VoiceLoop {
     }
 
     /// Stops the message being spoken, leaving the queue alone. A barge-in passes
-    /// `consumingEcho: false`, since the audio heard while speaking is the user's.
-    private func silence(consumingEcho: Bool) {
+    /// `consumingEcho: false`, since the audio heard while speaking is the user's. `reason`
+    /// says why, for the logs.
+    private func silence(consumingEcho: Bool, reason: String) {
         guard let currentSpeech else { return }
+        logReplyEnded(currentSpeech, reason: reason)
         self.currentSpeech = nil
         currentSpeech.cancel()
         synthesizer.stopSpeaking(at: .immediate)
@@ -712,6 +722,18 @@ public final class VoiceLoop {
         }
         ignoredWhileSpeaking = false
         updateListeningState()
+    }
+
+    /// Logs how a reply ended and what the microphone picked up while it played, to show how
+    /// much of the reply gets through echo cancellation. Counts and levels only.
+    private func logReplyEnded(_ playback: SpeechPlayback, reason: String) {
+        Self.log.info("reply ended", [
+            "reason": reason,
+            "ms": Int(playback.started.duration(to: .now) / .milliseconds(1)),
+            "ignoredResults": ignoredResultsThisReply,
+            "micPeakDb": pipeline?.voiceActivity.takePeakDecibels() ?? -120,
+            "echoCancellation": pipeline?.hasVoiceProcessing ?? false,
+        ])
     }
 
     /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for

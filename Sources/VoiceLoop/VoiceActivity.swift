@@ -41,6 +41,9 @@ struct VoiceActivityDetector {
 final class VoiceActivity: Sendable {
     private let detector = Mutex(VoiceActivityDetector())
     private let heardVoice = Atomic<Bool>(false)
+    /// The loudest buffer's RMS level since `takePeakDecibels()` last ran, as its bit pattern.
+    /// Non-negative floats order the same way as their bit patterns, so an integer max works.
+    private let peakLevel = Atomic<UInt32>(0)
 
     /// Runs on the audio thread for each microphone buffer.
     func process(_ samples: UnsafePointer<Float>, count: Int) {
@@ -50,6 +53,7 @@ final class VoiceActivity: Sendable {
             sum += samples[index] * samples[index]
         }
         let rms = (sum / Float(count)).squareRoot()
+        peakLevel.max(rms.bitPattern, ordering: .relaxed)
         if detector.withLock({ $0.process(rms: rms) }) {
             heardVoice.store(true, ordering: .relaxed)
         }
@@ -58,5 +62,12 @@ final class VoiceActivity: Sendable {
     /// Whether voice was heard since the last call.
     func takeHeardVoice() -> Bool {
         heardVoice.exchange(false, ordering: .relaxed)
+    }
+
+    /// The loudest microphone buffer since the last call, in dBFS rounded to a whole number,
+    /// for the logs. -120 stands for silence or no buffers.
+    func takePeakDecibels() -> Int {
+        let rms = Float(bitPattern: peakLevel.exchange(0, ordering: .relaxed))
+        return rms > 0 ? max(-120, Int((20 * log10(rms)).rounded())) : -120
     }
 }

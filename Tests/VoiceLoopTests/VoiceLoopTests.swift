@@ -156,6 +156,18 @@ import Testing
         for _ in 0..<400 { stillVoice = detector.process(rms: 0.02) }
         #expect(!stillVoice)
     }
+
+    @Test func peakLevelIsTheLoudestBufferSinceLastTaken() {
+        let activity = VoiceActivity()
+        let quiet = [Float](repeating: 0.01, count: 256)
+        let loud = [Float](repeating: -0.1, count: 256)
+        quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        loud.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        quiet.withUnsafeBufferPointer { activity.process($0.baseAddress!, count: $0.count) }
+        #expect(activity.takePeakDecibels() == -20)
+        // Taking it starts over; nothing heard since reads as silence.
+        #expect(activity.takePeakDecibels() == -120)
+    }
 }
 
 @Suite struct PauseDetectorTests {
