@@ -46,9 +46,12 @@ struct SettingsView: View {
             } footer: {
                 Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
             }
-            Section {
-                Button("Log Out", role: .destructive) {
-                    confirmingLogOut = true
+            // On the Mac the Settings window opens before login too; only offer Log Out once logged in.
+            if model.authState == .ready {
+                Section {
+                    Button("Log Out", role: .destructive) {
+                        confirmingLogOut = true
+                    }
                 }
             }
         }

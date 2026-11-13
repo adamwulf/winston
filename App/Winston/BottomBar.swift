@@ -11,11 +11,13 @@ struct BottomBar: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if model.isBotTyping {
-                Text("typing…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            // Always takes its space, so the bar (and the message list above it) doesn't jump
+            // each time the bot starts or stops typing.
+            Text("typing…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .opacity(model.isBotTyping ? 1 : 0)
+                .accessibilityHidden(!model.isBotTyping)
             HStack(spacing: 12) {
                 if model.isVoiceMode {
                     voiceControls
@@ -103,9 +105,12 @@ struct BottomBar: View {
             }
             .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
 
+            // A fixed two lines, so the bar (and the message list above it) doesn't jump as
+            // the transcript grows; the newest words stay visible at the end.
             Text(transcript)
                 .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
-                .lineLimit(5)
+                .lineLimit(2, reservesSpace: true)
+                .truncationMode(.head)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
