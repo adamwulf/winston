@@ -121,6 +121,8 @@ final class Pipeline {
             "micFormat": "\(micFormat.sampleRate)/\(micFormat.channelCount)",
             "tapFormat": "\(tapFormat.sampleRate)/\(tapFormat.channelCount)",
             "outputFormat": "\(outputFormat.sampleRate)/\(outputFormat.channelCount)",
+            // Read from the engine, so a restart that lost voice processing shows here.
+            "voiceProcessing": "\(engine.inputNode.isVoiceProcessingEnabled)",
         ]
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -202,6 +204,8 @@ final class SpeechPlayback: Sendable {
 
     /// The message being spoken, so it can be queued again if playback is cut off.
     let text: String
+    /// When playback was set up, for the logs.
+    let started = ContinuousClock.now
     private let state: Mutex<State>
     private let onFinished: @Sendable (SpeechPlayback) -> Void
 
