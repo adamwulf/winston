@@ -17,9 +17,8 @@ import WinstonCore
 final class Harness {
     let fake: FakeTDLib
     let bed = VoiceTestBed()
-    let defaults: UserDefaults
     let model: AppModel
-    private let suiteName: String
+    private let testDefaults = TestDefaults()
 
     /// - Parameters:
     ///   - fake: the pretend Telegram account. Logged in, with no chats, by default.
@@ -28,24 +27,23 @@ final class Harness {
     ///     sound in voice mode is what is spoken.
     init(fake: FakeTDLib = FakeTDLib(), settings: [String: Any] = [:], soundCues: Bool = false) {
         self.fake = fake
-        suiteName = "winston-tests-\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            preconditionFailure("couldn't create user defaults for \(suiteName)")
-        }
-        self.defaults = defaults
         for (key, value) in settings {
-            defaults.set(value, forKey: key)
+            testDefaults.defaults.set(value, forKey: key)
         }
         model = AppModel(
             link: fake.makeLink(typingTimeout: .seconds(60)),
             voiceLoop: bed.makeLoop(soundCues: soundCues),
-            defaults: defaults
+            defaults: testDefaults.defaults
         )
     }
 
     isolated deinit {
         model.voiceLoop.stop()
-        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    /// The model's user defaults, of the harness's own.
+    var defaults: UserDefaults {
+        testDefaults.defaults
     }
 
     /// Another model reading the same user defaults, as after the app is relaunched. `bed` is
@@ -78,6 +76,23 @@ final class Harness {
             model.authState == .ready && model.chatsLoaded
                 && model.chats.allSatisfy { model.messages[$0.id] != nil }
         }
+    }
+}
+
+/// User defaults of a test's own, in place of the standard ones, emptied once nothing holds them.
+final class TestDefaults {
+    let defaults: UserDefaults
+    private let suiteName = "winston-tests-\(UUID().uuidString)"
+
+    init() {
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            preconditionFailure("couldn't create user defaults for \(suiteName)")
+        }
+        self.defaults = defaults
+    }
+
+    deinit {
+        defaults.removePersistentDomain(forName: suiteName)
     }
 }
 

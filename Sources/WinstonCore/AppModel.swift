@@ -102,10 +102,16 @@ public final class AppModel {
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
     public convenience init() {
+        self.init(voiceLoop: VoiceLoop(), defaults: .standard)
+    }
+
+    /// The app's model with a Telegram session if `Secrets.xcconfig` supplied credentials. Tests pass a voice
+    /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone.
+    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults) {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
-            voiceLoop: VoiceLoop(),
-            defaults: .standard
+            voiceLoop: voiceLoop,
+            defaults: defaults
         )
     }
 
@@ -131,7 +137,18 @@ public final class AppModel {
     #if DEBUG
     /// A model with sample data and no Telegram session, for SwiftUI previews.
     public convenience init(previewChats: [BotChat], messages: [ChatID: [ChatMessage]], authState: AuthState) {
-        self.init(link: nil, voiceLoop: VoiceLoop(), defaults: .standard, hasCredentials: true)
+        self.init(previewChats: previewChats, messages: messages, authState: authState, voiceLoop: VoiceLoop(), defaults: .standard)
+    }
+
+    /// The same, on the voice loop and defaults a test passes.
+    package convenience init(
+        previewChats: [BotChat],
+        messages: [ChatID: [ChatMessage]],
+        authState: AuthState,
+        voiceLoop: VoiceLoop,
+        defaults: UserDefaults
+    ) {
+        self.init(link: nil, voiceLoop: voiceLoop, defaults: defaults, hasCredentials: true)
         self.authState = authState
         chats = previewChats
         chatsLoaded = true

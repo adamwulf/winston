@@ -2,19 +2,23 @@ import Foundation
 import Testing
 import TelegramLink
 import VoiceLoop
+import VoiceLoopTestSupport
 // For `AppModel.telegramConfig(_:)`, which is internal.
 @testable import WinstonCore
 
 // These models have no fake TDLib: the app's own initializer finds no credentials in a test
-// process, and the preview one has no session at all. Both use the standard user defaults
-// and the live voice loop, so the tests only read their settings and never start voice mode.
+// process, and the preview one has no session at all. Like `Harness`, they run on a
+// `VoiceTestBed` and user defaults of their own, so nothing here reaches the real Kokoro model
+// or the standard user defaults.
 
 /// The model with no Telegram session: without credentials, and in SwiftUI previews.
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct WithoutSessionTests {
     @Test func withoutCredentialsNothingReachesTelegram() async throws {
-        let model = AppModel()
+        let testDefaults = TestDefaults()
+        defer { withExtendedLifetime(testDefaults) {} }
+        let model = AppModel(voiceLoop: VoiceTestBed().makeLoop(), defaults: testDefaults.defaults)
         #expect(!model.hasCredentials)
         let message = ChatMessage(
             id: MessageID(11),
@@ -58,7 +62,8 @@ struct WithoutSessionTests {
 
     #if DEBUG
     @Test func aPreviewShowsItsSampleChatsAndMessagesWithoutASession() async throws {
-        defer { UserDefaults.standard.removeObject(forKey: "selectedChatID") }
+        let testDefaults = TestDefaults()
+        defer { withExtendedLifetime(testDefaults) {} }
         let chats = [
             BotChat(id: ChatID(1), title: "Home", username: "home_bot"),
             BotChat(id: ChatID(2), title: "Laptop", username: "laptop_bot"),
@@ -68,7 +73,13 @@ struct WithoutSessionTests {
             ChatMessage(id: MessageID(11), chatID: ChatID(1), isOutgoing: false, date: Date(timeIntervalSince1970: 60), text: "Two jobs are queued."),
         ]
 
-        let model = AppModel(previewChats: chats, messages: [ChatID(1): home], authState: .ready)
+        let model = AppModel(
+            previewChats: chats,
+            messages: [ChatID(1): home],
+            authState: .ready,
+            voiceLoop: VoiceTestBed().makeLoop(),
+            defaults: testDefaults.defaults
+        )
 
         #expect(model.hasCredentials)
         #expect(model.authState == .ready)
