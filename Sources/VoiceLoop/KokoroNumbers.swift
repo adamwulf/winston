@@ -171,8 +171,10 @@ struct KokoroNumbers {
 
     /// "3-2" is "three to two". A scale after the second number applies to the first too: "5-10k"
     /// is "five to ten thousand", "$5-10M" and "$5-10 million" "five to ten million dollars".
-    /// Without money, only a lowercase "k" or a word is a scale, as for a number on its own. A
-    /// decade makes the second one a decade too: "the 80s-90s" is "the eighties to nineties".
+    /// Without money, only a lowercase "k" or a word is a scale, as for a number on its own. When
+    /// the first end is a decade, so is the second: "the 80s-90s" is "the eighties to nineties".
+    /// Two decade-like ends that aren't decades are seconds: "30s-60s" is "thirty to sixty
+    /// seconds".
     private func range(_ from: Match, _ to: Match, in text: String) -> String {
         if let scale = Self.scale(of: to), Self.scale(of: from) == nil,
            let low = amount(from), let high = amount(to) {
@@ -184,24 +186,29 @@ struct KokoroNumbers {
                 return low + " to " + high + " " + scale
             }
         }
-        if from.output.decade != nil, let decade = to.output.decade {
-            return words(for: from, in: text) + " to " + self.decade(decade, quoted: true, preceding: "")
+        if let low = from.output.decade, let high = to.output.decade {
+            guard let first = decade(from, in: text) else {
+                return cardinal(low) + " to " + cardinal(high) + " seconds"
+            }
+            return first + " to " + (decade(to, in: text, afterDecade: true) ?? words(for: to, in: text))
         }
         return words(for: from, in: text) + " to " + words(for: to, in: text)
     }
 
     /// "1/2" is "one half", "3/4" "three quarters", and after a whole number "1 1/2" is "one and a
-    /// half". Nil unless the denominator is 2 to 10 and the numerator is smaller.
+    /// half". A scale after the denominator comes last: "1 1/2 million" is "one and a half
+    /// million". Nil unless the denominator is 2 to 10 and the numerator is smaller.
     private func fraction(_ numerator: Match, _ denominator: Match, afterWholeNumber: Bool) -> String? {
         guard let top = Self.plainDigits(numerator).flatMap({ Int($0) }),
-              let bottom = Self.plainDigits(denominator).flatMap({ Int($0) }),
+              let bottom = Self.plainDigits(denominator, allowingScale: true).flatMap({ Int($0) }),
               let names = Self.fractionNames[bottom], (1..<bottom).contains(top) else { return nil }
+        let scale = scaleWords(denominator.output.integerScale, inName: false)
         if top == 1 {
             // "one and an eighth".
             let article = names.singular.hasPrefix("e") ? "an " : "a "
-            return (afterWholeNumber ? article : "one ") + names.singular
+            return (afterWholeNumber ? article : "one ") + names.singular + scale
         }
-        return cardinal(top) + " " + names.plural
+        return cardinal(top) + " " + names.plural + scale
     }
 
     private static let fractionNames: [Int: (singular: String, plural: String)] = [
@@ -224,11 +231,13 @@ struct KokoroNumbers {
         return text[text.index(before: dash)].isLetter
     }
 
-    /// A match's digits if it is nothing but a run of them, as a phone number's groups are.
-    private static func plainDigits(_ match: Match) -> Substring? {
+    /// A match's digits if it is nothing but a run of them, as a phone number's groups are, or,
+    /// `allowingScale`, a run of them with a scale after it ("2 million").
+    private static func plainDigits(_ match: Match, allowingScale: Bool = false) -> Substring? {
         let output = match.output
         guard let integer = output.integer, output.fraction == nil, output.percent == nil,
-              output.ordinal == nil, output.integerScale == nil, !integer.contains(",") else { return nil }
+              output.ordinal == nil, allowingScale || output.integerScale == nil,
+              !integer.contains(",") else { return nil }
         return integer
     }
 
@@ -243,8 +252,9 @@ struct KokoroNumbers {
         if let symbol = output.currency, let amount = output.amount {
             return money(symbol, amount: amount, fraction: output.cents, scale: Self.scale(of: match))
         }
-        if let decade = output.decade {
-            return self.decade(decade, quoted: output.decadeQuote != nil, preceding: text[..<match.range.lowerBound])
+        if let digits = output.decade {
+            // Not a decade: "30s" is more likely seconds, and stays "thirty s".
+            return decade(match, in: text) ?? cardinal(digits) + " s"
         }
         if let integer = output.integer {
             let words = number(
@@ -254,14 +264,7 @@ struct KokoroNumbers {
                 isOrdinal: output.ordinal != nil,
                 preceding: text[..<match.range.lowerBound]
             )
-            guard let letters = output.integerScale else { return words }
-            // A scale written out ("10 million") stays as written.
-            if letters.first == " " {
-                return words + letters
-            }
-            // In chat, a lowercase "k" is thousands: "10k users", "2.5k stars". Other letters,
-            // even "K" ("4K screen"), stay letters without money: see `range` and `money`.
-            return letters == "k" && !inName ? words + " thousand" : words + " " + letters
+            return words + scaleWords(output.integerScale, inName: inName)
         }
         if let point = output.point {
             // A decimal without its leading zero (".5"), unless the dot follows a word or a
@@ -375,17 +378,31 @@ struct KokoroNumbers {
         return isPercent ? words + " percent" : words
     }
 
-    /// "1990s" is "nineteen nineties" and "2000s" "two thousands". Two digits are a decade after
-    /// an apostrophe or a word such as "the" or "their" ("the 90s", "'90s", "in their 20s");
-    /// otherwise "30s" is more likely seconds, and stays "thirty s".
-    private func decade(_ digits: Substring, quoted: Bool, preceding: Substring) -> String {
+    /// The words after a number for the scale or letters written after it: " thousand" for a
+    /// lowercase "k" ("10k users", "2.5k stars", as in chat), and a written-out scale ("10
+    /// million") as written. Other letters, even "K" ("4K screen"), stay letters without money
+    /// (see `range` and `money`), as does a "k" `inName`.
+    private func scaleWords(_ letters: Substring?, inName: Bool) -> String {
+        guard let letters else { return "" }
+        if letters.first == " " {
+            return String(letters)
+        }
+        return letters == "k" && !inName ? " thousand" : " " + letters
+    }
+
+    /// The decade a "...0s" match names, or nil when it isn't one. "1990s" is "nineteen nineties"
+    /// and "2000s" "two thousands". Two digits are a decade after an apostrophe or a word such as
+    /// "the" or "their" ("the 90s", "'90s", "in their 20s"), or `afterDecade`, as the second end of
+    /// "the 80s-90s".
+    private func decade(_ match: Match, in text: String, afterDecade: Bool = false) -> String? {
+        guard let digits = match.output.decade else { return nil }
         if digits.count == 4, let year = Int(digits), (1000...2099).contains(year) {
             return Self.plural(self.year(year))
         }
-        if digits.count == 2, quoted || Self.previousWord(preceding).map(Self.decadeWords.contains) == true {
-            return Self.plural(cardinal(digits))
-        }
-        return cardinal(digits) + " s"
+        let isDecade = afterDecade || match.output.decadeQuote != nil
+            || Self.previousWord(text[..<match.range.lowerBound]).map(Self.decadeWords.contains) == true
+        guard digits.count == 2, isDecade else { return nil }
+        return Self.plural(cardinal(digits))
     }
 
     private static let decadeWords: Set<String> = [

@@ -98,6 +98,8 @@ import Testing
         #expect(say("in their 20s") == "in their twenties")
         #expect(say("the 80s-90s") == "the eighties to nineties")
         #expect(say("the 1980s-1990s") == "the nineteen eighties to nineteen nineties")
+        // Without a decade first, a range of them is seconds.
+        #expect(say("Wait 30s-60s before retrying") == "Wait thirty to sixty seconds before retrying")
         // Two digits with an "s" otherwise are more likely seconds.
         #expect(say("wait 30s") == "wait thirty s")
     }
@@ -111,6 +113,10 @@ import Testing
         #expect(say("1 1/2 hours") == "one and a half hours")
         #expect(say("2 3/4") == "two and three quarters")
         #expect(say("1 1/8") == "one and an eighth")
+        // A scale after the fraction comes after its words.
+        #expect(say("2 1/2 million users") == "two and a half million users")
+        #expect(say("1 1/2 million") == "one and a half million")
+        #expect(say("3/4 million") == "three quarters million")
         // A range of them.
         #expect(say("1/2-3/4 cup") == "one half to three quarters cup")
         #expect(say("2 1/2-3 hours") == "two and a half to three hours")
