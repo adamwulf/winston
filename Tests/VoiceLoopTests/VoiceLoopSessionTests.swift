@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Observation
 import Testing
 import VoiceLoop
 import VoiceLoopTestSupport
@@ -1107,6 +1108,30 @@ struct VoiceSettingsTests {
         #expect(bed.recognizers.count == 1)
         #expect(bed.audio.engines.count == 1)
     }
+
+    @Test func theVoicesOnOfferAreListedAgainWhenTheSystemsVoicesChange() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        #expect(loop.voices == VoiceLoop.availableVoices(language: bed.languageCode))
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = loop.voices
+        } onChange: {
+            MainActor.assumeIsolated { changed.isSet = true }
+        }
+
+        // As when a voice is installed or removed.
+        NotificationCenter.default.post(name: AVSpeechSynthesizer.availableVoicesDidChangeNotification, object: nil)
+
+        #expect(await eventually { changed.isSet })
+        #expect(loop.voices == VoiceLoop.availableVoices(language: bed.languageCode))
+    }
+}
+
+/// Set when an observed value changes.
+@MainActor
+private final class ChangeFlag {
+    var isSet = false
 }
 
 // MARK: - Sound cues
