@@ -330,6 +330,19 @@ import Testing
         #expect(transcript.consumedThrough == time(5.4))
     }
 
+    @Test func fedAudioClockTracksTheAnalyzerTimeline() {
+        let clock = FedAudioClock(sampleRate: 16_000)
+        #expect(clock.time == .zero)
+        clock.add(frames: 8_000)
+        clock.add(frames: 8_000)
+        #expect(clock.time == time(1))
+        // Consuming through the fed time drops the echo tail whose result arrives late.
+        var transcript = Transcript()
+        transcript.consume(through: clock.time)
+        let applied = transcript.apply(piece([("done", 0.7)], end: 1.0, final: true))
+        #expect(!applied)
+    }
+
     @Test func wordsWithoutTimingAreDroppedWhenTrimming() {
         #expect(Transcript.words(of: AttributedString("untimed words"), startingAt: time(1)) == "")
     }

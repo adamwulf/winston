@@ -13,11 +13,14 @@ final class Pipeline {
     /// Microphone audio in the analyzer's format, for `SpeechAnalyzer.start(inputSequence:)`.
     let inputs: AsyncStream<AnalyzerInput>
     private let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
+    /// How far along the analyzer's timeline the fed audio reaches.
+    let fedAudio: FedAudioClock
     var analyzer: SpeechAnalyzer?
     var tasks: [Task<Void, Never>] = []
 
     init(analyzerFormat: AVAudioFormat) throws {
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
+        fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
 
         let input = engine.inputNode
         // Echo cancellation: removes the player's output from the microphone signal.
@@ -33,7 +36,7 @@ final class Pipeline {
             onBus: 0,
             bufferSize: 4096,
             format: inputFormat,
-            block: Self.microphoneTap(converter: converter, continuation: inputContinuation)
+            block: Self.microphoneTap(converter: converter, continuation: inputContinuation, clock: fedAudio)
         )
 
         engine.attach(player)
@@ -54,12 +57,34 @@ final class Pipeline {
     /// Runs on the audio thread: converts each microphone buffer for the analyzer.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
-        continuation: AsyncStream<AnalyzerInput>.Continuation
+        continuation: AsyncStream<AnalyzerInput>.Continuation,
+        clock: FedAudioClock
     ) -> AVAudioNodeTapBlock {
         { buffer, _ in
             guard let converted = convert(buffer, with: converter) else { return }
+            clock.add(frames: converted.frameLength)
             continuation.yield(AnalyzerInput(buffer: converted))
         }
+    }
+}
+
+/// The analyzer's timeline position: the audio fed to it so far, in its format. The timeline
+/// starts at 0 and each `AnalyzerInput(buffer:)` follows straight on from the previous one.
+/// Written on the audio thread, read on the main actor.
+final class FedAudioClock: Sendable {
+    let sampleRate: Double
+    private let frames = Atomic<Int64>(0)
+
+    init(sampleRate: Double) {
+        self.sampleRate = sampleRate
+    }
+
+    func add(frames count: AVAudioFrameCount) {
+        frames.wrappingAdd(Int64(count), ordering: .relaxed)
+    }
+
+    var time: CMTime {
+        CMTime(value: frames.load(ordering: .relaxed), timescale: CMTimeScale(sampleRate.rounded()))
     }
 }
 

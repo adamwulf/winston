@@ -2,6 +2,9 @@ import AVFoundation
 import Foundation
 import Observation
 import Speech
+#if os(iOS)
+import UIKit
+#endif
 
 /// Hands-free voice loop: listens, detects the end of an utterance, speaks replies,
 /// and stops speaking when the user talks over it (barge-in).
@@ -25,7 +28,8 @@ public final class VoiceLoop {
     /// `stop()`, and after an unrecoverable failure (a failed `start()`, a transcriber failure,
     /// or an audio interruption iOS doesn't let it resume from). While the engine is rebuilt
     /// after an audio route change, and during an audio interruption, it stays
-    /// `.listening(partial: "")`.
+    /// `.listening(partial: "")`. iOS doesn't promise to report an interruption's end, so if
+    /// none arrives the loop retries when the app next comes to the foreground.
     public private(set) var state: State = .off
     /// How long the transcript must stay unchanged before an utterance is finished.
     public var pauseThreshold: Duration = .milliseconds(1200)
@@ -41,13 +45,16 @@ public final class VoiceLoop {
     @ObservationIgnored public let utterances: AsyncStream<Utterance>
     @ObservationIgnored private let utteranceContinuation: AsyncStream<Utterance>.Continuation
 
-    /// The running engine and analyzer; nil while off.
+    /// The running engine and analyzer. Nil while off, while starting, and during a rebuild
+    /// or an interruption (when `state` is still `.listening`).
     @ObservationIgnored private var pipeline: Pipeline?
     /// True while `start()` is running, so a second call doesn't start a second pipeline.
     @ObservationIgnored private var isStarting = false
-    /// Bumped by every teardown, so a `start()` that was overtaken by `stop()` gives up.
+    /// Bumped by every teardown (stop, rebuild, interruption), so a `start()` that one of
+    /// them overtook gives up.
     @ObservationIgnored private var runID = 0
-    /// Set when an interruption stopped the loop, so it restarts when the interruption ends.
+    /// Set when an interruption stopped the loop, so it restarts when the interruption ends
+    /// (or, if iOS never says so, when the app becomes active). Cleared by `tearDown(.stop)`.
     @ObservationIgnored private var resumeAfterInterruption = false
 
     @ObservationIgnored private var transcript = Transcript()
@@ -57,13 +64,14 @@ public final class VoiceLoop {
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
-    /// End of the latest result ignored as too short while speaking (possibly the reply's own
-    /// echo). Its audio is consumed once speaking ends, so it isn't sent afterwards.
-    @ObservationIgnored private var ignoredWhileSpeaking: CMTime?
+    /// Set when a result was ignored as too short while speaking (possibly the reply's own
+    /// echo). When speaking ends, all audio fed so far is consumed, which also covers the
+    /// echo of the last words whose results haven't arrived yet.
+    @ObservationIgnored private var ignoredWhileSpeaking = false
 
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
-        observeInterruptions()
+        observeAppAndSession()
     }
 
     // MARK: - Public API
@@ -75,7 +83,13 @@ public final class VoiceLoop {
     public func start() async throws {
         guard pipeline == nil, !isStarting else { return }
         isStarting = true
-        defer { isStarting = false }
+        defer {
+            isStarting = false
+            // speak() queues while starting; if stop() came meanwhile, those replies are stale.
+            if state == .off {
+                speechQueue.removeAll()
+            }
+        }
         let run = runID
         do {
             try await startPipeline(run: run)
@@ -158,7 +172,6 @@ public final class VoiceLoop {
 
     /// Stops listening and speaking.
     public func stop() {
-        resumeAfterInterruption = false
         tearDown(.stop)
     }
 
@@ -229,12 +242,12 @@ public final class VoiceLoop {
         guard candidate.apply(piece) else { return }
         if currentSpeech != nil {
             guard candidate.wordCount >= max(1, bargeInMinimumWords) else {
-                ignoredWhileSpeaking = max(ignoredWhileSpeaking ?? piece.range.end, piece.range.end)
+                ignoredWhileSpeaking = true
                 return
             }
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
             // ignored so far may be this utterance's first words, so their audio is kept.
-            ignoredWhileSpeaking = nil
+            ignoredWhileSpeaking = false
             stopSpeaking()
         }
         transcript = candidate
@@ -301,7 +314,8 @@ public final class VoiceLoop {
     }
 
     private enum Teardown {
-        /// Voice mode ends: the queue is cleared, the iOS session deactivated, `state` is `.off`.
+        /// Voice mode ends: the queue is cleared, the iOS session deactivated, no resume is
+        /// pending after an interruption, and `state` is `.off`.
         case stop
         /// The engine is about to be rebuilt: the queue is kept, with the message that was cut
         /// off back at the front, and `state` stays `.listening(partial: "")`. The iOS session
@@ -331,6 +345,7 @@ public final class VoiceLoop {
         if kind == .stop {
             // Also covers a failed restart, whose session was kept active across the rebuild.
             Self.deactivateAudioSession()
+            resumeAfterInterruption = false
         }
         state = kind == .stop ? .off : .listening(partial: "")
     }
@@ -360,7 +375,7 @@ public final class VoiceLoop {
         #endif
     }
 
-    private func observeInterruptions() {
+    private func observeAppAndSession() {
         #if os(iOS)
         let interruptions = NotificationCenter.default.notifications(named: AVAudioSession.interruptionNotification)
             .map { InterruptionEvent($0) }
@@ -370,10 +385,26 @@ public final class VoiceLoop {
                 self.handleInterruption(event)
             }
         }
+        let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
+        Task { [weak self] in
+            for await _ in activations {
+                guard let self else { return }
+                self.resumeIfInterruptionNeverEnded()
+            }
+        }
         #endif
     }
 
     #if os(iOS)
+    /// Another app (a call, FaceTime, Music) can keep the session, and then iOS never sends
+    /// the interruption's end. Coming back to the foreground retries instead.
+    private func resumeIfInterruptionNeverEnded() {
+        guard resumeAfterInterruption else { return }
+        resumeAfterInterruption = false
+        // If starting fails, `start()` turns the loop off.
+        Task { try? await start() }
+    }
+
     private func handleInterruption(_ event: InterruptionEvent?) {
         switch event {
         case .began:
@@ -437,11 +468,13 @@ public final class VoiceLoop {
     }
 
     /// Once speaking ends, results ignored during it (likely echo) must not be sent later.
+    /// Consuming through the audio fed so far, rather than the last ignored result, also
+    /// covers the reply's last words, whose results lag behind the audio.
     private func consumeIgnoredAudio() {
-        if let ignoredWhileSpeaking {
-            transcript.consume(through: ignoredWhileSpeaking)
+        if ignoredWhileSpeaking, let pipeline {
+            transcript.consume(through: pipeline.fedAudio.time)
         }
-        ignoredWhileSpeaking = nil
+        ignoredWhileSpeaking = false
     }
 
     private func voice() -> AVSpeechSynthesisVoice? {
