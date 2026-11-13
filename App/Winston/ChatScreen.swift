@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonCore
 
 /// The one chat screen: a picker for the bot chats, the message list, and the bottom bar.
 struct ChatScreen: View {

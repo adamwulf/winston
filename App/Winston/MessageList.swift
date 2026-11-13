@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonCore
 import WinstonLogging
 #if os(iOS)
 import QuickLook

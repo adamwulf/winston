@@ -1,6 +1,7 @@
 import PhotosUI
 import SwiftUI
 import VoiceLoop
+import WinstonCore
 
 /// The bar under the messages: a text field and photo button in text mode, or the live transcript in
 /// voice mode, plus the 👍 button and the voice/text toggle in both.
@@ -55,7 +56,10 @@ struct BottomBar: View {
             photoItem = nil
             let caption = draft
             Task {
-                if await model.sendPhoto(item, caption: caption), draft == caption {
+                let sent = await model.sendPhoto(caption: caption) {
+                    try await item.loadTransferable(type: Data.self)
+                }
+                if sent, draft == caption {
                     draft = ""
                 }
             }

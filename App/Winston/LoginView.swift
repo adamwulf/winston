@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonCore
 import WinstonLogging
 
 /// The TDLib login steps: phone number, then code, then the 2FA password, driven by `AuthState`.

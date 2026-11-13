@@ -1,5 +1,6 @@
 import SwiftUI
 import TelegramLink
+import WinstonCore
 
 /// The root view: missing credentials, login, or the chat screen.
 struct ContentView: View {

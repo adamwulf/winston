@@ -1,5 +1,6 @@
 import SwiftUI
 import VoiceLoop
+import WinstonCore
 import WinstonLogging
 
 /// The pause threshold, the voice and its speed, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the

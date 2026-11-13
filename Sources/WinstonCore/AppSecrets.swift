@@ -2,12 +2,17 @@ import Foundation
 
 /// Telegram API credentials, injected at build time from `App/Config/Secrets.xcconfig`
 /// through `Info.plist`.
-struct AppSecrets {
-    let apiID: Int32
-    let apiHash: String
+public struct AppSecrets: Sendable, Equatable {
+    public let apiID: Int32
+    public let apiHash: String
+
+    public init(apiID: Int32, apiHash: String) {
+        self.apiID = apiID
+        self.apiHash = apiHash
+    }
 
     /// Nil when `Secrets.xcconfig` is missing or still has placeholder values.
-    static func load(from bundle: Bundle = .main) -> AppSecrets? {
+    public static func load(from bundle: Bundle = .main) -> AppSecrets? {
         guard
             let idString = bundle.object(forInfoDictionaryKey: "TelegramAPIID") as? String,
             let apiID = Int32(idString), apiID != 0,

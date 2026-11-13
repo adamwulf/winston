@@ -52,6 +52,10 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         var files: [Int: File] = [:]
         var historyPageSize = 100
         var nextTemporaryID: Int64 = 9_000_000
+        /// Calls the tests are holding back, and the requests waiting on them.
+        var held: Set<Call> = []
+        var waiting: [Call: [CheckedContinuation<Void, Never>]] = [:]
+        var closeCount = 0
     }
 
     package let encoder: JSONEncoder
@@ -98,6 +102,28 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
 
     package func succeed(_ call: Call) {
         withState { $0.failures[call] = nil }
+    }
+
+    /// Makes every later `call` wait, after it is recorded in `requests`, until `release(_:)`.
+    /// For tests of what happens while a request is in flight.
+    package func hold(_ call: Call) {
+        withState { _ = $0.held.insert(call) }
+    }
+
+    /// Lets the held `call` requests carry on, and stops holding new ones.
+    package func release(_ call: Call) {
+        let waiting = withState { state in
+            state.held.remove(call)
+            return state.waiting.removeValue(forKey: call) ?? []
+        }
+        for continuation in waiting {
+            continuation.resume()
+        }
+    }
+
+    /// How many times the link has closed its clients, as it does before the app quits.
+    package var closeCount: Int {
+        withState { $0.closeCount }
     }
 
     /// Adds a chat to the main chat list, and the user it is with.
@@ -216,6 +242,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func closeClients() {
+        withState { $0.closeCount += 1 }
         send(.authorizationStateClosing)
         send(.authorizationStateClosed)
     }
@@ -229,6 +256,25 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
             return state.failures[call]
         }
         if let failure {
+            throw failure
+        }
+    }
+
+    /// `record` for the asynchronous requests: after recording, waits while the tests hold
+    /// that call, then throws if they made it fail.
+    private func begin(_ request: Request, _ call: Call) async throws {
+        withState { $0.requests.append(request) }
+        await withCheckedContinuation { continuation in
+            let isHeld = withState { state in
+                guard state.held.contains(call) else { return false }
+                state.waiting[call, default: []].append(continuation)
+                return true
+            }
+            if !isHeld {
+                continuation.resume()
+            }
+        }
+        if let failure = withState({ $0.failures[call] }) {
             throw failure
         }
     }
@@ -255,7 +301,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         useSecretChats: Bool?,
         useTestDc: Bool?
     ) async throws -> Ok {
-        try record(
+        try await begin(
             .setTdlibParameters(
                 apiID: apiId,
                 apiHash: apiHash,
@@ -272,7 +318,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         phoneNumber: String?,
         settings: PhoneNumberAuthenticationSettings?
     ) async throws -> Ok {
-        try record(.setAuthenticationPhoneNumber(phoneNumber), .setAuthenticationPhoneNumber)
+        try await begin(.setAuthenticationPhoneNumber(phoneNumber), .setAuthenticationPhoneNumber)
         send(.authorizationStateWaitCode(AuthorizationStateWaitCode(codeInfo: AuthenticationCodeInfo(
             nextType: nil,
             phoneNumber: phoneNumber ?? "",
@@ -283,7 +329,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func checkAuthenticationCode(code: String?) async throws -> Ok {
-        try record(.checkAuthenticationCode(code), .checkAuthenticationCode)
+        try await begin(.checkAuthenticationCode(code), .checkAuthenticationCode)
         if let hint = withState({ $0.passwordHint }) {
             send(.authorizationStateWaitPassword(AuthorizationStateWaitPassword(
                 hasPassportData: false,
@@ -299,14 +345,14 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func checkAuthenticationPassword(password: String?) async throws -> Ok {
-        try record(.checkAuthenticationPassword(password), .checkAuthenticationPassword)
+        try await begin(.checkAuthenticationPassword(password), .checkAuthenticationPassword)
         withState { $0.isLoggedIn = true }
         send(.authorizationStateReady)
         return Ok()
     }
 
     package func logOut() async throws -> Ok {
-        try record(.logOut, .logOut)
+        try await begin(.logOut, .logOut)
         withState { $0.isLoggedIn = false }
         send(.authorizationStateLoggingOut)
         send(.authorizationStateClosed)
@@ -314,18 +360,18 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func loadChats(chatList: ChatList?, limit: Int?) async throws -> Ok {
-        try record(.loadChats(limit: limit), .loadChats)
+        try await begin(.loadChats(limit: limit), .loadChats)
         return Ok()
     }
 
     package func getChats(chatList: ChatList?, limit: Int?) async throws -> Chats {
-        try record(.getChats(limit: limit), .getChats)
+        try await begin(.getChats(limit: limit), .getChats)
         let ids = withState { $0.chats.map(\.id) }
         return Chats(chatIds: ids, totalCount: ids.count)
     }
 
     package func getChat(chatId: Int64?) async throws -> Chat {
-        try record(.getChat(chatId), .getChat)
+        try await begin(.getChat(chatId), .getChat)
         guard let chat = withState({ $0.chats.first { $0.id == chatId } }) else {
             throw TDLibKit.Error(code: 400, message: "Chat not found")
         }
@@ -333,7 +379,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func getUser(userId: Int64?) async throws -> User {
-        try record(.getUser(userId), .getUser)
+        try await begin(.getUser(userId), .getUser)
         guard let userId, let user = withState({ $0.users[userId] }) else {
             throw TDLibKit.Error(code: 400, message: "User not found")
         }
@@ -350,7 +396,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         offset: Int?,
         onlyLocal: Bool?
     ) async throws -> Messages {
-        try record(.getChatHistory(chatID: chatId, fromMessageID: fromMessageId, limit: limit), .getChatHistory)
+        try await begin(.getChatHistory(chatID: chatId, fromMessageID: fromMessageId, limit: limit), .getChatHistory)
         let page: [Message] = withState { state in
             let newestFirst = (state.messages[chatId ?? 0] ?? []).sorted { $0.id > $1.id }
             let from = fromMessageId ?? 0
@@ -361,7 +407,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     }
 
     package func getMessage(chatId: Int64?, messageId: Int64?) async throws -> Message {
-        try record(.getMessage(chatID: chatId, messageID: messageId), .getMessage)
+        try await begin(.getMessage(chatID: chatId, messageID: messageId), .getMessage)
         guard let chatId, let messageId, let message = message(messageId, in: chatId) else {
             throw TDLibKit.Error(code: 404, message: "Not Found")
         }
@@ -381,14 +427,14 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         let content: MessageContent
         switch inputMessageContent {
         case .inputMessageText(let text):
-            try record(.sendText(chatID: chatId, text: text.text.text), .sendMessage)
+            try await begin(.sendText(chatID: chatId, text: text.text.text), .sendMessage)
             content = .messageText(MessageText(linkPreview: nil, linkPreviewOptions: nil, text: text.text))
         case .inputMessagePhoto(let photo):
             var path = ""
             if case .inputFileLocal(let local) = photo.photo.photo {
                 path = local.path
             }
-            try record(
+            try await begin(
                 .sendPhoto(
                     chatID: chatId,
                     path: path,
@@ -442,7 +488,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         updateRecentReactions: Bool?
     ) async throws -> Ok {
         let emoji = Self.emoji(of: reactionType)
-        try record(.addReaction(chatID: chatId, messageID: messageId, emoji: emoji), .addMessageReaction)
+        try await begin(.addReaction(chatID: chatId, messageID: messageId, emoji: emoji), .addMessageReaction)
         try react(chatID: chatId, messageID: messageId) { reactions in
             if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
                 reactions[index] = messageReaction(
@@ -463,7 +509,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         reactionType: ReactionType?
     ) async throws -> Ok {
         let emoji = Self.emoji(of: reactionType)
-        try record(.removeReaction(chatID: chatId, messageID: messageId, emoji: emoji), .removeMessageReaction)
+        try await begin(.removeReaction(chatID: chatId, messageID: messageId, emoji: emoji), .removeMessageReaction)
         try react(chatID: chatId, messageID: messageId) { reactions in
             guard let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) else { return }
             if reactions[index].totalCount > 1 {
@@ -485,7 +531,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         messageIds: [Int64]?,
         source: MessageSource?
     ) async throws -> Ok {
-        try record(.viewMessages(chatID: chatId, messageIDs: messageIds, forceRead: forceRead), .viewMessages)
+        try await begin(.viewMessages(chatID: chatId, messageIDs: messageIds, forceRead: forceRead), .viewMessages)
         return Ok()
     }
 
@@ -496,7 +542,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         priority: Int?,
         synchronous: Bool?
     ) async throws -> File {
-        try record(.downloadFile(fileID: fileId), .downloadFile)
+        try await begin(.downloadFile(fileID: fileId), .downloadFile)
         guard let fileId, let file = withState({ $0.files[fileId] }) else {
             throw TDLibKit.Error(code: 400, message: "Invalid file identifier")
         }

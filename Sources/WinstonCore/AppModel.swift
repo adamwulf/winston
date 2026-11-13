@@ -1,9 +1,9 @@
 import Foundation
-import PhotosUI
-import SwiftUI
+import Logging
+import LogSupport
+import Observation
 import TelegramLink
 import VoiceLoop
-import WinstonLogging
 #if os(iOS)
 import UIKit
 #endif
@@ -18,93 +18,106 @@ private enum StorageKey {
 }
 
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
+@MainActor
 @Observable
-final class AppModel {
+public final class AppModel {
     private static let log = Logger(label: "app.model")
 
     /// False when `Secrets.xcconfig` is missing, so there is no Telegram session.
-    let hasCredentials: Bool
-    let voiceLoop: VoiceLoop
+    public let hasCredentials: Bool
+    public let voiceLoop: VoiceLoop
 
-    private(set) var authState: AuthState = .starting
+    public private(set) var authState: AuthState = .starting
     /// Why TDLib failed to start, if it did.
-    private(set) var startError: String?
+    public private(set) var startError: String?
 
-    private(set) var chats: [BotChat] = []
-    private(set) var chatsLoaded = false
-    private(set) var chatsError: String?
+    public private(set) var chats: [BotChat] = []
+    public private(set) var chatsLoaded = false
+    public private(set) var chatsError: String?
     /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
-    var selectedChatID: ChatID? = (UserDefaults.standard.object(forKey: StorageKey.selectedChatID) as? Int64)
-        .map(ChatID.init) {
-        didSet { UserDefaults.standard.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
+    public var selectedChatID: ChatID? {
+        didSet { defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
     }
-    private(set) var messages: [ChatID: [ChatMessage]] = [:]
-    private(set) var typingChats: Set<ChatID> = []
-    private(set) var downloadedFiles: [Int32: URL] = [:]
-    private(set) var downloadingFiles: Set<Int32> = []
-    private(set) var isSendingPhoto = false
+    public private(set) var messages: [ChatID: [ChatMessage]] = [:]
+    public private(set) var typingChats: Set<ChatID> = []
+    public private(set) var downloadedFiles: [Int32: URL] = [:]
+    public private(set) var downloadingFiles: Set<Int32> = []
+    public private(set) var isSendingPhoto = false
 
-    private(set) var isVoiceMode = false
+    public private(set) var isVoiceMode = false
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
-    private(set) var isStartingVoice = false
+    public private(set) var isStartingVoice = false
     /// Counts the times voice mode was turned off, so `setVoiceMode(_:)` can tell when a quick off-and-on
     /// cancelled the start it is waiting on.
     @ObservationIgnored private var voiceModeOffCount = 0
     /// Seconds the transcript must stay unchanged before voice mode sends it. Persisted.
-    var pauseThreshold: Double = UserDefaults.standard.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2 {
+    public var pauseThreshold: Double {
         didSet {
-            UserDefaults.standard.set(pauseThreshold, forKey: StorageKey.pauseThreshold)
+            defaults.set(pauseThreshold, forKey: StorageKey.pauseThreshold)
             applyVoiceSettings()
         }
     }
     /// The `VoiceOption.id` to speak with, or nil for VoiceLoop's default. Persisted.
-    var voiceIdentifier: String? = UserDefaults.standard.string(forKey: StorageKey.voiceIdentifier) {
+    public var voiceIdentifier: String? {
         didSet {
-            UserDefaults.standard.set(voiceIdentifier, forKey: StorageKey.voiceIdentifier)
+            defaults.set(voiceIdentifier, forKey: StorageKey.voiceIdentifier)
             applyVoiceSettings()
         }
     }
     /// How fast replies are spoken, as a `VoiceLoop.speechRate`. Persisted.
-    var speechRate: Float = UserDefaults.standard.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate {
+    public var speechRate: Float {
         didSet {
-            UserDefaults.standard.set(speechRate, forKey: StorageKey.speechRate)
+            defaults.set(speechRate, forKey: StorageKey.speechRate)
             applyVoiceSettings()
         }
     }
     /// Whether voice mode may pause or turn down other apps' audio, such as music. Persisted.
-    var pausesOtherAudio: Bool = UserDefaults.standard.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true {
+    public var pausesOtherAudio: Bool {
         didSet {
-            UserDefaults.standard.set(pausesOtherAudio, forKey: StorageKey.pausesOtherAudio)
+            defaults.set(pausesOtherAudio, forKey: StorageKey.pausesOtherAudio)
             applyVoiceSettings()
         }
     }
     /// A user-facing error from the last action. The chat screen shows it in an alert.
-    var errorMessage: String?
+    public var errorMessage: String?
 
     /// Nil without credentials, and in previews. One instance for the app's lifetime: once started it must
     /// never be deallocated, because TDLib's client manager blocks while tearing down.
     private let link: TelegramLink?
+    /// Where the settings persist.
+    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isLoadingChats = false
 
-    init() {
-        voiceLoop = VoiceLoop()
-        if let secrets = AppSecrets.load() {
-            link = TelegramLink(config: Self.telegramConfig(secrets))
-            hasCredentials = true
-        } else {
-            link = nil
-            hasCredentials = false
-        }
+    /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
+    /// the standard user defaults.
+    public convenience init() {
+        self.init(
+            link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
+            voiceLoop: VoiceLoop(),
+            defaults: .standard
+        )
+    }
+
+    /// Tests pass a link over a fake TDLib, a voice loop on offline audio, and defaults of their own.
+    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
+    package init(link: TelegramLink?, voiceLoop: VoiceLoop, defaults: UserDefaults, hasCredentials: Bool? = nil) {
+        self.link = link
+        self.voiceLoop = voiceLoop
+        self.defaults = defaults
+        self.hasCredentials = hasCredentials ?? (link != nil)
+        selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
+        pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
+        voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
+        speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
+        pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
         applyVoiceSettings()
     }
 
     #if DEBUG
     /// A model with sample data and no Telegram session, for SwiftUI previews.
-    init(previewChats: [BotChat], messages: [ChatID: [ChatMessage]], authState: AuthState) {
-        voiceLoop = VoiceLoop()
-        link = nil
-        hasCredentials = true
+    public convenience init(previewChats: [BotChat], messages: [ChatID: [ChatMessage]], authState: AuthState) {
+        self.init(link: nil, voiceLoop: VoiceLoop(), defaults: .standard, hasCredentials: true)
         self.authState = authState
         chats = previewChats
         chatsLoaded = true
@@ -121,14 +134,15 @@ final class AppModel {
     }
 
     /// Says a sample sentence in the chosen voice and speed, for the settings voice picker and speed slider.
-    func previewVoice() {
+    public func previewVoice() {
         let voices = VoiceLoop.availableVoices()
         let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first
         let name = voice?.name ?? "default"
         voiceLoop.preview("This is how I sound with the \(name) voice.")
     }
 
-    private static func telegramConfig(_ secrets: AppSecrets) -> TelegramConfig {
+    /// Where TDLib keeps its data, and how the app describes itself to Telegram.
+    static func telegramConfig(_ secrets: AppSecrets) -> TelegramConfig {
         let directory = URL.applicationSupportDirectory.appending(path: "Telegram", directoryHint: .isDirectory)
         let info = Bundle.main.infoDictionary ?? [:]
         let version = info["CFBundleShortVersionString"] as? String ?? "0"
@@ -156,7 +170,7 @@ final class AppModel {
 
     /// Starts consuming the Telegram and voice streams, then starts TDLib. Only the first call does anything:
     /// `TelegramLink.start()` runs once per instance, and TelegramLink restarts itself after a logout.
-    func start() {
+    public func start() {
         guard let link, !started else { return }
         started = true
         Task {
@@ -185,14 +199,14 @@ final class AppModel {
     }
 
     /// Closes the Telegram session cleanly before the app quits. See `TelegramLink.closeForTermination()`.
-    func closeForQuit() async {
+    public func closeForQuit() async {
         voiceLoop.stop()
         await link?.closeForTermination()
     }
 
     /// The same, for `applicationWillTerminate`, which must finish before it returns. Waits at
     /// most `timeout`. TelegramLink isn't main-actor isolated, so blocking here can't deadlock it.
-    func closeForQuitBlocking(timeout: DispatchTimeInterval = .seconds(3)) {
+    public func closeForQuitBlocking(timeout: DispatchTimeInterval = .seconds(3)) {
         voiceLoop.stop()
         guard let link else { return }
         let closed = DispatchSemaphore(value: 0)
@@ -205,19 +219,19 @@ final class AppModel {
 
     // MARK: - Login
 
-    func submitPhoneNumber(_ phoneNumber: String) async throws {
+    public func submitPhoneNumber(_ phoneNumber: String) async throws {
         try await link?.submitPhoneNumber(phoneNumber)
     }
 
-    func submitCode(_ code: String) async throws {
+    public func submitCode(_ code: String) async throws {
         try await link?.submitCode(code)
     }
 
-    func submitPassword(_ password: String) async throws {
+    public func submitPassword(_ password: String) async throws {
         try await link?.submitPassword(password)
     }
 
-    func logOut() async {
+    public func logOut() async {
         do {
             try await link?.logOut()
         } catch {
@@ -253,25 +267,25 @@ final class AppModel {
 
     // MARK: - Chats
 
-    var currentChat: BotChat? {
+    public var currentChat: BotChat? {
         chats.first { $0.id == selectedChatID }
     }
 
-    var currentMessages: [ChatMessage] {
+    public var currentMessages: [ChatMessage] {
         currentChat.flatMap { messages[$0.id] } ?? []
     }
 
-    var isBotTyping: Bool {
+    public var isBotTyping: Bool {
         currentChat.map { typingChats.contains($0.id) } ?? false
     }
 
     /// The bot's latest message in the current chat, which the 👍 button reacts to.
-    var latestIncomingMessage: ChatMessage? {
+    public var latestIncomingMessage: ChatMessage? {
         currentMessages.last { !$0.isOutgoing }
     }
 
     /// Loads the bot chats and their recent history.
-    func loadChats() async {
+    public func loadChats() async {
         guard let link, !isLoadingChats else { return }
         isLoadingChats = true
         defer { isLoadingChats = false }
@@ -362,7 +376,7 @@ final class AppModel {
 
     /// Sends `text` exactly as given to the current chat. Returns false and sets `errorMessage` on failure.
     @discardableResult
-    func sendText(_ text: String) async -> Bool {
+    public func sendText(_ text: String) async -> Bool {
         guard let link, let chat = currentChat else { return false }
         do {
             try await link.sendText(text, to: chat.id)
@@ -375,13 +389,14 @@ final class AppModel {
     }
 
     /// Sends a picked photo, downscaled and re-encoded as JPEG, with an optional caption.
-    /// Returns false and sets `errorMessage` on failure.
-    func sendPhoto(_ item: PhotosPickerItem, caption: String) async -> Bool {
+    /// `loadData` loads the picked photo's data; in the app it is `PhotosPickerItem.loadTransferable`, which
+    /// returns nil when the photo can't be read. Returns false and sets `errorMessage` on failure.
+    public func sendPhoto(caption: String, loadData: () async throws -> Data?) async -> Bool {
         guard let link, let chat = currentChat else { return false }
         isSendingPhoto = true
         defer { isSendingPhoto = false }
         do {
-            guard let data = try await item.loadTransferable(type: Data.self) else {
+            guard let data = try await loadData() else {
                 throw PhotoFiles.Failure.unreadableImage
             }
             // TDLib uploads after sendPhoto returns, and the sent message's photo can keep pointing at this
@@ -398,7 +413,7 @@ final class AppModel {
         }
     }
 
-    func toggleThumbsUp(on message: ChatMessage) async {
+    public func toggleThumbsUp(on message: ChatMessage) async {
         guard let link else { return }
         do {
             try await link.toggleReaction("👍", on: message.id, in: message.chatID)
@@ -412,7 +427,7 @@ final class AppModel {
     }
 
     /// Marks an incoming message read so Adam's other Telegram apps don't show it as unread.
-    func markRead(_ message: ChatMessage) {
+    public func markRead(_ message: ChatMessage) {
         guard let link, !message.isOutgoing else { return }
         Task {
             do {
@@ -429,16 +444,16 @@ final class AppModel {
     // MARK: - Files
 
     /// The local URL of a file, if it's already downloaded.
-    func localURL(for file: FileRef) -> URL? {
+    public func localURL(for file: FileRef) -> URL? {
         downloadedFiles[file.id] ?? file.localPath.map { URL(filePath: $0) }
     }
 
-    func isDownloading(_ file: FileRef) -> Bool {
+    public func isDownloading(_ file: FileRef) -> Bool {
         downloadingFiles.contains(file.id)
     }
 
     /// Downloads a file if needed and caches its local URL.
-    func download(_ file: FileRef) async throws -> URL {
+    public func download(_ file: FileRef) async throws -> URL {
         if let url = localURL(for: file) { return url }
         guard let link else { throw TelegramLinkError.notStarted }
         downloadingFiles.insert(file.id)
@@ -452,7 +467,7 @@ final class AppModel {
 
     /// Switches between text and voice mode. Starting voice mode can fail, for example without mic permission.
     /// Turning it on again while already in voice mode resumes a loop that turned itself off.
-    func setVoiceMode(_ on: Bool) async {
+    public func setVoiceMode(_ on: Bool) async {
         if on {
             isVoiceMode = true
             // A running loop needs no start. Toggled back on while the first start() is still running: that
@@ -498,7 +513,7 @@ final class AppModel {
 }
 
 /// A short, plain description of an error for the UI.
-func userMessage(for error: any Error) -> String {
+public func userMessage(for error: any Error) -> String {
     if let error = error as? TelegramLinkError {
         switch error {
         case .tdlib(_, let message): return message

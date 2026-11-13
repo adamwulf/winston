@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "TelegramLink", targets: ["TelegramLink"]),
         .library(name: "VoiceLoop", targets: ["VoiceLoop"]),
         .library(name: "WinstonLogging", targets: ["WinstonLogging"]),
+        .library(name: "WinstonCore", targets: ["WinstonCore"]),
     ],
     dependencies: [
         // TDLibKit release tags are prerelease-style versions, so they must be pinned exactly.
@@ -51,6 +52,28 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "FellerBuncher", package: "FellerBuncher"),
                 "LogSupport",
+            ]
+        ),
+        // The app's state and logic, with no UI: AppModel, AppSecrets and PhotoFiles. The app
+        // target keeps only SwiftUI views and AppKit/UIKit glue. Like the other libraries, it
+        // logs through swift-log and LogSupport only.
+        .target(
+            name: "WinstonCore",
+            dependencies: [
+                "TelegramLink",
+                "VoiceLoop",
+                .product(name: "Logging", package: "swift-log"),
+                "LogSupport",
+            ]
+        ),
+        .testTarget(
+            name: "WinstonCoreTests",
+            dependencies: [
+                "WinstonCore",
+                "TelegramLink",
+                "VoiceLoop",
+                "TelegramLinkTestSupport",
+                "VoiceLoopTestSupport",
             ]
         ),
         // Shared by the test targets: a fake TDLib behind TelegramLink's `package` seam, and
