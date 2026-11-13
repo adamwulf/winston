@@ -284,7 +284,10 @@ Inside it:
 - First launch walks through the TDLib login steps: phone number, code (sent
   to Adam's other Telegram apps), then the 2FA password if he has one. The
   login state machine is the fiddliest part of the Telegram side.
-- Settings has the pause threshold, the voice, and Log out.
+- Settings has the pause threshold, the voice, a "Pause Other Audio" toggle,
+  and Log out. With the toggle off, the iOS audio session mixes with other
+  apps' audio (`.mixWithOthers`) and voice processing ducks it at its minimum
+  level, so music keeps playing during voice mode.
 
 ## Milestones
 

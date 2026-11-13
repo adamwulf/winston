@@ -23,7 +23,9 @@ final class Pipeline {
     var analyzer: SpeechAnalyzer?
     var tasks: [Task<Void, Never>] = []
 
-    init(analyzerFormat: AVAudioFormat, voiceProcessing: Bool) throws {
+    /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
+    /// When false, it ducks them as little as it can.
+    init(analyzerFormat: AVAudioFormat, voiceProcessing: Bool, ducksOtherAudio: Bool) throws {
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
         hasVoiceProcessing = voiceProcessing
@@ -32,6 +34,13 @@ final class Pipeline {
         if voiceProcessing {
             // Echo cancellation: removes the player's output from the microphone signal.
             try input.setVoiceProcessingEnabled(true)
+            if !ducksOtherAudio {
+                // Voice processing turns other audio down while it runs. `.min` is the least it offers.
+                input.voiceProcessingOtherAudioDuckingConfiguration = .init(
+                    enableAdvancedDucking: false,
+                    duckingLevel: .min
+                )
+            }
         }
         let inputFormat = input.outputFormat(forBus: 0)
         #if os(macOS)
