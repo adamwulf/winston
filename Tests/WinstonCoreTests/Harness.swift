@@ -24,7 +24,9 @@ final class Harness {
     /// - Parameters:
     ///   - fake: the pretend Telegram account. Logged in, with no chats, by default.
     ///   - settings: values already in the user defaults when the model starts up.
-    init(fake: FakeTDLib = FakeTDLib(), settings: [String: Any] = [:]) {
+    ///   - soundCues: whether the voice loop plays its sound cues. Off by default, so the only
+    ///     sound in voice mode is what is spoken.
+    init(fake: FakeTDLib = FakeTDLib(), settings: [String: Any] = [:], soundCues: Bool = false) {
         self.fake = fake
         suiteName = "winston-tests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
@@ -36,7 +38,7 @@ final class Harness {
         }
         model = AppModel(
             link: fake.makeLink(typingTimeout: .seconds(60)),
-            voiceLoop: bed.makeLoop(),
+            voiceLoop: bed.makeLoop(soundCues: soundCues),
             defaults: defaults
         )
     }
@@ -53,8 +55,10 @@ final class Harness {
 
     /// Two bot chats, Home (chat 1) and Laptop (chat 2), listed newest first as TDLib does,
     /// each with a little history.
-    /// - Parameter settings: values already in the user defaults when the model starts up.
-    static func withTwoBots(settings: [String: Any] = [:]) -> Harness {
+    /// - Parameters:
+    ///   - settings: values already in the user defaults when the model starts up.
+    ///   - soundCues: whether the voice loop plays its sound cues.
+    static func withTwoBots(settings: [String: Any] = [:], soundCues: Bool = false) -> Harness {
         let fake = FakeTDLib()
         fake.addBotChat(id: 2, title: "Laptop", username: "laptop_bot")
         fake.addBotChat(id: 1, title: "Home", username: "home_bot")
@@ -63,7 +67,7 @@ final class Harness {
             textMessage(id: 11, chatID: 1, "Two jobs are queued."),
             textMessage(id: 20, chatID: 2, "The coordinator is offline."),
         ])
-        return Harness(fake: fake, settings: settings)
+        return Harness(fake: fake, settings: settings, soundCues: soundCues)
     }
 
     /// Starts the model and waits until it is logged in with its chats and their history loaded.

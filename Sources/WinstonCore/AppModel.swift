@@ -334,7 +334,16 @@ public final class AppModel {
                 }
             }
         case .reactionsChanged(let chat, let id, let reactions):
-            updateMessage(id, in: chat) { $0.reactions = reactions }
+            var botAddedThumbsUp = false
+            updateMessage(id, in: chat) { message in
+                let before = message.othersThumbsUpCount
+                message.reactions = reactions
+                botAddedThumbsUp = message.othersThumbsUpCount > before
+            }
+            // In voice mode Adam may not be looking, so the bot's 👍 in the chat he's in chimes.
+            if botAddedThumbsUp, isVoiceMode, chat == currentChat?.id {
+                voiceLoop.play(.reaction)
+            }
         case .typing(let chat, let isTyping):
             guard isBotChat(chat) else { return }
             if isTyping {
@@ -516,6 +525,12 @@ extension ChatMessage {
     /// Whether Adam's own 👍 is on this message: what `AppModel.toggleThumbsUp(on:)` flips.
     public var hasMyThumbsUp: Bool {
         reactions.contains { $0.emoji == "👍" && $0.isChosen }
+    }
+
+    /// How many 👍 on this message aren't Adam's: in a bot chat, the bot's.
+    package var othersThumbsUpCount: Int {
+        guard let thumbsUp = reactions.first(where: { $0.emoji == "👍" }) else { return 0 }
+        return thumbsUp.count - (thumbsUp.isChosen ? 1 : 0)
     }
 }
 
