@@ -34,6 +34,7 @@ package final class FakeKokoro: KokoroEngine {
     private struct State {
         var loadBehavior = LoadBehavior.succeeds
         var loads = 0
+        var unloads = 0
         var isLoaded = false
         var waitingLoads: [CheckedContinuation<Void, any Error>] = []
         var downloadProgress: (@Sendable (Double) -> Void)?
@@ -55,6 +56,12 @@ package final class FakeKokoro: KokoroEngine {
 
     /// How many times the loop has asked for the model.
     package var loads: Int { state.withLock { $0.loads } }
+
+    /// How many times the loop has freed the model.
+    package var unloads: Int { state.withLock { $0.unloads } }
+
+    /// Whether the model is in memory.
+    package var isLoaded: Bool { state.withLock { $0.isLoaded } }
 
     /// Every sentence rendered or rendering, oldest first.
     package var requests: [Request] { state.withLock { $0.requests } }
@@ -119,6 +126,13 @@ package final class FakeKokoro: KokoroEngine {
             try await withCheckedThrowingContinuation { continuation in
                 state.withLock { $0.waitingLoads.append(continuation) }
             }
+        }
+    }
+
+    package func unload() async {
+        state.withLock { state in
+            state.unloads += 1
+            state.isLoaded = false
         }
     }
 

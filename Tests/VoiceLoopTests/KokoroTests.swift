@@ -179,6 +179,104 @@ struct KokoroSpeakingTests {
     }
 }
 
+// MARK: - Freeing the model
+
+/// The model is freed from memory while no Kokoro voice is chosen. It stays downloaded, so
+/// choosing a Kokoro voice again loads it without the network.
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct KokoroReleaseTests {
+    @Test func choosingASystemVoiceFreesTheModelAndAKokoroVoiceLoadsItAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        let systemVoice = try #require(VoiceLoop.availableVoices().first { $0.engine == .system })
+
+        loop.voiceIdentifier = systemVoice.id
+
+        #expect(loop.kokoroModelState == .notLoaded)
+        #expect(await eventually { bed.kokoro.unloads == 1 && !bed.kokoro.isLoaded })
+        #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.requests.isEmpty)
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loads == 2)
+        _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
+        #expect(bed.kokoro.requests.map(\.text) == ["Hi."])
+    }
+
+    @Test func aDownloadUnderWayWhenASystemVoiceIsChosenFinishesAndIsThenFreed() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.voiceIdentifier = nil
+        // The download carries on.
+        #expect(loop.kokoroModelState == .loading)
+        bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { loop.kokoroModelState == .notLoaded && bed.kokoro.unloads == 1 })
+        #expect(!bed.kokoro.isLoaded)
+    }
+
+    @Test func aKokoroVoiceChosenAgainBeforeTheDownloadFinishesKeepsTheModel() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.voiceIdentifier = nil
+        loop.voiceIdentifier = "kokoro.bf_emma"
+        bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(bed.kokoro.unloads == 0)
+        #expect(bed.kokoro.isLoaded)
+    }
+
+    @Test func aDownloadThatFailsAfterASystemVoiceIsChosenOffersNoRetry() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.voiceIdentifier = nil
+        bed.kokoro.finishLoading(succeeding: false)
+
+        #expect(await eventually { bed.kokoro.loads == 1 && loop.kokoroModelState == .notLoaded })
+        // Nothing to retry for while a system voice is chosen.
+        loop.loadKokoroModel()
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
+    }
+
+    @Test func aModelFreedMidReplyLeavesTheRestOfItToTheNewVoice() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        bed.kokoro.holdsSynthesis = true
+        loop.speak("The first sentence here. The second sentence here.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        loop.voiceIdentifier = nil
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        // Kokoro's first sentence played, then the system voice said the second.
+        #expect(bed.kokoro.requests.map(\.text) == ["The first sentence here."])
+        #expect(bed.audio.playedFrames > fakeSentenceFrames + fakeSentenceFrames / 2)
+    }
+}
+
 // MARK: - Cancelling
 
 /// Speaking stops while Kokoro is still rendering a sentence. Nothing more is rendered, and the
@@ -382,6 +480,10 @@ private final class RecordingKokoro: KokoroEngine {
         try await engine.load(downloadProgress: downloadProgress)
     }
 
+    func unload() async {
+        await engine.unload()
+    }
+
     func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         let samples = try await engine.synthesize(text, voice: voice, speed: speed)
         renderedSamples.withLock { $0 += samples.count { abs($0) >= 0.001 } }
@@ -419,5 +521,14 @@ struct KokoroRealModelTests {
         let rendered = kokoro.audibleSamples
         #expect(rendered > 24_000)
         #expect(abs(bed.audio.playedFrames - 2 * rendered) <= 2 * rendered / 10)
+
+        // Freed for a system voice, then loaded again from the stored download.
+        loop.voiceIdentifier = nil
+        #expect(loop.kokoroModelState == .notLoaded)
+        loop.voiceIdentifier = "kokoro.bf_emma"
+        #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
+        loop.speak("And hello again.")
+        #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
+        #expect(kokoro.audibleSamples > rendered)
     }
 }

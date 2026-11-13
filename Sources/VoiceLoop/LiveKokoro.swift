@@ -82,6 +82,10 @@ package actor LiveKokoro: KokoroEngine {
         }
     }
 
+    package func unload() {
+        model = nil
+    }
+
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         guard let model else { throw KokoroEngineError.notLoaded }
         return try model.synthesize(text: text, voice: voice, speed: speed)

@@ -16,6 +16,9 @@ package protocol KokoroEngine: Sendable {
     /// `downloadProgress` gets the download's progress, from 0 to 1, and is not called when the
     /// model is already stored. It may be called on any thread.
     func load(downloadProgress: @escaping @Sendable (Double) -> Void) async throws
+    /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
+    /// again without downloading.
+    func unload() async
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded.
     func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float]
@@ -23,7 +26,8 @@ package protocol KokoroEngine: Sendable {
 
 /// Where the Kokoro model is, for the settings screen.
 public enum KokoroModelState: Sendable, Equatable {
-    /// Nothing has asked for the model yet in this run. It may already be stored.
+    /// Not loaded: nothing has asked for it yet in this run, or no Kokoro voice is chosen. It
+    /// may already be stored.
     case notLoaded
     /// Loading the stored model.
     case loading
@@ -36,7 +40,7 @@ public enum KokoroModelState: Sendable, Equatable {
     case failed
 }
 
-/// The model's state, and loading it on demand. One per voice loop.
+/// The model's state, and loading it while a Kokoro voice is chosen. One per voice loop.
 @MainActor
 @Observable
 final class KokoroModel {
@@ -44,6 +48,11 @@ final class KokoroModel {
 
     private(set) var state: KokoroModelState = .notLoaded
     @ObservationIgnored let engine: any KokoroEngine
+    /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
+    @ObservationIgnored private var isWanted = false
+    /// The latest load or unload. Each waits for the one before, so that an unload and the
+    /// load after it reach the engine in order.
+    @ObservationIgnored private var lastEngineCall: Task<Void, Never>?
 
     init(engine: any KokoroEngine) {
         self.engine = engine
@@ -52,6 +61,7 @@ final class KokoroModel {
     /// Downloads and loads the model, unless it is ready or already on its way. After a failure,
     /// tries again.
     func load() {
+        isWanted = true
         switch state {
         case .loading, .downloading, .ready:
             return
@@ -60,20 +70,54 @@ final class KokoroModel {
         }
         state = .loading
         let started = ContinuousClock.now
-        Task {
+        callEngine { [engine] in
             do {
                 try await engine.load { progress in
                     Task { @MainActor in
                         self.downloaded(progress)
                     }
                 }
-                state = .ready
-                Self.log.notice("kokoro model ready", ["ms": Int(started.duration(to: .now) / .milliseconds(1))])
             } catch {
-                state = .failed
+                // Settings offers a retry only while a Kokoro voice is chosen.
+                self.state = self.isWanted ? .failed : .notLoaded
                 // Codes only: the downloader's messages name the model's folder.
                 Self.log.error("kokoro model load failed", error.logCodes())
+                return
             }
+            guard self.isWanted else {
+                // A system voice was chosen while it loaded. The download is kept. The state
+                // changes first, so a `load()` from now on queues a new load after the unload.
+                self.state = .notLoaded
+                Self.log.notice("kokoro model loaded after its voice was unchosen; releasing it")
+                self.callEngine { [engine] in
+                    await engine.unload()
+                }
+                return
+            }
+            self.state = .ready
+            Self.log.notice("kokoro model ready", ["ms": Int(started.duration(to: .now) / .milliseconds(1))])
+        }
+    }
+
+    /// Frees the loaded model's memory, now that no Kokoro voice is chosen. A load in progress
+    /// isn't cancelled, so a download isn't lost: the model is freed when it finishes, unless a
+    /// Kokoro voice is chosen again by then.
+    func release() {
+        isWanted = false
+        guard state == .ready else { return }
+        state = .notLoaded
+        Self.log.notice("kokoro model released")
+        callEngine { [engine] in
+            await engine.unload()
+        }
+    }
+
+    /// Runs `call` once the previous load or unload has finished.
+    private func callEngine(_ call: @escaping @MainActor () async -> Void) {
+        let previous = lastEngineCall
+        lastEngineCall = Task {
+            await previous?.value
+            await call()
         }
     }
 

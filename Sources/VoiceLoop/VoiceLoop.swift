@@ -47,11 +47,16 @@ public final class VoiceLoop {
     public var pauseThreshold: Duration = .milliseconds(1200)
     /// The `VoiceOption.id` to speak with; nil picks the best installed system voice. Choosing a
     /// Kokoro voice downloads and loads its model if needed (see `kokoroModelState`), and until
-    /// it is ready, the best system voice speaks instead.
+    /// it is ready, the best system voice speaks instead. Choosing any other voice frees the
+    /// loaded model's memory; it stays downloaded.
     public var voiceIdentifier: String? {
         didSet {
             guard voiceIdentifier != oldValue else { return }
-            loadKokoroModelIfChosen()
+            if isKokoroVoiceChosen {
+                kokoroModel.load()
+            } else {
+                kokoroModel.release()
+            }
         }
     }
     /// The Kokoro voices' model. It downloads and loads when a Kokoro voice is chosen, and when
@@ -459,10 +464,10 @@ public final class VoiceLoop {
         systemVoices() + KokoroCatalog.voices(forLanguage: AVSpeechSynthesisVoice.currentLanguageCode())
     }
 
-    /// Downloads and loads the Kokoro model if it isn't ready or on its way: a retry after
-    /// `kokoroModelState` shows `.failed`.
+    /// With a Kokoro voice chosen, downloads and loads its model if it isn't ready or on its way:
+    /// a retry after `kokoroModelState` shows `.failed`.
     public func loadKokoroModel() {
-        kokoroModel.load()
+        loadKokoroModelIfChosen()
     }
 
     /// The system voices of `availableVoices()`.
@@ -900,6 +905,11 @@ public final class VoiceLoop {
         kokoroSynthesis = Task {
             for (index, sentence) in sentences.enumerated() {
                 guard !Task.isCancelled else { return }
+                guard kokoroModel.state == .ready else {
+                    // Another voice was chosen, which freed the model. That voice says the rest.
+                    synthesizeWithSystemVoice(sentences[index...].joined(separator: " "), into: playback)
+                    return
+                }
                 let samples: [Float]
                 do {
                     samples = try await engine.synthesize(sentence, voice: voice, speed: speed)
@@ -925,8 +935,13 @@ public final class VoiceLoop {
 
     /// Starts loading the Kokoro model if a Kokoro voice is chosen.
     private func loadKokoroModelIfChosen() {
-        guard let voiceIdentifier, KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier) != nil else { return }
+        guard isKokoroVoiceChosen else { return }
         kokoroModel.load()
+    }
+
+    private var isKokoroVoiceChosen: Bool {
+        guard let voiceIdentifier else { return false }
+        return KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier) != nil
     }
 
     private func speechFinished(_ playback: SpeechPlayback) {
