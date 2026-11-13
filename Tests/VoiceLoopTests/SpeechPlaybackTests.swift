@@ -18,7 +18,7 @@ private func makePlayingPipeline(on bed: VoiceTestBed) throws -> Pipeline {
         environment: bed.environment
     )
     try pipeline.engine.start()
-    pipeline.player.play()
+    pipeline.speech.player.play()
     return pipeline
 }
 
@@ -40,6 +40,13 @@ private func speakerFrames(forSeconds seconds: Double) -> Int {
     Int(seconds * 48_000)
 }
 
+/// Lets the last render pass reach the speaker. Offline, a playback finishes once the player has
+/// rendered its last buffer, and the pitch shift after the player pulls it a pass ahead of the
+/// output (see `SpeechOutput.completion`).
+private func letTheLastPassPlay() async throws {
+    try await Task.sleep(for: .milliseconds(50))
+}
+
 /// Counts the calls to a playback's `onFinished`, which arrive on an audio thread.
 private final class FinishCounter: Sendable {
     private let calls = Mutex(0)
@@ -51,12 +58,7 @@ private final class FinishCounter: Sendable {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct SpeechPlaybackTests {
     private func makePlayback(on pipeline: Pipeline, finished: FinishCounter) -> SpeechPlayback {
-        SpeechPlayback(
-            text: "Hello.",
-            player: pipeline.player,
-            format: pipeline.speechFormat,
-            completion: pipeline.playbackCompletion
-        ) { _ in
+        pipeline.speech.makePlayback(text: "Hello.") { _ in
             finished.increment()
         }
     }
@@ -77,6 +79,7 @@ struct SpeechPlaybackTests {
         playback.synthesisFinished()
 
         #expect(await eventually { finished.count == 1 })
+        try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.3)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -95,6 +98,7 @@ struct SpeechPlaybackTests {
         // Each of the two ends the message as far as the playback knows; the loop ignores
         // the second report.
         #expect(await eventually { finished.count == 2 })
+        try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }

@@ -8,14 +8,15 @@ import Synchronization
 @MainActor
 final class Pipeline {
     let engine: AVAudioEngine
-    let player = AVAudioPlayerNode()
-    /// Plays sound cues, mixed with speech. A player of its own, so stopping speech leaves a cue alone.
+    /// The player for speech and its pitch shift.
+    let speech: SpeechOutput
+    /// Plays sound cues, mixed with speech, in the speech player's format. A player of its own,
+    /// so stopping speech leaves a cue alone, and not behind the pitch shift, so cues always
+    /// sound the same.
     let cuePlayer = AVAudioPlayerNode()
     /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
     /// the speech the player plays.
     let hasVoiceProcessing: Bool
-    /// The players' connection format; speech buffers are converted to it, and cues made in it.
-    let speechFormat: AVAudioFormat
     /// Microphone audio in the analyzer's format, for `SpeechAnalyzer.start(inputSequence:)`.
     let inputs: AsyncStream<AnalyzerInput>
     private let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
@@ -28,13 +29,6 @@ final class Pipeline {
     var recognizer: (any Recognizer)?
     var tasks: [Task<Void, Never>] = []
     private let analyzerFormat: AVAudioFormat
-
-    /// When a spoken buffer counts as played. `.dataPlayedBack` waits until the sound has left
-    /// the speaker, but it only fires for an engine that renders to an audio device. An engine
-    /// rendering offline, as in the tests, is done with a buffer once it is rendered.
-    var playbackCompletion: AVAudioPlayerNodeCompletionCallbackType {
-        engine.isInManualRenderingMode ? .dataRendered : .dataPlayedBack
-    }
 
     /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
     /// When false, it ducks them as little as it can. `session` names the listening session in
@@ -52,10 +46,7 @@ final class Pipeline {
         timeline = VoiceTimeline(session: session, fedAudio: fedAudio)
         hasVoiceProcessing = voiceProcessing
         self.analyzerFormat = analyzerFormat
-        guard let speechFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
-            throw AudioFormatError()
-        }
-        self.speechFormat = speechFormat
+        speech = try SpeechOutput(engine: engine)
 
         let input = engine.inputNode
         if voiceProcessing {
@@ -72,11 +63,10 @@ final class Pipeline {
         try connectOutputForVoiceProcessing()
         try installMicrophoneTap()
 
-        engine.attach(player)
+        speech.connect()
         engine.attach(cuePlayer)
         // Mono into the mixer, which spreads it to every output channel.
-        engine.connect(player, to: engine.mainMixerNode, format: speechFormat)
-        engine.connect(cuePlayer, to: engine.mainMixerNode, format: speechFormat)
+        engine.connect(cuePlayer, to: engine.mainMixerNode, format: speech.format)
         engine.prepare()
     }
 
@@ -168,8 +158,8 @@ final class Pipeline {
     /// engine is running: a player can't play in a stopped engine.
     func play(_ cue: SoundCue, onPlayed: @escaping @Sendable () -> Void) {
         // Making the buffer only fails for a format the pipeline doesn't use.
-        guard let buffer = cue.buffer(in: speechFormat) else { return }
-        cuePlayer.scheduleBuffer(buffer, completionCallbackType: playbackCompletion) { _ in onPlayed() }
+        guard let buffer = cue.buffer(in: speech.format) else { return }
+        cuePlayer.scheduleBuffer(buffer, completionCallbackType: speech.completion) { _ in onPlayed() }
         cuePlayer.play()
     }
 
@@ -178,7 +168,7 @@ final class Pipeline {
         for task in tasks { task.cancel() }
         tasks = []
         engine.inputNode.removeTap(onBus: 0)
-        player.stop()
+        speech.player.stop()
         inputContinuation.finish()
     }
 
@@ -272,22 +262,28 @@ final class SpeechPlayback: Sendable {
     /// When playback was set up, for the logs.
     let started = ContinuousClock.now
     private let state: Mutex<State>
-    /// When the last buffer counts as played. See `Pipeline.playbackCompletion`.
+    /// When the last buffer counts as played. See `SpeechOutput.completion`.
     private let completion: AVAudioPlayerNodeCompletionCallbackType
+    /// Frames of silence played after the last buffer, before the message counts as finished.
+    private let trailingSilence: AVAudioFrameCount
     private let onFinished: @Sendable (SpeechPlayback) -> Void
 
-    /// `format` is the player's connection format. `onFinished` is called, on an arbitrary
-    /// thread, once the last buffer has played.
+    /// `format` is the player's connection format. `trailingSilence` frames of silence follow
+    /// the last buffer, for an effect after the player whose sound runs on past its input (see
+    /// `SpeechOutput.pitchShiftTail`). `onFinished` is called, on an arbitrary thread, once
+    /// the last buffer and the silence after it have played.
     init(
         text: String,
         player: AVAudioPlayerNode,
         format: AVAudioFormat,
         completion: AVAudioPlayerNodeCompletionCallbackType,
+        trailingSilence: AVAudioFrameCount,
         onFinished: @escaping @Sendable (SpeechPlayback) -> Void
     ) {
         self.text = text
         state = Mutex(State(player: player, format: format))
         self.completion = completion
+        self.trailingSilence = trailingSilence
         self.onFinished = onFinished
     }
 
@@ -305,7 +301,7 @@ final class SpeechPlayback: Sendable {
             if state.isSynthesized {
                 // Arrived after the synthesizer said it was done; this buffer now ends the message.
                 state.noteScheduling()
-                scheduleLast(converted, on: state.player)
+                scheduleLast(converted, on: state.player, format: state.format)
                 return
             }
             if let previous = state.pending {
@@ -333,16 +329,34 @@ final class SpeechPlayback: Sendable {
             guard let last = state.pending else { return true }
             state.pending = nil
             state.noteScheduling()
-            scheduleLast(last, on: state.player)
+            scheduleLast(last, on: state.player, format: state.format)
             return false
         }
         if finishedNow { onFinished(self) }
     }
 
-    private func scheduleLast(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode) {
-        player.scheduleBuffer(buffer, completionCallbackType: completion) { [self] _ in
+    /// Schedules the message's last buffer, then the trailing silence if there is any. The
+    /// message finishes when whichever comes last has played.
+    private func scheduleLast(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode, format: AVAudioFormat) {
+        var last = buffer
+        if trailingSilence > 0, let silence = Self.silence(frames: trailingSilence, format: format) {
+            player.scheduleBuffer(buffer)
+            last = silence
+        }
+        player.scheduleBuffer(last, completionCallbackType: completion) { [self] _ in
             onFinished(self)
         }
+    }
+
+    /// `frames` of silence in `format`, which is deinterleaved float.
+    private static func silence(frames: AVAudioFrameCount, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+              let channels = buffer.floatChannelData else { return nil }
+        buffer.frameLength = frames
+        for channel in 0..<Int(format.channelCount) {
+            channels[channel].update(repeating: 0, count: Int(frames))
+        }
+        return buffer
     }
 
     /// Ignores any further buffers. The caller stops the player.

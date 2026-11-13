@@ -27,7 +27,7 @@ package struct VoiceEnvironment: Sendable {
     /// A recognizer for the current locale, with its model installed. Throws
     /// `VoiceLoopError.speechModelUnavailable` when there is none.
     package var makeRecognizer: @MainActor @Sendable () async throws -> any Recognizer
-    /// A new audio engine for one listening session.
+    /// A new audio engine for one listening session, or for one voice preview while the loop is off.
     package var makeEngine: @MainActor @Sendable () throws -> AVAudioEngine
     /// Turns on voice processing (echo cancellation) for the engine's microphone.
     package var enableVoiceProcessing: @MainActor @Sendable (AVAudioInputNode) throws -> Void

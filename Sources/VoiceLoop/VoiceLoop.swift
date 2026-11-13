@@ -17,8 +17,9 @@ import UIKit
 /// microphone is ignored while a reply plays (half-duplex: only `stopSpeaking()`
 /// interrupts). Speech is rendered with
 /// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
-/// the same engine. Sound cues (`SoundCue`) play on a second player node there: taps when
-/// listening starts and stops, and whatever `play(_:)` is asked for.
+/// the same engine, through a pitch shift (see `SpeechOutput`). Sound cues (`SoundCue`) play
+/// on a second player node there, not pitch-shifted: taps when listening starts and stops,
+/// and whatever `play(_:)` is asked for.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -53,6 +54,14 @@ public final class VoiceLoop {
     public static let speechRates: ClosedRange<Float> = AVSpeechUtteranceMinimumSpeechRate...AVSpeechUtteranceMaximumSpeechRate
     /// Normal speaking speed.
     public static let defaultSpeechRate: Float = AVSpeechUtteranceDefaultSpeechRate
+    /// How high to speak, as a multiplier of the voice's own pitch, within `speechPitches`: 1 is
+    /// the voice's normal pitch, 2 an octave up. The audio is shifted after synthesis, so it
+    /// works the same for every voice. Applies from the next message spoken.
+    public var speechPitch: Float = VoiceLoop.defaultSpeechPitch
+    /// The multipliers `speechPitch` can take.
+    public static let speechPitches: ClosedRange<Float> = 0.5...2.0
+    /// The voice's normal pitch.
+    public static let defaultSpeechPitch: Float = 1.0
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -101,11 +110,15 @@ public final class VoiceLoop {
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
-    /// Plays voice previews when the loop isn't running. See `preview(_:)`.
+    /// Renders voice previews when the loop isn't running, for `previewPlayer`. See `preview(_:)`.
     @ObservationIgnored private let previewSynthesizer = AVSpeechSynthesizer()
+    /// Plays voice previews when the loop isn't running.
+    @ObservationIgnored private let previewPlayer: PreviewPlayer
     /// The synthesizer's delegate (held strongly; `delegate` is weak). Tells the playback
     /// when synthesis has finished.
     @ObservationIgnored private let synthesisObserver = SynthesisObserver()
+    /// The same, for `previewSynthesizer`.
+    @ObservationIgnored private let previewSynthesisObserver = SynthesisObserver()
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
@@ -139,13 +152,10 @@ public final class VoiceLoop {
     /// Tests pass a scripted recognizer and an audio engine that renders offline.
     package init(environment: VoiceEnvironment) {
         self.environment = environment
+        previewPlayer = PreviewPlayer(environment: environment)
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
-        #if os(iOS)
-        // Its own playback session, so the silent switch doesn't mute previews and the
-        // session voice mode sets up isn't touched.
-        previewSynthesizer.usesApplicationAudioSession = false
-        #endif
+        previewSynthesizer.delegate = previewSynthesisObserver
         observeAppAndSession()
     }
 
@@ -164,7 +174,7 @@ public final class VoiceLoop {
     private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
         // A preview playing outside the engine would be heard as speech once listening starts.
-        previewSynthesizer.stopSpeaking(at: .immediate)
+        stopPreview()
         isStarting = true
         defer {
             isStarting = false
@@ -371,20 +381,38 @@ public final class VoiceLoop {
         silence(consumingEcho: true, reason: "stopped")
     }
 
-    /// Says `text` right away in the current voice and speed, for trying them in settings, cutting off
+    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings, cutting off
     /// an earlier preview. While the loop is running it also stops any reply being spoken and
     /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
-    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker.
+    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker
+    /// on an engine of its own.
     public func preview(_ text: String) {
-        previewSynthesizer.stopSpeaking(at: .immediate)
+        stopPreview()
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
             stopSpeaking()
             speak(text)
-        } else {
-            previewSynthesizer.speak(makeUtterance(text))
+            return
         }
+        let utterance = makeUtterance(text)
+        let playback: SpeechPlayback
+        do {
+            playback = try previewPlayer.play(pitch: speechPitch)
+        } catch {
+            Self.log.error("voice preview failed to start", error.logContext())
+            return
+        }
+        previewSynthesisObserver.track(utterance, playback: playback)
+        previewSynthesizer.write(utterance) { @Sendable buffer in
+            playback.receive(buffer)
+        }
+    }
+
+    /// Stops a preview played while the loop was off.
+    private func stopPreview() {
+        previewSynthesizer.stopSpeaking(at: .immediate)
+        previewPlayer.stop()
     }
 
     /// Plays `cue` through the loop's engine, mixed with any reply being spoken, so echo
@@ -708,7 +736,8 @@ public final class VoiceLoop {
         #endif
     }
 
-    private static func deactivateAudioSession() {
+    /// Also used by the preview player once a preview ends.
+    static func deactivateAudioSession() {
         #if os(iOS)
         // Lets other apps' audio resume. It fails only if the session is already inactive
         // (after an interruption) or still busy, and there is nothing more to do either way.
@@ -787,12 +816,9 @@ public final class VoiceLoop {
               !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
         let utterance = makeUtterance(text)
-        let playback = SpeechPlayback(
-            text: text,
-            player: pipeline.player,
-            format: pipeline.speechFormat,
-            completion: pipeline.playbackCompletion
-        ) { [weak self] playback in
+        // Each message takes the pitch as it is now, also on a new or restarted engine.
+        pipeline.speech.setPitch(speechPitch)
+        let playback = pipeline.speech.makePlayback(text: text) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
@@ -806,7 +832,7 @@ public final class VoiceLoop {
         synthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
         }
-        pipeline.player.play()
+        pipeline.speech.player.play()
         pipeline.timeline.speechStarted(at: started, chars: text.count, queued: speechQueue.count) {
             playback.firstAudioHostTime
         }
@@ -841,7 +867,7 @@ public final class VoiceLoop {
         currentSpeech.cancel()
         synthesizer.stopSpeaking(at: .immediate)
         if let pipeline {
-            pipeline.player.stop()
+            pipeline.speech.player.stop()
             pipeline.timeline.speechStopped(outputLatency: pipeline.engine.outputNode.presentationLatency)
         }
         if consumingEcho {
