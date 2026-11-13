@@ -15,7 +15,17 @@ struct SettingsView: View {
     @State private var exportedLogs: SharedFile?
     @State private var exportError: String?
     #endif
-    private let voices = VoiceLoop.availableVoices()
+    private var voices: [VoiceOption] { model.voiceLoop.voices }
+
+    /// The picker shows the voice the loop speaks with: a chosen voice that isn't on offer in
+    /// this language shows as Default, though it stays saved for when it is on offer again.
+    private var voiceSelection: Binding<String?> {
+        Binding {
+            model.voiceLoop.chosenVoice?.id
+        } set: { id in
+            model.voiceIdentifier = id
+        }
+    }
 
     var body: some View {
         #if os(iOS)
@@ -57,7 +67,7 @@ struct SettingsView: View {
                     Text("\(model.pauseThreshold.formatted(.number.precision(.fractionLength(1)))) s")
                 }
                 Slider(value: $model.pauseThreshold, in: 0.8...3.0, step: 0.1)
-                Picker("Voice", selection: $model.voiceIdentifier) {
+                Picker("Voice", selection: voiceSelection) {
                     Text("Default").tag(String?.none)
                     ForEach(voices) { voice in
                         Text(label(for: voice)).tag(Optional(voice.id))

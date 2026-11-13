@@ -23,6 +23,9 @@ package final class VoiceTestBed {
     package var hasVoiceProcessing = true
     /// How many times the loop has tried to turn voice processing on.
     package private(set) var voiceProcessingAttempts = 0
+    /// The system's language. American English unless a test changes it, so the American Kokoro
+    /// voices (`af_heart` and the like) are on offer whatever the Mac running the tests uses.
+    package var languageCode = "en-US"
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -62,7 +65,8 @@ package final class VoiceTestBed {
                     throw VoiceTestBedError.noVoiceProcessing
                 }
             },
-            kokoro: kokoro
+            kokoro: kokoro,
+            languageCode: { [self] in languageCode }
         )
     }
 

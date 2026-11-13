@@ -148,8 +148,8 @@ public final class AppModel {
     /// name it in another voice; settings shows the model's download instead. Either way it cuts off the
     /// preview before.
     public func previewVoice() {
-        let voices = VoiceLoop.availableVoices()
-        let voice = voices.first { $0.id == voiceIdentifier } ?? voices.first
+        // A voice not on offer in this language isn't used: the best system voice speaks instead.
+        let voice = voiceLoop.chosenVoice ?? voiceLoop.voices.first { $0.engine == .system }
         if voice?.engine == .kokoro, voiceLoop.kokoroModelState != .ready {
             // The preview before would carry on in the voice just replaced.
             voiceLoop.stopPreview()

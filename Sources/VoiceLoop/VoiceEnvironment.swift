@@ -33,18 +33,23 @@ package struct VoiceEnvironment: Sendable {
     package var enableVoiceProcessing: @MainActor @Sendable (AVAudioInputNode) throws -> Void
     /// Speaks with the Kokoro voices, once its model has downloaded and loaded.
     package var kokoro: any KokoroEngine
+    /// The language voices are offered for, as `AVSpeechSynthesisVoice.currentLanguageCode()`
+    /// gives it, such as `en-US`.
+    package var languageCode: @MainActor @Sendable () -> String
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
         makeRecognizer: @escaping @MainActor @Sendable () async throws -> any Recognizer,
         makeEngine: @escaping @MainActor @Sendable () throws -> AVAudioEngine,
         enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void,
-        kokoro: any KokoroEngine
+        kokoro: any KokoroEngine,
+        languageCode: @escaping @MainActor @Sendable () -> String
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
         self.makeEngine = makeEngine
         self.enableVoiceProcessing = enableVoiceProcessing
         self.kokoro = kokoro
+        self.languageCode = languageCode
     }
 }

@@ -646,7 +646,7 @@ struct SpeakingTests {
         loop.voiceIdentifier = "com.example.no-such-voice"
         #expect(await framesPlayed(saying: ["Hi."], by: loop, on: bed) > 0)
 
-        loop.voiceIdentifier = try #require(VoiceLoop.availableVoices().last?.id)
+        loop.voiceIdentifier = try #require(loop.voices.last { $0.engine == .system }?.id)
         #expect(await framesPlayed(saying: ["Hi."], by: loop, on: bed) > 0)
     }
 }

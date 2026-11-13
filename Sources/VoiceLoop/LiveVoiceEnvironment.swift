@@ -17,7 +17,8 @@ extension VoiceEnvironment {
         makeRecognizer: { try await LiveSpeech.makeRecognizer() },
         makeEngine: { AVAudioEngine() },
         enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) },
-        kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory))
+        kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory)),
+        languageCode: { AVSpeechSynthesisVoice.currentLanguageCode() }
     )
 }
 

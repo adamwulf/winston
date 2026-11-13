@@ -531,6 +531,28 @@ struct VoiceSettingsTests {
         #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
     }
 
+    @Test func aKokoroVoiceChosenInAnotherLanguageIsKeptButNotUsedAfterARelaunch() async throws {
+        let harness = Harness()
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+        let british = VoiceTestBed()
+        british.languageCode = "en-GB"
+
+        let relaunched = harness.relaunchedModel(on: british)
+
+        // Still saved, for when American English is back.
+        #expect(relaunched.voiceIdentifier == "kokoro.af_heart")
+        #expect(harness.defaults.string(forKey: "voiceIdentifier") == "kokoro.af_heart")
+        // But as good as no choice: no model loads, and the preview is the best system voice.
+        #expect(relaunched.voiceLoop.chosenVoice == nil)
+        relaunched.previewVoice()
+        let engine = try #require(british.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(british.audio.playedFrames > 0)
+        #expect(british.kokoro.loads == 0)
+        #expect(british.kokoro.requests.isEmpty)
+        #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
+    }
+
     @Test func repliesAreSpokenAtNormalSpeedAndOtherAudioPausesByDefault() async throws {
         let harness = Harness()
         let model = harness.model

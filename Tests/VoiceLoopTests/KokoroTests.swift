@@ -91,7 +91,7 @@ struct KokoroSpeakingTests {
     @Test func choosingAKokoroVoiceLoadsTheModelOnceAndASystemVoiceDoesNot() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
-        let systemVoice = try #require(VoiceLoop.availableVoices().first { $0.engine == .system })
+        let systemVoice = try #require(loop.voices.first { $0.engine == .system })
 
         loop.voiceIdentifier = systemVoice.id
         // Not a voice in the catalog, so the system voice speaks.
@@ -100,7 +100,7 @@ struct KokoroSpeakingTests {
         #expect(bed.kokoro.loads == 0)
         #expect(loop.kokoroModelState == .notLoaded)
 
-        loop.voiceIdentifier = "kokoro.bf_emma"
+        loop.voiceIdentifier = "kokoro.af_nicole"
         #expect(loop.kokoroModelState == .loading)
         #expect(await eventually { loop.kokoroModelState == .ready })
         loop.voiceIdentifier = "kokoro.af_bella"
@@ -321,7 +321,7 @@ struct KokoroReleaseTests {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
         defer { loop.stop() }
-        let systemVoice = try #require(VoiceLoop.availableVoices().first { $0.engine == .system })
+        let systemVoice = try #require(loop.voices.first { $0.engine == .system })
 
         loop.voiceIdentifier = systemVoice.id
 
@@ -361,7 +361,7 @@ struct KokoroReleaseTests {
         #expect(await eventually { bed.kokoro.loads == 1 })
 
         loop.voiceIdentifier = nil
-        loop.voiceIdentifier = "kokoro.bf_emma"
+        loop.voiceIdentifier = "kokoro.af_bella"
         bed.kokoro.finishLoading(succeeding: true)
 
         #expect(await eventually { loop.kokoroModelState == .ready })
@@ -596,6 +596,58 @@ struct KokoroCancellingTests {
     }
 }
 
+/// A Kokoro voice chosen in one language, with the system then in another (as after the user
+/// changes the system language and the app relaunches).
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct KokoroLanguageTests {
+    @Test func aKokoroVoiceNotOfferedInTheLanguageIsSetAsideUntilItIsOfferedAgain() async throws {
+        let bed = VoiceTestBed()
+        bed.languageCode = "en-GB"
+        let loop = bed.makeLoop()
+        loop.pauseThreshold = .milliseconds(50)
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+        try await loop.start()
+
+        // British English offers only British Kokoro voices: the best system voice speaks, and
+        // no model is loaded for it.
+        #expect(loop.voices.contains { $0.id == "kokoro.bf_emma" })
+        #expect(!loop.voices.contains { $0.id == "kokoro.af_heart" })
+        #expect(loop.voiceIdentifier == "kokoro.af_heart")
+        #expect(loop.chosenVoice == nil)
+        #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.loads == 0)
+        #expect(loop.kokoroModelState == .notLoaded)
+        #expect(bed.kokoro.requests.isEmpty)
+
+        // Back in American English, the next start of voice mode picks the voice up again.
+        loop.stop()
+        bed.languageCode = "en-US"
+        try await loop.start()
+        defer { loop.stop() }
+        #expect(loop.chosenVoice?.id == "kokoro.af_heart")
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
+        #expect(bed.kokoro.requests == [FakeKokoro.Request(text: "Hi.", voice: "af_heart", speed: 1)])
+    }
+
+    @Test func noKokoroVoiceIsOfferedOrUsedInALanguageKokoroDoesNotSpeak() async throws {
+        let bed = VoiceTestBed()
+        bed.languageCode = "fr-FR"
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        #expect(!loop.voices.contains { $0.engine == .kokoro })
+        #expect(loop.chosenVoice == nil)
+        #expect(await framesPlayed(saying: "Bonjour.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.loads == 0)
+        #expect(bed.kokoro.requests.isEmpty)
+    }
+}
+
 // MARK: - The real engine
 
 @Suite struct LiveKokoroTests {
@@ -690,7 +742,7 @@ struct KokoroRealModelTests {
         // Freed for a system voice, then loaded again from the stored download.
         loop.voiceIdentifier = nil
         #expect(loop.kokoroModelState == .notLoaded)
-        loop.voiceIdentifier = "kokoro.bf_emma"
+        loop.voiceIdentifier = "kokoro.af_bella"
         #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
         loop.speak("And hello again.")
         #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })

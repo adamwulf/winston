@@ -482,12 +482,26 @@ public final class VoiceLoop {
         }
     }
 
-    /// The voices for the current language, for a settings picker: the installed system voices,
-    /// then the Kokoro voices (for American and British English only), best first. System voices
-    /// are ordered by quality, and within a quality the system's default voice comes first, then
-    /// by name. Novelty voices are left out.
-    public static func availableVoices() -> [VoiceOption] {
-        systemVoices() + KokoroCatalog.voices(forLanguage: AVSpeechSynthesisVoice.currentLanguageCode())
+    /// The voices for `language` (the current one by default), for a settings picker: the
+    /// installed system voices, then the Kokoro voices (for American and British English only),
+    /// best first. System voices are ordered by quality, and within a quality the system's
+    /// default voice comes first, then by name. Novelty voices are left out.
+    public static func availableVoices(language: String = AVSpeechSynthesisVoice.currentLanguageCode()) -> [VoiceOption] {
+        systemVoices(language: language) + KokoroCatalog.voices(forLanguage: language)
+    }
+
+    /// `availableVoices()`, the voices on offer: the ones settings lists and the loop speaks with.
+    public var voices: [VoiceOption] {
+        Self.availableVoices(language: environment.languageCode())
+    }
+
+    /// The voice `voiceIdentifier` picks, if it is one of `voices`. Nil otherwise, and then the
+    /// best system voice speaks: a voice chosen in another language or region (say, an American
+    /// Kokoro voice once the system is in British English) is set aside, not forgotten, and is
+    /// used again when it is on offer again.
+    public var chosenVoice: VoiceOption? {
+        guard let voiceIdentifier else { return nil }
+        return voices.first { $0.id == voiceIdentifier }
     }
 
     /// With a Kokoro voice chosen, downloads and loads its model if it isn't ready or on its way:
@@ -496,9 +510,8 @@ public final class VoiceLoop {
         loadKokoroModelIfChosen()
     }
 
-    /// The system voices of `availableVoices()`.
-    private static func systemVoices() -> [VoiceOption] {
-        let language = AVSpeechSynthesisVoice.currentLanguageCode()
+    /// The system voices of `availableVoices(language:)`.
+    private static func systemVoices(language: String) -> [VoiceOption] {
         let defaultID = AVSpeechSynthesisVoice(language: language)?.identifier
         return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language == language && !$0.voiceTraits.contains(.isNoveltyVoice) }
@@ -922,8 +935,8 @@ public final class VoiceLoop {
 
     /// The chosen Kokoro voice's id, if a Kokoro voice is chosen and its model is ready.
     private func readyKokoroVoice() -> String? {
-        guard let voiceIdentifier, kokoroModel.state == .ready else { return nil }
-        return KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier)
+        guard kokoroModel.state == .ready, let chosen = chosenVoice, chosen.engine == .kokoro else { return nil }
+        return KokoroCatalog.kokoroVoice(forOptionID: chosen.id)
     }
 
     /// Kokoro doesn't stream, so `text` is rendered a sentence at a time off the main actor, and
@@ -978,8 +991,7 @@ public final class VoiceLoop {
     }
 
     private var isKokoroVoiceChosen: Bool {
-        guard let voiceIdentifier else { return false }
-        return KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier) != nil
+        chosenVoice?.engine == .kokoro
     }
 
     private func speechFinished(_ playback: SpeechPlayback) {
@@ -1070,13 +1082,13 @@ public final class VoiceLoop {
         return utterance
     }
 
-    /// The chosen system voice, or the best installed one when none is chosen, a Kokoro voice is
-    /// chosen, or the chosen voice isn't installed.
+    /// The chosen system voice, or the best one on offer when none is chosen, a Kokoro voice is
+    /// chosen, or the chosen voice isn't on offer (see `chosenVoice`).
     private func voice() -> AVSpeechSynthesisVoice? {
-        if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
-            return voice
-        }
-        return Self.systemVoices().first.flatMap { AVSpeechSynthesisVoice(identifier: $0.id) }
+        let voices = voices
+        let chosen = voices.first { $0.id == voiceIdentifier && $0.engine == .system }
+        let system = chosen ?? voices.first { $0.engine == .system }
+        return system.flatMap { AVSpeechSynthesisVoice(identifier: $0.id) }
     }
 }
 
