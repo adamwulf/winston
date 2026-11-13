@@ -202,7 +202,10 @@ final class AppModel {
         defer { isLoadingChats = false }
         chatsError = nil
         do {
+            // botChats() lists every bot chat by recency. Drop @BotFather and sort by title so the picker is stable.
             chats = try await link.botChats()
+                .filter { $0.username?.lowercased() != "botfather" }
+                .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             chatsLoaded = true
         } catch {
             chatsError = userMessage(for: error)
