@@ -141,6 +141,8 @@ public final class VoiceLoop {
     /// Renders the message being spoken with Kokoro, a sentence at a time. Nil when the message
     /// is spoken by the system synthesizer, or when not speaking.
     @ObservationIgnored private var kokoroSynthesis: Task<Void, Never>?
+    /// The same, for a preview played while the loop is off.
+    @ObservationIgnored private var previewKokoroSynthesis: Task<Void, Never>?
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
@@ -412,7 +414,8 @@ public final class VoiceLoop {
     /// an earlier preview. While the loop is running it also stops any reply being spoken and
     /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
     /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker
-    /// on an engine of its own.
+    /// on an engine of its own. Like a reply, it uses the system voice for a Kokoro voice whose
+    /// model isn't ready.
     public func preview(_ text: String) {
         stopPreview()
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
@@ -422,7 +425,6 @@ public final class VoiceLoop {
             speak(text)
             return
         }
-        let utterance = makeUtterance(text)
         let playback: SpeechPlayback
         do {
             playback = try previewPlayer.play(pitch: speechPitch)
@@ -430,14 +432,28 @@ public final class VoiceLoop {
             Self.log.error("voice preview failed to start", error.logContext())
             return
         }
+        if let voice = readyKokoroVoice() {
+            previewKokoroSynthesis = synthesizeWithKokoro(text, voice: voice, into: playback) { [self] rest in
+                previewWithSystemVoice(rest, into: playback)
+            }
+        } else {
+            previewWithSystemVoice(text, into: playback)
+        }
+    }
+
+    private func previewWithSystemVoice(_ text: String, into playback: SpeechPlayback) {
+        let utterance = makeUtterance(text)
         previewSynthesisObserver.track(utterance, playback: playback)
         previewSynthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
         }
     }
 
-    /// Stops a preview played while the loop was off.
+    /// Stops a preview played while the loop was off. Stopping the player cancels its playback,
+    /// so a sentence Kokoro is still rendering is dropped.
     private func stopPreview() {
+        previewKokoroSynthesis?.cancel()
+        previewKokoroSynthesis = nil
         previewSynthesizer.stopSpeaking(at: .immediate)
         previewPlayer.stop()
     }
@@ -877,9 +893,10 @@ public final class VoiceLoop {
     /// Renders `text` into `playback` in the chosen voice and speed: with Kokoro when a Kokoro
     /// voice is chosen and its model is ready, otherwise with the system synthesizer.
     private func synthesize(_ text: String, into playback: SpeechPlayback) {
-        if let voiceIdentifier, let voice = KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier),
-           kokoroModel.state == .ready {
-            synthesizeWithKokoro(text, voice: voice, into: playback)
+        if let voice = readyKokoroVoice() {
+            kokoroSynthesis = synthesizeWithKokoro(text, voice: voice, into: playback) { [self] rest in
+                synthesizeWithSystemVoice(rest, into: playback)
+            }
         } else {
             synthesizeWithSystemVoice(text, into: playback)
         }
@@ -893,21 +910,32 @@ public final class VoiceLoop {
         }
     }
 
+    /// The chosen Kokoro voice's id, if a Kokoro voice is chosen and its model is ready.
+    private func readyKokoroVoice() -> String? {
+        guard let voiceIdentifier, kokoroModel.state == .ready else { return nil }
+        return KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier)
+    }
+
     /// Kokoro doesn't stream, so `text` is rendered a sentence at a time off the main actor, and
-    /// each sentence is fed to `playback` once it's ready. `silence(consumingEcho:reason:)`
-    /// cancels this: no further sentence is rendered, and the one rendering then is dropped,
-    /// because the playback is cancelled too. If rendering fails, the system voice speaks the
-    /// rest of the message.
-    private func synthesizeWithKokoro(_ text: String, voice: String, into playback: SpeechPlayback) {
+    /// each sentence is fed to `playback` once it's ready. Cancelling the returned task stops
+    /// it: no further sentence is rendered, and the caller cancels `playback` too, so the one
+    /// rendering then is dropped. If rendering fails, or the model is freed because another
+    /// voice was chosen, `systemVoice` is handed the rest of the text to say.
+    private func synthesizeWithKokoro(
+        _ text: String,
+        voice: String,
+        into playback: SpeechPlayback,
+        systemVoice: @escaping @MainActor (String) -> Void
+    ) -> Task<Void, Never> {
         let sentences = KokoroText.sentences(in: text)
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
-        kokoroSynthesis = Task {
+        return Task {
             for (index, sentence) in sentences.enumerated() {
                 guard !Task.isCancelled else { return }
                 guard kokoroModel.state == .ready else {
-                    // Another voice was chosen, which freed the model. That voice says the rest.
-                    synthesizeWithSystemVoice(sentences[index...].joined(separator: " "), into: playback)
+                    // Another voice was chosen, which freed the model.
+                    systemVoice(sentences[index...].joined(separator: " "))
                     return
                 }
                 let samples: [Float]
@@ -920,7 +948,7 @@ public final class VoiceLoop {
                         "kokoro synthesis failed; speaking with the system voice",
                         error.logCodes(["sentence": "\(index)", "sentences": "\(sentences.count)"])
                     )
-                    synthesizeWithSystemVoice(sentences[index...].joined(separator: " "), into: playback)
+                    systemVoice(sentences[index...].joined(separator: " "))
                     return
                 }
                 guard !Task.isCancelled else { return }

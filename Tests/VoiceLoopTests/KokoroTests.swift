@@ -39,6 +39,21 @@ private func settle(_ duration: Duration = .milliseconds(250)) async throws {
     try await Task.sleep(for: duration)
 }
 
+/// The pitch shift that speech plays through in `engine`.
+@MainActor
+private func pitchShift(in engine: AVAudioEngine?) throws -> AVAudioUnitTimePitch {
+    let shifts = try #require(engine).attachedNodes.compactMap { $0 as? AVAudioUnitTimePitch }
+    #expect(shifts.count == 1)
+    return try #require(shifts.first)
+}
+
+/// How often the sound out of the speaker crossed zero, per second of sound. `FakeKokoro`'s
+/// tone crosses zero 880 times a second: 1760 an octave up, 440 an octave down.
+@MainActor
+private func zeroCrossingsPerSecond(on bed: VoiceTestBed) -> Double {
+    Double(bed.audio.playedZeroCrossings) / Double(bed.audio.playedFrames) * 48_000
+}
+
 /// Says `text` and waits until the loop has finished. Returns how much sound came out.
 @MainActor
 private func framesPlayed(saying text: String, by loop: VoiceLoop, on bed: VoiceTestBed) async -> Int {
@@ -46,6 +61,9 @@ private func framesPlayed(saying text: String, by loop: VoiceLoop, on bed: Voice
     loop.speak(text)
     #expect(loop.state == .speaking)
     #expect(await eventually { loop.state == .listening(partial: "") })
+    // The pitch shift pulls the player a render pass ahead of the speaker, so the reply's
+    // last pass is rendered just after it counts as played.
+    try? await settle(.milliseconds(50))
     return bed.audio.playedFrames - before
 }
 
@@ -166,6 +184,31 @@ struct KokoroSpeakingTests {
         #expect(bed.kokoro.requests.map(\.speed) == [2, 0.5])
     }
 
+    /// A reply of three sentences at `pitch`, on a test bed of its own. Returns the bed.
+    private func bedAfterAReply(atPitch pitch: Float) async throws -> VoiceTestBed {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.speechPitch = pitch
+        _ = await framesPlayed(saying: "One more. Two more. Three more.", by: loop, on: bed)
+        #expect(bed.kokoro.requests.count == 3)
+        return bed
+    }
+
+    @Test func aKokoroReplyIsShiftedToTheChosenPitchAndPlaysAsRenderedAtNormalPitch() async throws {
+        let normal = try await bedAfterAReply(atPitch: VoiceLoop.defaultSpeechPitch)
+        let higher = try await bedAfterAReply(atPitch: VoiceLoop.speechPitches.upperBound)
+        let lower = try await bedAfterAReply(atPitch: VoiceLoop.speechPitches.lowerBound)
+
+        #expect(abs(zeroCrossingsPerSecond(on: normal) - 880) <= 880 / 20)
+        #expect(abs(zeroCrossingsPerSecond(on: higher) - 1760) <= 1760 / 10)
+        #expect(abs(zeroCrossingsPerSecond(on: lower) - 440) <= 440 / 10)
+        // At normal pitch the shift is bypassed: the three sentences play as Kokoro rendered them.
+        #expect(try pitchShift(in: normal.audio.engines.last).bypass)
+        let expected = 3 * fakeSentenceFrames
+        #expect(abs(normal.audio.playedFrames - expected) <= expected / 20)
+    }
+
     @Test func aVoicePreviewWhileListeningIsSpokenByKokoro() async throws {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
@@ -176,6 +219,94 @@ struct KokoroSpeakingTests {
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
         #expect(bed.kokoro.requests.map(\.text) == ["Hello."])
+    }
+}
+
+// MARK: - Previews while the loop is off
+
+/// A preview while voice mode is off plays on the preview player's engine of its own, which
+/// is the test bed's offline audio too.
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct KokoroPreviewTests {
+    /// A loop that is off, with the Heart voice chosen and its model loaded.
+    private func offLoopWithKokoro(on bed: VoiceTestBed) async -> VoiceLoop {
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        return loop
+    }
+
+    @Test func aPreviewWhileOffIsSpokenByKokoroOnItsOwnEngineAtTheChosenPitch() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.speechPitch = VoiceLoop.speechPitches.upperBound
+
+        loop.preview("Hello there.")
+
+        #expect(loop.state == .off)
+        #expect(bed.audio.engines.count == 1)
+        let engine = try #require(bed.audio.engines.first)
+        #expect(try pitchShift(in: engine).pitch == 1200)
+        // Its engine stops once it has played.
+        #expect(await eventually { !engine.isRunning })
+        #expect(bed.kokoro.requests == [FakeKokoro.Request(text: "Hello there.", voice: "af_heart", speed: 1)])
+        #expect(abs(zeroCrossingsPerSecond(on: bed) - 1760) <= 1760 / 10)
+    }
+
+    @Test func aPreviewWhileOffBeforeTheModelIsReadyIsSpokenByTheSystemVoice() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        loop.preview("Hi.")
+
+        let engine = try #require(bed.audio.engines.first)
+        #expect(await eventually { !engine.isRunning })
+        #expect(bed.audio.playedFrames > 0)
+        #expect(bed.kokoro.requests.isEmpty)
+        bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func aNewPreviewDropsTheSentenceKokoroIsStillRenderingForTheOneBefore() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        bed.kokoro.holdsSynthesis = true
+        loop.preview("The first one here. The second one here.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+        let first = try #require(bed.audio.engines.last)
+
+        loop.preview("Next.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 2 })
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+        let second = try #require(bed.audio.engines.last)
+        #expect(await eventually { !second.isRunning })
+        try await settle()
+
+        #expect(!first.isRunning)
+        // Only "Next." played: the cut-off preview's late sentence went nowhere.
+        #expect(bed.kokoro.requests.map(\.text) == ["The first one here.", "Next."])
+        #expect(abs(bed.audio.playedFrames - fakeSentenceFrames) <= fakeSentenceFrames / 20)
+    }
+
+    @Test func startingVoiceModeDropsTheSentenceAPreviewIsStillRendering() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.pauseThreshold = .milliseconds(50)
+        bed.kokoro.holdsSynthesis = true
+        loop.preview("The first one here. The second one here.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        try await loop.start()
+        defer { loop.stop() }
+        bed.kokoro.releaseSyntheses()
+        try await settle()
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(bed.kokoro.requests.count == 1)
+        #expect(bed.audio.playedFrames == 0)
     }
 }
 

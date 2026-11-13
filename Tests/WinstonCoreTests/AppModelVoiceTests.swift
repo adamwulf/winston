@@ -185,6 +185,30 @@ struct VoiceModeTests {
         #expect(!harness.bed.kokoro.requests.isEmpty)
         #expect(harness.bed.kokoro.requests.allSatisfy { $0.voice == "af_heart" })
     }
+
+    @Test func outsideVoiceModeAKokoroVoiceIsPreviewedOnceItsModelIsReadyAndNotBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+
+        // Still downloading: nothing plays, not even the system voice.
+        model.previewVoice()
+        try await settle()
+        #expect(harness.bed.audio.engines.isEmpty)
+
+        harness.bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        model.previewVoice()
+
+        // The preview player's own engine plays Kokoro, and stops once it has played.
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.audio.playedFrames > 0)
+        #expect(!harness.bed.kokoro.requests.isEmpty)
+        #expect(harness.bed.kokoro.requests.allSatisfy { $0.voice == "af_heart" })
+    }
 }
 
 /// Which of the bot's messages voice mode reads out.

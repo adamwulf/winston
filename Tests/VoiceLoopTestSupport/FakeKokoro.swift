@@ -1,12 +1,16 @@
+import Foundation
 import Synchronization
 import VoiceLoop
 
 /// The Kokoro engine for tests: no model and no network. Its model "loads" when the test says
-/// so, and it renders every sentence as the same 0.2 s of steady sound, so a test can tell from
-/// `OfflineAudio.playedFrames` whether a message came from Kokoro or from the system voice.
+/// so, and it renders every sentence as the same 0.2 s tone, so a test can tell from
+/// `OfflineAudio.playedFrames` whether a message came from Kokoro or from the system voice, and
+/// from `OfflineAudio.playedZeroCrossings` how high it played.
 package final class FakeKokoro: KokoroEngine {
     /// How long each rendered sentence sounds.
     package static let secondsPerSentence = 0.2
+    /// The tone each sentence is rendered as, in Hz.
+    package static let toneFrequency = 440.0
 
     /// What `load` does.
     package enum LoadBehavior: Sendable {
@@ -150,7 +154,10 @@ package final class FakeKokoro: KokoroEngine {
         if state.withLock({ $0.failingRequest }) == index {
             throw FakeKokoroError.synthesisFailed
         }
-        return [Float](repeating: 0.25, count: Int(Self.secondsPerSentence * 24_000))
+        let sampleRate = 24_000.0
+        return (0..<Int(Self.secondsPerSentence * sampleRate)).map { frame in
+            Float(0.25 * sin(2 * .pi * Self.toneFrequency * Double(frame) / sampleRate))
+        }
     }
 }
 
