@@ -101,14 +101,21 @@ final class KokoroModel {
 
     /// Frees the loaded model's memory, now that no Kokoro voice is chosen. A load in progress
     /// isn't cancelled, so a download isn't lost: the model is freed when it finishes, unless a
-    /// Kokoro voice is chosen again by then.
+    /// Kokoro voice is chosen again by then. A failure is forgotten: settings offers a retry
+    /// only while a Kokoro voice is chosen.
     func release() {
         isWanted = false
-        guard state == .ready else { return }
-        state = .notLoaded
-        Self.log.notice("kokoro model released")
-        callEngine { [engine] in
-            await engine.unload()
+        switch state {
+        case .ready:
+            state = .notLoaded
+            Self.log.notice("kokoro model released")
+            callEngine { [engine] in
+                await engine.unload()
+            }
+        case .failed:
+            state = .notLoaded
+        case .notLoaded, .loading, .downloading:
+            break
         }
     }
 

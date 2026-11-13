@@ -371,6 +371,22 @@ struct KokoroReleaseTests {
         #expect(bed.kokoro.isLoaded)
     }
 
+    @Test func aFailedLoadIsForgottenWhenASystemVoiceIsChosen() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .fails
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .failed })
+
+        loop.voiceIdentifier = nil
+
+        // Settings shows no failure, and no retry, for a voice that isn't chosen.
+        #expect(loop.kokoroModelState == .notLoaded)
+        loop.loadKokoroModel()
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+    }
+
     @Test func aDownloadThatFailsAfterASystemVoiceIsChosenOffersNoRetry() async throws {
         let bed = VoiceTestBed()
         bed.kokoro.loadBehavior = .waits
