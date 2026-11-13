@@ -75,8 +75,10 @@ FellerBuncher prunes every old `.log` file in its folder, so the logs get a
   binds to its handler when it's created, so keep loggers lazy like this.
 - Messages are fixed strings. Values go in metadata with lowerCamelCase keys:
   `log.error("sending text failed", error.logContext(["chatID": chat.id.description]))`.
-- Log every caught error that isn't rethrown, with `error.logContext(...)`, or
-  `error.logCodes(...)` when the description could name a file the user chose.
+- Log every caught error that isn't rethrown, with `error.logContext(...)`. Use
+  `error.logCodes(...)` instead when the description could hold a path or
+  something the user typed, such as a file error, and `error.tdlibLogCodes(...)`
+  (which keeps TDLib's error code) for TDLib file, upload, and database errors.
 - Privacy: metadata holds IDs, counts, and states only. Never log message
   text, transcripts, spoken text, phone numbers, login codes, passwords, names,
   usernames, file names, URLs, or the API ID or hash. Identify chats and

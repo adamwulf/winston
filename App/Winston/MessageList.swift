@@ -179,7 +179,8 @@ struct PhotoView: View {
                 image = await PhotoFiles.displayImage(at: url, maxPixelSize: 1024)
                 failed = image == nil
             } catch {
-                Self.log.error("photo download failed", error.logContext(["fileID": String(file.id)]))
+                // Codes only: a TDLib file error's message can hold a local path.
+                Self.log.error("photo download failed", error.tdlibLogCodes(["fileID": String(file.id)]))
                 failed = true
             }
         }
@@ -239,7 +240,8 @@ struct DocumentRow: View {
             NSWorkspace.shared.open(url)
             #endif
         } catch {
-            Self.log.error("document download failed", error.logContext(["fileID": String(file.id)]))
+            // Codes only: a TDLib file error's message can hold a local path.
+            Self.log.error("document download failed", error.tdlibLogCodes(["fileID": String(file.id)]))
             model.errorMessage = userMessage(for: error)
         }
     }

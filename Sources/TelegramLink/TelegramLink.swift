@@ -370,11 +370,29 @@ public actor TelegramLink {
                 // Usually a missing api_id / api_hash: TDLib only checks here that they are
                 // present. A wrong but non-empty value fails later, as a TelegramLinkError.tdlib
                 // thrown from submitPhoneNumber. Login can't go further.
-                Self.log.error("setTdlibParameters failed", error.tdlibLogContext())
-                let message = (error as? TDLibKit.Error)?.message ?? error.localizedDescription
+                let tdlibMessage = (error as? TDLibKit.Error)?.message
+                // Codes and a fixed reason only: when the database is locked, TDLib's message
+                // holds the td.binlog path, which names the macOS account.
+                Self.log.error("setTdlibParameters failed", error.tdlibLogCodes([
+                    "reason": Self.setupFailureReason(tdlibMessage),
+                ]))
+                let message = tdlibMessage ?? error.localizedDescription
                 publish(.unsupported("setTdlibParameters failed: \(message)"))
             }
         }
+    }
+
+    /// Why `setTdlibParameters` failed, as a fixed string for the log, from TDLib's message.
+    private static func setupFailureReason(_ tdlibMessage: String?) -> String {
+        guard let tdlibMessage else { return "notTDLib" }
+        if tdlibMessage.contains("api_id") || tdlibMessage.contains("api_hash") {
+            return "apiCredentials"
+        }
+        if tdlibMessage.localizedCaseInsensitiveContains("lock") {
+            // Another process, such as a second build of the app, has the database open.
+            return "databaseLocked"
+        }
+        return "other"
     }
 
     /// Hands a login state to `authStates`, and logs the transition. The state's name only: a
@@ -433,9 +451,33 @@ extension AuthState {
     }
 }
 
+extension Swift.Error {
+    /// `logCodes`, plus TDLib's error code for a `TelegramLinkError.tdlib` or a `TDLibKit.Error`.
+    /// Use it instead of `logContext` where TDLib's message can hold a file path or something the
+    /// user typed: file downloads and uploads, and the database.
+    public func tdlibLogCodes(_ extra: [String: String] = [:]) -> [String: String] {
+        var context = logCodes(extra)
+        if let code = tdlibCode {
+            context["tdlibCode"] = String(code)
+        }
+        return context
+    }
+
+    private var tdlibCode: Int? {
+        if let error = self as? TDLibKit.Error {
+            return error.code
+        }
+        if case .tdlib(let code, _)? = self as? TelegramLinkError {
+            return code
+        }
+        return nil
+    }
+}
+
 private extension Swift.Error {
     /// `logContext`, plus TDLib's code and message when this is a `TDLibKit.Error`, a struct
-    /// that `logContext` doesn't reflect.
+    /// that `logContext` doesn't reflect. Only for calls whose message can't hold a path or user
+    /// input; otherwise use `tdlibLogCodes`.
     func tdlibLogContext() -> [String: String] {
         var context = logContext()
         if let error = self as? TDLibKit.Error {

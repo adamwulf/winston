@@ -369,8 +369,9 @@ final class AppModel {
             try await link.sendPhoto(fileURL: fileURL, caption: caption.isEmpty ? nil : caption, to: chat.id)
             return true
         } catch {
-            // Codes only: a picked photo's load error can name the file.
-            Self.log.error("sending photo failed", error.logCodes(["chatID": chat.id.description]))
+            // Codes only: a picked photo's load error can name the file, and a TDLib upload error's
+            // message can hold the local path.
+            Self.log.error("sending photo failed", error.tdlibLogCodes(["chatID": chat.id.description]))
             errorMessage = userMessage(for: error)
             return false
         }
