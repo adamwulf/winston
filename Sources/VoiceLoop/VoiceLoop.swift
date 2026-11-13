@@ -954,6 +954,9 @@ public final class VoiceLoop {
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
         return Task {
+            // Kokoro can't pronounce digits. Only its text is changed: the system voice gets
+            // the sentences as written.
+            let numbers = KokoroNumbers()
             for (index, sentence) in sentences.enumerated() {
                 guard !Task.isCancelled else { return }
                 guard kokoroModel.state == .ready else {
@@ -963,7 +966,7 @@ public final class VoiceLoop {
                 }
                 let samples: [Float]
                 do {
-                    samples = try await engine.synthesize(sentence, voice: voice, speed: speed)
+                    samples = try await engine.synthesize(numbers.spelledOut(sentence), voice: voice, speed: speed)
                 } catch {
                     guard !Task.isCancelled else { return }
                     // Codes only: KokoroTTS's messages can list voices and paths.

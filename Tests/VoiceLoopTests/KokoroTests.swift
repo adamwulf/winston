@@ -88,6 +88,19 @@ struct KokoroSpeakingTests {
         #expect(abs(played - expected) <= expected / 20)
     }
 
+    @Test func kokoroIsGivenNumbersAsWords() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        _ = await framesPlayed(saying: "It costs $20, up 5%. Meet me at 10:30 on the 3rd.", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests.map(\.text) == [
+            "It costs twenty dollars, up five percent.",
+            "Meet me at ten thirty on the third.",
+        ])
+    }
+
     @Test func choosingAKokoroVoiceLoadsTheModelOnceAndASystemVoiceDoesNot() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
@@ -744,7 +757,7 @@ struct KokoroRealModelTests {
         #expect(loop.kokoroModelState == .notLoaded)
         loop.voiceIdentifier = "kokoro.af_bella"
         #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
-        loop.speak("And hello again.")
+        loop.speak("And hello again at 10:30, 3.5% up on 2025's $1,200.")
         #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
         #expect(kokoro.audibleSamples > rendered)
     }
