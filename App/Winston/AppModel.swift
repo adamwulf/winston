@@ -394,6 +394,8 @@ final class AppModel {
             // VoiceLoop ignores a second start() while one is in progress.
             guard voiceLoop.state == .off else { return }
             isVoiceMode = true
+            // Toggled back on while the first start() is still running: let that one finish and own the flag.
+            guard !isStartingVoice else { return }
             isStartingVoice = true
             defer { isStartingVoice = false }
             do {
