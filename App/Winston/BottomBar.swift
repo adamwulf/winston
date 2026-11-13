@@ -105,13 +105,21 @@ struct BottomBar: View {
             }
             .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
 
-            // A fixed two lines, so the bar (and the message list above it) doesn't jump as
-            // the transcript grows; the newest words stay visible at the end.
-            Text(transcript)
-                .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
+            // A fixed two lines tall, so the bar (and the message list above it) doesn't jump
+            // as the transcript grows. Longer transcripts scroll, kept at the newest words.
+            Text("\n")
                 .lineLimit(2, reservesSpace: true)
-                .truncationMode(.head)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .hidden()
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    ScrollView {
+                        Text(transcript)
+                            .foregroundStyle(transcriptIsPlaceholder ? .secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .defaultScrollAnchor(.bottom)
+                    .defaultScrollAnchor(.bottom, for: .sizeChanges)
+                }
         }
 
         Button("Discard") {
