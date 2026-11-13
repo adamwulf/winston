@@ -3,7 +3,7 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice and its speed, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -83,6 +83,24 @@ struct SettingsView: View {
                     }
                 }
                 .labelsHidden()
+                LabeledContent("Pitch") {
+                    Text(pitchDescription)
+                }
+                // 1/16 is exact in binary, so every step, normal pitch included, is an exact value.
+                Slider(value: $model.speechPitch, in: VoiceLoop.speechPitches, step: 0.0625) {
+                    Text("Pitch")
+                } minimumValueLabel: {
+                    Image(systemName: "arrow.down")
+                        .accessibilityLabel("Lower")
+                } maximumValueLabel: {
+                    Image(systemName: "arrow.up")
+                        .accessibilityLabel("Higher")
+                } onEditingChanged: { isEditing in
+                    if !isEditing {
+                        model.previewVoice()
+                    }
+                }
+                .labelsHidden()
             } header: {
                 Text("Voice Mode")
             } footer: {
@@ -155,6 +173,14 @@ struct SettingsView: View {
         let difference = model.speechRate - VoiceLoop.defaultSpeechRate
         if difference < -0.01 { return "Slower" }
         if difference > 0.01 { return "Faster" }
+        return "Normal"
+    }
+
+    /// Like the speed, the pitch shows only how it compares to the voice's own. The slider's step lands
+    /// exactly on normal, so no tolerance is needed.
+    private var pitchDescription: String {
+        if model.speechPitch < VoiceLoop.defaultSpeechPitch { return "Lower" }
+        if model.speechPitch > VoiceLoop.defaultSpeechPitch { return "Higher" }
         return "Normal"
     }
 
