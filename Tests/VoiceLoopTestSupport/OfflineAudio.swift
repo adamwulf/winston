@@ -14,6 +14,9 @@ package final class OfflineAudio {
     /// same words always add the same amount. Only what the loop plays (speech, and sound cues
     /// when they are on) reaches the speaker; the microphone is kept out of it.
     package private(set) var playedFrames = 0
+    /// How many times the sound out of the speaker crossed zero. A tone crosses twice per
+    /// cycle, so per second of `playedFrames` this says how high the sound is.
+    package private(set) var playedZeroCrossings = 0
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
     private let microphone = Microphone()
@@ -112,7 +115,13 @@ package final class OfflineAudio {
             // A failed render is the same as a sound card with nothing to play.
             guard (try? engine.renderOffline(output.frameCapacity, to: output)) != nil,
                   let samples = output.floatChannelData?[0] else { continue }
-            playedFrames += (0..<Int(output.frameLength)).count { abs(samples[$0]) >= 0.001 }
+            let frames = Int(output.frameLength)
+            playedFrames += (0..<frames).count { abs(samples[$0]) >= 0.001 }
+            // Within each pass; a crossing between two passes is missed, one per 4096 frames.
+            playedZeroCrossings += (0..<max(frames - 1, 0)).count { index in
+                let sample = samples[index], next = samples[index + 1]
+                return (sample < 0) != (next < 0) && max(abs(sample), abs(next)) >= 0.001
+            }
         }
         return !running.isEmpty
     }

@@ -5,7 +5,8 @@ import Testing
 import VoiceLoopTestSupport
 
 // `SpeechPlayback` and `SynthesisObserver` on their own, fed the way AVSpeechSynthesizer feeds
-// them, with the player of a real `Pipeline` on the offline test bed.
+// them, with the player of a real `Pipeline` on the offline test bed. Also the pitch shift
+// between that player and the speaker.
 
 /// A started pipeline whose player is playing, as the voice loop has while it speaks.
 @MainActor
@@ -196,6 +197,42 @@ struct SpeechPlaybackTests {
         // Nothing is tracked any more, so a repeat is dropped.
         observer.speechSynthesizer(synthesizer, didFinish: current)
         #expect(finished.count == 1)
+    }
+}
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct PitchShiftTests {
+    /// Plays a 440 Hz tone through a pipeline at `pitch` and returns how often the sound that
+    /// came out of the speaker crossed zero, per second of sound.
+    private func zeroCrossingsPerSecond(atPitch pitch: Float) async throws -> Double {
+        let bed = VoiceTestBed()
+        let pipeline = try makePlayingPipeline(on: bed)
+        defer { pipeline.tearDown() }
+        let finished = FinishCounter()
+        pipeline.speech.setPitch(pitch)
+        let playback = pipeline.speech.makePlayback(text: "Hello.") { _ in
+            finished.increment()
+        }
+
+        playback.receive(try speechBuffer(seconds: 0.5))
+        playback.synthesisFinished()
+        #expect(await eventually { finished.count == 1 })
+        try await letTheLastPassPlay()
+
+        #expect(bed.audio.playedFrames > 0)
+        return Double(bed.audio.playedZeroCrossings) / Double(bed.audio.playedFrames) * 48_000
+    }
+
+    @Test func aShiftedToneComesOutAnOctaveAwayAndAnUnshiftedOneAsItWas() async throws {
+        let normal = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.defaultSpeechPitch)
+        let higher = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.speechPitches.upperBound)
+        let lower = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.speechPitches.lowerBound)
+
+        // A 440 Hz tone crosses zero 880 times a second: 1760 an octave up, 440 an octave down.
+        #expect(abs(normal - 880) <= 880 / 20)
+        #expect(abs(higher - 1760) <= 1760 / 10)
+        #expect(abs(lower - 440) <= 440 / 10)
     }
 }
 
