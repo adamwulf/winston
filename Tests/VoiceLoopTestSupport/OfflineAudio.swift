@@ -11,8 +11,8 @@ package final class OfflineAudio {
     package private(set) var engines: [AVAudioEngine] = []
     /// How much sound has come out of the speaker: the rendered frames (at 48 kHz) that weren't
     /// silent. It depends on what was played, not on how fast the engine was pulled, so the
-    /// same words always add the same amount. Only speech reaches the speaker; the microphone
-    /// is kept out of it.
+    /// same words always add the same amount. Only what the loop plays (speech, and sound cues
+    /// when they are on) reaches the speaker; the microphone is kept out of it.
     package private(set) var playedFrames = 0
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
