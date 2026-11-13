@@ -164,6 +164,83 @@ struct VoiceModeTests {
         #expect(model.voiceLoop.state == .speaking)
         #expect(await eventually { harness.bed.audio.playedFrames > 0 })
     }
+
+    @Test func aKokoroVoiceIsPreviewedOnceItsModelIsReadyAndNotBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        await model.setVoiceMode(true)
+        model.voiceIdentifier = "kokoro.af_heart"
+
+        // Still downloading: the preview would only be the system voice.
+        model.previewVoice()
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+
+        harness.bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        model.previewVoice()
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(!harness.bed.kokoro.requests.isEmpty)
+        #expect(harness.bed.kokoro.requests.allSatisfy { $0.voice == "af_heart" })
+    }
+
+    @Test func pickingAKokoroVoiceThatIsNotReadyCutsOffThePreviewBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        model.previewVoice()
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(engine.isRunning)
+
+        model.voiceIdentifier = "kokoro.af_heart"
+        model.previewVoice()
+
+        // The system voice's preview stopped, and nothing took its place.
+        #expect(!engine.isRunning)
+        #expect(harness.bed.audio.engines.count == 1)
+        harness.bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func inVoiceModePickingAKokoroVoiceThatIsNotReadyCutsOffThePreviewBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        await model.setVoiceMode(true)
+        model.previewVoice()
+        #expect(model.voiceLoop.state == .speaking)
+
+        model.voiceIdentifier = "kokoro.af_heart"
+        model.previewVoice()
+
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        harness.bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func outsideVoiceModeAKokoroVoiceIsPreviewedOnceItsModelIsReadyAndNotBefore() async throws {
+        let harness = Harness()
+        harness.bed.kokoro.loadBehavior = .waits
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+
+        // Still downloading: nothing plays, not even the system voice.
+        model.previewVoice()
+        try await settle()
+        #expect(harness.bed.audio.engines.isEmpty)
+
+        harness.bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        model.previewVoice()
+
+        // The preview player's own engine plays Kokoro, and stops once it has played.
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.audio.playedFrames > 0)
+        #expect(!harness.bed.kokoro.requests.isEmpty)
+        #expect(harness.bed.kokoro.requests.allSatisfy { $0.voice == "af_heart" })
+    }
 }
 
 /// Which of the bot's messages voice mode reads out.
@@ -427,6 +504,9 @@ struct VoiceSettingsTests {
         #expect(relaunched.voiceIdentifier == voice)
         #expect(relaunched.voiceLoop.pauseThreshold == .seconds(0.8))
         #expect(relaunched.voiceLoop.voiceIdentifier == voice)
+        // A system voice needs no Kokoro model.
+        #expect(harness.bed.kokoro.loads == 0)
+        #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
 
         // Back to the default voice.
         model.voiceIdentifier = nil
@@ -434,6 +514,43 @@ struct VoiceSettingsTests {
         #expect(harness.defaults.object(forKey: "voiceIdentifier") == nil)
         #expect(model.voiceLoop.voiceIdentifier == nil)
         #expect(harness.relaunchedModel().voiceIdentifier == nil)
+    }
+
+    @Test func choosingAKokoroVoiceDownloadsItsModelAndARelaunchLoadsItAtOnce() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        model.voiceIdentifier = "kokoro.af_heart"
+
+        #expect(harness.defaults.string(forKey: "voiceIdentifier") == "kokoro.af_heart")
+        #expect(model.voiceLoop.voiceIdentifier == "kokoro.af_heart")
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        #expect(harness.bed.kokoro.loads == 1)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.voiceLoop.kokoroModelState == .loading)
+        #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
+    }
+
+    @Test func aKokoroVoiceChosenInAnotherLanguageIsKeptButNotUsedAfterARelaunch() async throws {
+        let harness = Harness()
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+        let british = VoiceTestBed()
+        british.languageCode = "en-GB"
+
+        let relaunched = harness.relaunchedModel(on: british)
+
+        // Still saved, for when American English is back.
+        #expect(relaunched.voiceIdentifier == "kokoro.af_heart")
+        #expect(harness.defaults.string(forKey: "voiceIdentifier") == "kokoro.af_heart")
+        // But as good as no choice: no model loads, and the preview is the best system voice.
+        #expect(relaunched.voiceLoop.chosenVoice == nil)
+        relaunched.previewVoice()
+        let engine = try #require(british.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(british.audio.playedFrames > 0)
+        #expect(british.kokoro.loads == 0)
+        #expect(british.kokoro.requests.isEmpty)
+        #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
     }
 
     @Test func repliesAreSpokenAtNormalSpeedAndOtherAudioPausesByDefault() async throws {
@@ -463,6 +580,28 @@ struct VoiceSettingsTests {
         #expect(!relaunched.pausesOtherAudio)
         #expect(relaunched.voiceLoop.speechRate == fastest)
         #expect(!relaunched.voiceLoop.pausesOtherAudio)
+    }
+
+    @Test func repliesAreSpokenAtTheVoicesOwnPitchByDefault() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        #expect(model.speechPitch == VoiceLoop.defaultSpeechPitch)
+        #expect(model.voiceLoop.speechPitch == VoiceLoop.defaultSpeechPitch)
+    }
+
+    @Test func theSpeakingPitchIsSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let highest = VoiceLoop.speechPitches.upperBound
+
+        model.speechPitch = highest
+
+        #expect(harness.defaults.object(forKey: "speechPitch") as? Float == highest)
+        #expect(model.voiceLoop.speechPitch == highest)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.speechPitch == highest)
+        #expect(relaunched.voiceLoop.speechPitch == highest)
     }
 
     @Test func turningPauseOtherAudioOffInVoiceModeRebuildsTheEngineAndKeepsListening() async throws {

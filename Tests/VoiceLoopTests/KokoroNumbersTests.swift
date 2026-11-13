@@ -1,0 +1,243 @@
+import Testing
+@testable import VoiceLoop
+
+/// What Kokoro is given for text with numbers in it: words it can pronounce.
+@Suite struct KokoroNumbersTests {
+    private let numbers = KokoroNumbers()
+
+    private func say(_ text: String) -> String {
+        numbers.spelledOut(text)
+    }
+
+    @Test func integersWithAndWithoutThousandsSeparators() {
+        #expect(say("I found 3 bugs.") == "I found three bugs.")
+        #expect(say("0") == "zero")
+        #expect(say("It has 42 files and 1,250 lines.") == "It has forty-two files and one thousand two hundred fifty lines.")
+        #expect(say("1,000,000 rows") == "one million rows")
+        #expect(say("Exactly 12345 bytes") == "Exactly twelve thousand three hundred forty-five bytes")
+    }
+
+    @Test func listsOfSmallNumbersStayApart() {
+        #expect(say("1,2,3") == "one,two,three")
+    }
+
+    @Test func twoNumbersJoinedByADashAreARange() {
+        #expect(say("pages 10-20") == "pages ten to twenty")
+        #expect(say("in 2020–2024") == "in twenty twenty to twenty twenty-four")
+        #expect(say("2020–2024") == "two thousand twenty to two thousand twenty-four")
+        #expect(say("10-20%") == "ten to twenty percent")
+        #expect(say("$10-$20") == "ten dollars to twenty dollars")
+        #expect(say("1.5-2.5") == "one point five to two point five")
+        // Scores and votes.
+        #expect(say("They won 3-2.") == "They won three to two.")
+        #expect(say("It passed 5-4.") == "It passed five to four.")
+        // A minus that starts the first number still makes it negative.
+        #expect(say("-5-10") == "minus five to ten")
+    }
+
+    @Test func aScaleAfterARangeAppliesToBothEnds() {
+        #expect(say("5-10k users") == "five to ten thousand users")
+        #expect(say("$5-10M") == "five to ten million dollars")
+        #expect(say("€2-3bn") == "two to three billion euros")
+        // Without money an "m" could be metres, and a "K" a resolution, so they stay letters.
+        #expect(say("5-10m") == "five to ten m")
+        #expect(say("5-10K") == "five to ten K")
+        // A scale written out works the same way.
+        #expect(say("$5-10 million") == "five to ten million dollars")
+        #expect(say("$2.5-3.5 billion") == "two point five to three point five billion dollars")
+        #expect(say("5-10 million users") == "five to ten million users")
+        #expect(say("10 million users") == "ten million users")
+    }
+
+    @Test func aNumberGluedToTheWordAfterItByADash() {
+        #expect(say("a 10-minute walk") == "a ten minute walk")
+        #expect(say("a 3-step plan") == "a three step plan")
+        #expect(say("5-day forecast") == "five day forecast")
+        #expect(say("a 3rd-party app") == "a third party app")
+        #expect(say("a 10-20-minute wait") == "a ten to twenty minute wait")
+    }
+
+    @Test func aLowercaseKIsThousandsEvenWithoutMoney() {
+        #expect(say("10k users") == "ten thousand users")
+        #expect(say("2.5k stars") == "two point five thousand stars")
+        #expect(say("a 50k salary") == "a fifty thousand salary")
+        // An uppercase "K" without money stays a letter, as do letters that don't end the word.
+        #expect(say("a 4K screen") == "a four K screen")
+        #expect(say("a 10km run") == "a ten km run")
+        // In a name, the letter stays too.
+        #expect(say("GPT-4-32k") == "GPT four thirty-two k")
+    }
+
+    @Test func aPhoneNumberIsReadDigitByDigit() {
+        #expect(say("Call 555-0123") == "Call five five five, zero one two three")
+        #expect(say("(212) 555-1234") == "(two one two) five five five, one two three four")
+    }
+
+    @Test func numbersGluedToAWordByADashNameSomething() {
+        #expect(say("GPT-4-32k") == "GPT four thirty-two k")
+        #expect(say("Llama-3.1-8B") == "Llama three point one eight B")
+        #expect(say("COVID-19") == "COVID nineteen")
+    }
+
+    @Test func threeOrMoreNumbersJoinedByDashesAreReadGroupByGroup() {
+        #expect(say("Call 555-123-4567.") == "Call five five five, one two three, four five six seven.")
+        #expect(say("on 2026-11-13") == "on two zero two six, one one, one three")
+        #expect(say("1-800-555-0199") == "one, eight zero zero, five five five, zero one nine nine")
+        // Not plain digit runs: each in its own words.
+        #expect(say("$5m-$10m-$20m") == "five million dollars, ten million dollars, twenty million dollars")
+        #expect(say("10%-20%-30%") == "ten percent, twenty percent, thirty percent")
+        #expect(say("9:00-12:00-17:00") == "nine o'clock, twelve o'clock, seventeen o'clock")
+    }
+
+    @Test func decades() {
+        #expect(say("the 1990s") == "the nineteen nineties")
+        #expect(say("the 90s") == "the nineties")
+        #expect(say("the '90s") == "the nineties")
+        #expect(say("the 1990's") == "the nineteen nineties")
+        #expect(say("the 2000s") == "the two thousands")
+        #expect(say("in their 20s") == "in their twenties")
+        #expect(say("the 80s-90s") == "the eighties to nineties")
+        #expect(say("the 1980s-1990s") == "the nineteen eighties to nineteen nineties")
+        // Without a decade first, a range of them is seconds.
+        #expect(say("Wait 30s-60s before retrying") == "Wait thirty to sixty seconds before retrying")
+        // Two digits with an "s" otherwise are more likely seconds.
+        #expect(say("wait 30s") == "wait thirty s")
+    }
+
+    @Test func slashesBetweenNumbers() {
+        #expect(say("1/2") == "one half")
+        #expect(say("3/4 cup") == "three quarters cup")
+        #expect(say("2/3") == "two thirds")
+        #expect(say("1/4") == "one quarter")
+        #expect(say("1-1/2") == "one and a half")
+        #expect(say("1 1/2 hours") == "one and a half hours")
+        #expect(say("2 3/4") == "two and three quarters")
+        #expect(say("1 1/8") == "one and an eighth")
+        // A scale after the fraction comes after its words.
+        #expect(say("2 1/2 million users") == "two and a half million users")
+        #expect(say("1 1/2 million") == "one and a half million")
+        #expect(say("3/4 million") == "three quarters million")
+        // A range of them.
+        #expect(say("1/2-3/4 cup") == "one half to three quarters cup")
+        #expect(say("2 1/2-3 hours") == "two and a half to three hours")
+        // Not a common fraction: a space for the slash.
+        #expect(say("24/7") == "twenty-four seven")
+        #expect(say("50/50") == "fifty fifty")
+        #expect(say("1/12") == "one twelve")
+    }
+
+    @Test func decimalsAndVersionsAreReadDigitByDigitAfterThePoint() {
+        #expect(say("It took 3.5 seconds.") == "It took three point five seconds.")
+        #expect(say("0.25") == "zero point two five")
+        #expect(say("Swift 6.2.1 is out.") == "Swift six point two point one is out.")
+        // A full stop after a number ends the sentence.
+        #expect(say("The answer is 7.") == "The answer is seven.")
+    }
+
+    @Test func decimalsWithoutTheirLeadingZero() {
+        #expect(say(".25 seconds") == "point two five seconds")
+        #expect(say("up .5%") == "up point five percent")
+        #expect(say("-.5") == "minus point five")
+        #expect(say("(.75)") == "(point seven five)")
+        // A dot after a word or a number isn't a decimal point.
+        #expect(say("file.25") == "file.twenty-five")
+    }
+
+    @Test func numbersWithALeadingZeroAreReadDigitByDigit() {
+        #expect(say("Call 02079460958") == "Call zero two zero seven nine four six zero nine five eight")
+        #expect(say("code 0042") == "code zero zero four two")
+        #expect(say("00") == "zero zero")
+        // Not a decimal below one, nor a time.
+        #expect(say("0.5") == "zero point five")
+        #expect(say("at 09:30") == "at nine thirty")
+        #expect(say("at 09:05") == "at nine oh five")
+    }
+
+    @Test func negatives() {
+        #expect(say("It is -5 outside.") == "It is minus five outside.")
+        #expect(say("-3.5") == "minus three point five")
+        #expect(say("(−2)") == "(minus two)")
+    }
+
+    @Test func percentages() {
+        #expect(say("50% done") == "fifty percent done")
+        #expect(say("up 2.5% today") == "up two point five percent today")
+        #expect(say("-10%") == "minus ten percent")
+    }
+
+    @Test func money() {
+        #expect(say("It costs $20.") == "It costs twenty dollars.")
+        #expect(say("$1") == "one dollar")
+        #expect(say("$3.50") == "three dollars and fifty cents")
+        #expect(say("$1.01") == "one dollar and one cent")
+        #expect(say("$0.99") == "ninety-nine cents")
+        #expect(say("$4.5") == "four dollars and fifty cents")
+        #expect(say("$5.00") == "five dollars")
+        #expect(say("$1,200") == "one thousand two hundred dollars")
+        #expect(say("$2.5 million") == "two point five million dollars")
+        #expect(say("$20 thousand") == "twenty thousand dollars")
+        #expect(say("$3 billion") == "three billion dollars")
+        // Scales written short, before any reading as dollars and cents.
+        #expect(say("$2.5M") == "two point five million dollars")
+        #expect(say("$5m") == "five million dollars")
+        #expect(say("$20k") == "twenty thousand dollars")
+        #expect(say("raised $1.2K.") == "raised one point two thousand dollars.")
+        #expect(say("$3B") == "three billion dollars")
+        #expect(say("$4.5bn") == "four point five billion dollars")
+        #expect(say("€2bn") == "two billion euros")
+        #expect(say("€15") == "fifteen euros")
+        #expect(say("£2.20") == "two pounds and twenty pence")
+    }
+
+    @Test func ordinals() {
+        #expect(say("1st") == "first")
+        #expect(say("2nd") == "second")
+        #expect(say("3rd") == "third")
+        #expect(say("4th") == "fourth")
+        #expect(say("the 11th, 12th and 13th") == "the eleventh, twelfth and thirteenth")
+        #expect(say("21st") == "twenty-first")
+        #expect(say("42nd") == "forty-second")
+        #expect(say("the 20th time") == "the twentieth time")
+        #expect(say("100th") == "one hundredth")
+        #expect(say("3RD") == "third")
+    }
+
+    @Test func times() {
+        #expect(say("Meet at 10:30.") == "Meet at ten thirty.")
+        #expect(say("9:05") == "nine oh five")
+        #expect(say("at 10:00") == "at ten o'clock")
+        #expect(say("at 7:00 PM") == "at seven PM")
+        #expect(say("23:59") == "twenty-three fifty-nine")
+    }
+
+    @Test func yearsAfterAWordThatIntroducesOne() {
+        #expect(say("in 2026") == "in twenty twenty-six")
+        #expect(say("since 1999") == "since nineteen ninety-nine")
+        #expect(say("November 13, 2026") == "November thirteen, twenty twenty-six")
+        #expect(say("from 2020 to 2026") == "from twenty twenty to twenty twenty-six")
+        #expect(say("in 1905") == "in nineteen oh five")
+        #expect(say("in 1900") == "in nineteen hundred")
+        #expect(say("in 2005") == "in two thousand five")
+        #expect(say("in 2000") == "in two thousand")
+        // Not after such a word, a four-digit number is a number.
+        #expect(say("2048 bytes") == "two thousand forty-eight bytes")
+    }
+
+    @Test func numberedLists() {
+        #expect(say("1. Build\n2. Test") == "one. Build\ntwo. Test")
+    }
+
+    @Test func digitsJoinedToLettersAreSpelledApart() {
+        #expect(say("an mp3 file") == "an mp three file")
+        #expect(say("a 4K screen") == "a four K screen")
+    }
+
+    @Test func textWithoutNumbersIsUnchanged() {
+        #expect(say("Hello there. How are you?") == "Hello there. How are you?")
+        #expect(say("") == "")
+    }
+
+    @Test func digitsTooManyForANumberAreReadOneByOne() {
+        #expect(say("12345678901234567890123") == "one two three four five six seven eight nine zero one two three four five six seven eight nine zero one two three")
+    }
+}

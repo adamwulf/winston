@@ -48,9 +48,10 @@ final class Harness {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    /// Another model reading the same user defaults, as after the app is relaunched.
-    func relaunchedModel() -> AppModel {
-        AppModel(link: FakeTDLib().makeLink(), voiceLoop: VoiceTestBed().makeLoop(), defaults: defaults)
+    /// Another model reading the same user defaults, as after the app is relaunched. `bed` is
+    /// the new launch's voice hardware and system, such as one in another language.
+    func relaunchedModel(on bed: VoiceTestBed = VoiceTestBed()) -> AppModel {
+        AppModel(link: FakeTDLib().makeLink(), voiceLoop: bed.makeLoop(), defaults: defaults)
     }
 
     /// Two bot chats, Home (chat 1) and Laptop (chat 2), listed newest first as TDLib does,

@@ -19,6 +19,9 @@ let package = Package(
         .package(url: "https://github.com/Swiftgram/TDLibKit", exact: "1.5.2-tdlib-1.8.69-1f390d90"),
         .package(url: "https://github.com/apple/swift-log.git", .upToNextMinor(from: "1.14.0")),
         .package(url: "https://github.com/adamwulf/FellerBuncher.git", branch: "main"),
+        // Kokoro-82M neural voices (KokoroTTS, CoreML). speech-swift has no release tags, so it is
+        // pinned to a commit on main.
+        .package(url: "https://github.com/soniqo/speech-swift", revision: "31d676c6a7f1a3f9e3004c06914de54e61f0f987"),
     ],
     targets: [
         .target(
@@ -32,6 +35,7 @@ let package = Package(
         .target(
             name: "VoiceLoop",
             dependencies: [
+                .product(name: "KokoroTTS", package: "speech-swift"),
                 .product(name: "Logging", package: "swift-log"),
                 "LogSupport",
             ]

@@ -5,7 +5,8 @@ import Testing
 import VoiceLoopTestSupport
 
 // `SpeechPlayback` and `SynthesisObserver` on their own, fed the way AVSpeechSynthesizer feeds
-// them, with the player of a real `Pipeline` on the offline test bed.
+// them, with the player of a real `Pipeline` on the offline test bed. Also the pitch shift
+// between that player and the speaker.
 
 /// A started pipeline whose player is playing, as the voice loop has while it speaks.
 @MainActor
@@ -18,7 +19,7 @@ private func makePlayingPipeline(on bed: VoiceTestBed) throws -> Pipeline {
         environment: bed.environment
     )
     try pipeline.engine.start()
-    pipeline.player.play()
+    pipeline.speech.player.play()
     return pipeline
 }
 
@@ -40,6 +41,13 @@ private func speakerFrames(forSeconds seconds: Double) -> Int {
     Int(seconds * 48_000)
 }
 
+/// Lets the last render pass reach the speaker. Offline, a playback finishes once the player has
+/// rendered its last buffer, and the pitch shift after the player pulls it a pass ahead of the
+/// output (see `SpeechOutput.completion`).
+private func letTheLastPassPlay() async throws {
+    try await Task.sleep(for: .milliseconds(50))
+}
+
 /// Counts the calls to a playback's `onFinished`, which arrive on an audio thread.
 private final class FinishCounter: Sendable {
     private let calls = Mutex(0)
@@ -51,12 +59,7 @@ private final class FinishCounter: Sendable {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct SpeechPlaybackTests {
     private func makePlayback(on pipeline: Pipeline, finished: FinishCounter) -> SpeechPlayback {
-        SpeechPlayback(
-            text: "Hello.",
-            player: pipeline.player,
-            format: pipeline.speechFormat,
-            completion: pipeline.playbackCompletion
-        ) { _ in
+        pipeline.speech.makePlayback(text: "Hello.") { _ in
             finished.increment()
         }
     }
@@ -77,6 +80,7 @@ struct SpeechPlaybackTests {
         playback.synthesisFinished()
 
         #expect(await eventually { finished.count == 1 })
+        try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.3)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -95,6 +99,7 @@ struct SpeechPlaybackTests {
         // Each of the two ends the message as far as the playback knows; the loop ignores
         // the second report.
         #expect(await eventually { finished.count == 2 })
+        try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -192,6 +197,42 @@ struct SpeechPlaybackTests {
         // Nothing is tracked any more, so a repeat is dropped.
         observer.speechSynthesizer(synthesizer, didFinish: current)
         #expect(finished.count == 1)
+    }
+}
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct PitchShiftTests {
+    /// Plays a 440 Hz tone through a pipeline at `pitch` and returns how often the sound that
+    /// came out of the speaker crossed zero, per second of sound.
+    private func zeroCrossingsPerSecond(atPitch pitch: Float) async throws -> Double {
+        let bed = VoiceTestBed()
+        let pipeline = try makePlayingPipeline(on: bed)
+        defer { pipeline.tearDown() }
+        let finished = FinishCounter()
+        pipeline.speech.setPitch(pitch)
+        let playback = pipeline.speech.makePlayback(text: "Hello.") { _ in
+            finished.increment()
+        }
+
+        playback.receive(try speechBuffer(seconds: 0.5))
+        playback.synthesisFinished()
+        #expect(await eventually { finished.count == 1 })
+        try await letTheLastPassPlay()
+
+        #expect(bed.audio.playedFrames > 0)
+        return Double(bed.audio.playedZeroCrossings) / Double(bed.audio.playedFrames) * 48_000
+    }
+
+    @Test func aShiftedToneComesOutAnOctaveAwayAndAnUnshiftedOneAsItWas() async throws {
+        let normal = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.defaultSpeechPitch)
+        let higher = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.speechPitches.upperBound)
+        let lower = try await zeroCrossingsPerSecond(atPitch: VoiceLoop.speechPitches.lowerBound)
+
+        // A 440 Hz tone crosses zero 880 times a second: 1760 an octave up, 440 an octave down.
+        #expect(abs(normal - 880) <= 880 / 20)
+        #expect(abs(higher - 1760) <= 1760 / 10)
+        #expect(abs(lower - 440) <= 440 / 10)
     }
 }
 

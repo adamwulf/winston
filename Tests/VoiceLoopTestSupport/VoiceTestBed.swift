@@ -2,11 +2,12 @@
 import VoiceLoop
 
 /// Everything a `VoiceLoop` needs from the system, for tests: offline audio hardware, scripted
-/// recognizers, and permission prompts that answer at once. The loop built on it is the real
-/// `VoiceLoop`, with its real pipeline and its real speech synthesizer.
+/// recognizers, permission prompts that answer at once, and a fake Kokoro. The loop built on it
+/// is the real `VoiceLoop`, with its real pipeline and its real speech synthesizer.
 @MainActor
 package final class VoiceTestBed {
     package let audio = OfflineAudio()
+    package let kokoro = FakeKokoro()
     /// Every recognizer the loop has asked for, newest last. Each listening session gets one.
     package private(set) var recognizers: [ScriptedRecognizer] = []
 
@@ -22,6 +23,9 @@ package final class VoiceTestBed {
     package var hasVoiceProcessing = true
     /// How many times the loop has tried to turn voice processing on.
     package private(set) var voiceProcessingAttempts = 0
+    /// The system's language. American English unless a test changes it, so the American Kokoro
+    /// voices (`af_heart` and the like) are on offer whatever the Mac running the tests uses.
+    package var languageCode = "en-US"
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -60,7 +64,9 @@ package final class VoiceTestBed {
                 if !hasVoiceProcessing {
                     throw VoiceTestBedError.noVoiceProcessing
                 }
-            }
+            },
+            kokoro: kokoro,
+            languageCode: { [self] in languageCode }
         )
     }
 

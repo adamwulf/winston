@@ -49,6 +49,20 @@ private func settle(_ duration: Duration = .milliseconds(250)) async throws {
     try await Task.sleep(for: duration)
 }
 
+/// A voice preview long enough to still be playing when a test interrupts it.
+private let longPreview = "This is a long preview, with enough words to still be playing when a call comes in."
+
+/// Previews `text` while the loop is off and waits until it has played. Returns how much sound
+/// came out of the speaker.
+@MainActor
+private func framesPlayed(previewing text: String, by loop: VoiceLoop, on bed: VoiceTestBed) async throws -> Int {
+    let before = bed.audio.playedFrames
+    loop.preview(text)
+    let engine = try #require(bed.audio.engines.last)
+    #expect(await eventually { !engine.isRunning })
+    return bed.audio.playedFrames - before
+}
+
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct InterruptionTests {
@@ -218,9 +232,45 @@ struct InterruptionTests {
         #expect(bed.audio.playedFrames > 0)
     }
 
+    @Test func anInterruptionEndsAVoicePreviewPlayingWhileOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        let wholePreview = try await framesPlayed(previewing: longPreview, by: loop, on: bed)
+        let before = bed.audio.playedFrames
+        loop.preview(longPreview)
+        #expect(await eventually { bed.audio.playedFrames > before })
+        let previewEngine = try #require(bed.audio.engines.last)
+
+        // A call comes in. The test engine would render on through a pretend interruption, so
+        // only the preview ending stops it.
+        postInterruption(.began)
+
+        #expect(await eventually { !previewEngine.isRunning })
+        try await settle()
+        // Cut off, not played to its end.
+        #expect(bed.audio.playedFrames - before < wholePreview / 2)
+        #expect(loop.state == .off)
+        #expect(bed.recognizers.isEmpty)
+    }
+
     // MARK: - The audio session
     //
     // In this suite because the session is process-wide too.
+
+    @Test func aVoicePreviewWhileOffPlaysInASessionTheSilentSwitchDoesNotMute() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+
+        loop.preview("Hi.")
+        let session = AVAudioSession.sharedInstance()
+
+        // Playback is the category the silent switch leaves alone. Other audio is turned down
+        // while it plays, not stopped.
+        #expect(session.category == .playback)
+        #expect(session.mode == .spokenAudio)
+        #expect(session.categoryOptions.contains(.duckOthers))
+        #expect(await eventually { bed.audio.engines.last?.isRunning == false })
+    }
 
     @Test func withVoiceProcessingTheSessionIsAVoiceChatThatPausesOtherAudio() async throws {
         let bed = VoiceTestBed()

@@ -15,10 +15,11 @@ import UIKit
 /// own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer` running
 /// `SpeechTranscriber`. If voice processing can't start, the engine runs without it and the
 /// microphone is ignored while a reply plays (half-duplex: only `stopSpeaking()`
-/// interrupts). Speech is rendered with
-/// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
-/// the same engine. Sound cues (`SoundCue`) play on a second player node there: taps when
-/// listening starts and stops, and whatever `play(_:)` is asked for.
+/// interrupts). Speech is rendered with `AVSpeechSynthesizer.write(_:toBufferCallback:)`, or by
+/// Kokoro for a Kokoro voice, and played on an `AVAudioPlayerNode` in the same engine, through
+/// a pitch shift (see `SpeechOutput`). Sound cues (`SoundCue`) play on a second player node
+/// there, not pitch-shifted: taps when listening starts and stops, and whatever `play(_:)` is
+/// asked for.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -44,8 +45,25 @@ public final class VoiceLoop {
     public private(set) var state: State = .off
     /// How long the transcript must stay unchanged before an utterance is finished.
     public var pauseThreshold: Duration = .milliseconds(1200)
-    /// `AVSpeechSynthesisVoice.identifier` to speak with; nil picks the best installed voice.
-    public var voiceIdentifier: String?
+    /// The `VoiceOption.id` to speak with; nil picks the best installed system voice. Choosing a
+    /// Kokoro voice downloads and loads its model if needed (see `kokoroModelState`), and until
+    /// it is ready, the best system voice speaks instead. Choosing any other voice frees the
+    /// loaded model's memory; it stays downloaded.
+    public var voiceIdentifier: String? {
+        didSet {
+            guard voiceIdentifier != oldValue else { return }
+            if isKokoroVoiceChosen {
+                kokoroModel.load()
+            } else {
+                kokoroModel.release()
+            }
+        }
+    }
+    /// The Kokoro voices' model. It downloads and loads when a Kokoro voice is chosen, and when
+    /// voice mode starts with one chosen.
+    public var kokoroModelState: KokoroModelState {
+        kokoroModel.state
+    }
     /// `AVSpeechUtterance.rate` to speak at, within `speechRates`. The scale isn't linear:
     /// `defaultSpeechRate` (the middle) is normal speed. Applies from the next message spoken.
     public var speechRate: Float = VoiceLoop.defaultSpeechRate
@@ -53,6 +71,14 @@ public final class VoiceLoop {
     public static let speechRates: ClosedRange<Float> = AVSpeechUtteranceMinimumSpeechRate...AVSpeechUtteranceMaximumSpeechRate
     /// Normal speaking speed.
     public static let defaultSpeechRate: Float = AVSpeechUtteranceDefaultSpeechRate
+    /// How high to speak, as a multiplier of the voice's own pitch, within `speechPitches`: 1 is
+    /// the voice's normal pitch, 2 an octave up. The audio is shifted after synthesis, so it
+    /// works the same for every voice. Applies from the next message spoken.
+    public var speechPitch: Float = VoiceLoop.defaultSpeechPitch
+    /// The multipliers `speechPitch` can take.
+    public static let speechPitches: ClosedRange<Float> = 0.5...2.0
+    /// The voice's normal pitch.
+    public static let defaultSpeechPitch: Float = 1.0
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -101,11 +127,22 @@ public final class VoiceLoop {
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
-    /// Plays voice previews when the loop isn't running. See `preview(_:)`.
+    /// Renders voice previews when the loop isn't running, for `previewPlayer`. See `preview(_:)`.
     @ObservationIgnored private let previewSynthesizer = AVSpeechSynthesizer()
+    /// Plays voice previews when the loop isn't running.
+    @ObservationIgnored private let previewPlayer: PreviewPlayer
     /// The synthesizer's delegate (held strongly; `delegate` is weak). Tells the playback
     /// when synthesis has finished.
     @ObservationIgnored private let synthesisObserver = SynthesisObserver()
+    /// The same, for `previewSynthesizer`.
+    @ObservationIgnored private let previewSynthesisObserver = SynthesisObserver()
+    /// The Kokoro voices' model and its state.
+    @ObservationIgnored private let kokoroModel: KokoroModel
+    /// Renders the message being spoken with Kokoro, a sentence at a time. Nil when the message
+    /// is spoken by the system synthesizer, or when not speaking.
+    @ObservationIgnored private var kokoroSynthesis: Task<Void, Never>?
+    /// The same, for a preview played while the loop is off.
+    @ObservationIgnored private var previewKokoroSynthesis: Task<Void, Never>?
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
@@ -136,26 +173,28 @@ public final class VoiceLoop {
         self.init(environment: .live)
     }
 
-    /// Tests pass a scripted recognizer and an audio engine that renders offline.
+    /// Tests pass a scripted recognizer, an audio engine that renders offline, and a fake Kokoro.
     package init(environment: VoiceEnvironment) {
         self.environment = environment
+        previewPlayer = PreviewPlayer(environment: environment)
+        kokoroModel = KokoroModel(engine: environment.kokoro)
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
         synthesizer.delegate = synthesisObserver
-        #if os(iOS)
-        // Its own playback session, so the silent switch doesn't mute previews and the
-        // session voice mode sets up isn't touched.
-        previewSynthesizer.usesApplicationAudioSession = false
-        #endif
+        previewSynthesizer.delegate = previewSynthesisObserver
         observeAppAndSession()
     }
 
     // MARK: - Public API
 
-    /// Starts listening. Asks for microphone and speech permission on first use.
+    /// Starts listening. Asks for microphone and speech permission on first use. With a Kokoro
+    /// voice chosen, also loads its model, or tries again if that failed.
     ///
     /// Throws a `VoiceLoopError` when permission is missing or the speech model can't be
     /// installed, and passes audio engine errors through. Does nothing if already running.
     public func start() async throws {
+        if pipeline == nil, !isStarting {
+            loadKokoroModelIfChosen()
+        }
         try await start(isForegroundRetry: false)
     }
 
@@ -164,7 +203,7 @@ public final class VoiceLoop {
     private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
         // A preview playing outside the engine would be heard as speech once listening starts.
-        previewSynthesizer.stopSpeaking(at: .immediate)
+        stopPreviewPlayer()
         isStarting = true
         defer {
             isStarting = false
@@ -371,20 +410,62 @@ public final class VoiceLoop {
         silence(consumingEcho: true, reason: "stopped")
     }
 
-    /// Says `text` right away in the current voice and speed, for trying them in settings, cutting off
+    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings, cutting off
     /// an earlier preview. While the loop is running it also stops any reply being spoken and
     /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
-    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker.
+    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker
+    /// on an engine of its own. Like a reply, it uses the system voice for a Kokoro voice whose
+    /// model isn't ready.
     public func preview(_ text: String) {
-        previewSynthesizer.stopSpeaking(at: .immediate)
+        stopPreviewPlayer()
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
             stopSpeaking()
             speak(text)
-        } else {
-            previewSynthesizer.speak(makeUtterance(text))
+            return
         }
+        let playback: SpeechPlayback
+        do {
+            playback = try previewPlayer.play(pitch: speechPitch)
+        } catch {
+            Self.log.error("voice preview failed to start", error.logContext())
+            return
+        }
+        if let voice = readyKokoroVoice() {
+            previewKokoroSynthesis = synthesizeWithKokoro(text, voice: voice, into: playback) { [self] rest in
+                previewWithSystemVoice(rest, into: playback)
+            }
+        } else {
+            previewWithSystemVoice(text, into: playback)
+        }
+    }
+
+    private func previewWithSystemVoice(_ text: String, into playback: SpeechPlayback) {
+        let utterance = makeUtterance(text)
+        previewSynthesisObserver.track(utterance, playback: playback)
+        previewSynthesizer.write(utterance) { @Sendable buffer in
+            playback.receive(buffer)
+        }
+    }
+
+    /// Cuts off a preview as a new `preview(_:)` would, for when there's nothing new to say: one
+    /// playing on its own engine while the loop is off, or, while the loop is running, what it
+    /// is saying (dropping the queue, as `stopSpeaking()` does).
+    public func stopPreview() {
+        stopPreviewPlayer()
+        if state != .off || isStarting {
+            stopSpeaking()
+        }
+    }
+
+    /// Stops a preview played while the loop was off. Stopping the player cancels its playback,
+    /// so a sentence Kokoro is still rendering is dropped.
+    private func stopPreviewPlayer() {
+        previewKokoroSynthesis?.cancel()
+        previewKokoroSynthesis = nil
+        previewSynthesizer.stopSpeaking(at: .immediate)
+        previewPlayer.stop()
     }
 
     /// Plays `cue` through the loop's engine, mixed with any reply being spoken, so echo
@@ -401,11 +482,36 @@ public final class VoiceLoop {
         }
     }
 
-    /// Installed voices for the current language, best quality first, for a settings picker.
-    /// Within a quality, the system's default voice comes first, then by name. Novelty voices
-    /// are left out.
-    public static func availableVoices() -> [VoiceOption] {
-        let language = AVSpeechSynthesisVoice.currentLanguageCode()
+    /// The voices for `language` (the current one by default), for a settings picker: the
+    /// installed system voices, then the Kokoro voices (for American and British English only),
+    /// best first. System voices are ordered by quality, and within a quality the system's
+    /// default voice comes first, then by name. Novelty voices are left out.
+    public static func availableVoices(language: String = AVSpeechSynthesisVoice.currentLanguageCode()) -> [VoiceOption] {
+        systemVoices(language: language) + KokoroCatalog.voices(forLanguage: language)
+    }
+
+    /// `availableVoices()`, the voices on offer: the ones settings lists and the loop speaks with.
+    public var voices: [VoiceOption] {
+        Self.availableVoices(language: environment.languageCode())
+    }
+
+    /// The voice `voiceIdentifier` picks, if it is one of `voices`. Nil otherwise, and then the
+    /// best system voice speaks: a voice chosen in another language or region (say, an American
+    /// Kokoro voice once the system is in British English) is set aside, not forgotten, and is
+    /// used again when it is on offer again.
+    public var chosenVoice: VoiceOption? {
+        guard let voiceIdentifier else { return nil }
+        return voices.first { $0.id == voiceIdentifier }
+    }
+
+    /// With a Kokoro voice chosen, downloads and loads its model if it isn't ready or on its way:
+    /// a retry after `kokoroModelState` shows `.failed`.
+    public func loadKokoroModel() {
+        loadKokoroModelIfChosen()
+    }
+
+    /// The system voices of `availableVoices(language:)`.
+    private static func systemVoices(language: String) -> [VoiceOption] {
         let defaultID = AVSpeechSynthesisVoice(language: language)?.identifier
         return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language == language && !$0.voiceTraits.contains(.isNoveltyVoice) }
@@ -708,7 +814,8 @@ public final class VoiceLoop {
         #endif
     }
 
-    private static func deactivateAudioSession() {
+    /// Also used by the preview player once a preview ends.
+    static func deactivateAudioSession() {
         #if os(iOS)
         // Lets other apps' audio resume. It fails only if the session is already inactive
         // (after an interruption) or still busy, and there is nothing more to do either way.
@@ -786,13 +893,9 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
-        let utterance = makeUtterance(text)
-        let playback = SpeechPlayback(
-            text: text,
-            player: pipeline.player,
-            format: pipeline.speechFormat,
-            completion: pipeline.playbackCompletion
-        ) { [weak self] playback in
+        // Each message takes the pitch as it is now, also on a new or restarted engine.
+        pipeline.speech.setPitch(speechPitch)
+        let playback = pipeline.speech.makePlayback(text: text) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
@@ -800,16 +903,98 @@ public final class VoiceLoop {
         // The reply's log reports what the microphone heard while it played.
         _ = pipeline.voiceActivity.takePeakDecibels()
         ignoredResultsThisReply = 0
-        synthesisObserver.track(utterance, playback: playback)
-        // Right before synthesis starts: the timeline measures the reply from here.
+        // Right before synthesis starts: the timeline measures the reply from here, whichever
+        // voice renders it.
         let started = TimelineClock.now()
-        synthesizer.write(utterance) { @Sendable buffer in
-            playback.receive(buffer)
-        }
-        pipeline.player.play()
+        synthesize(text, into: playback)
+        pipeline.speech.player.play()
         pipeline.timeline.speechStarted(at: started, chars: text.count, queued: speechQueue.count) {
             playback.firstAudioHostTime
         }
+    }
+
+    /// Renders `text` into `playback` in the chosen voice and speed: with Kokoro when a Kokoro
+    /// voice is chosen and its model is ready, otherwise with the system synthesizer.
+    private func synthesize(_ text: String, into playback: SpeechPlayback) {
+        if let voice = readyKokoroVoice() {
+            kokoroSynthesis = synthesizeWithKokoro(text, voice: voice, into: playback) { [self] rest in
+                synthesizeWithSystemVoice(rest, into: playback)
+            }
+        } else {
+            synthesizeWithSystemVoice(text, into: playback)
+        }
+    }
+
+    private func synthesizeWithSystemVoice(_ text: String, into playback: SpeechPlayback) {
+        let utterance = makeUtterance(text)
+        synthesisObserver.track(utterance, playback: playback)
+        synthesizer.write(utterance) { @Sendable buffer in
+            playback.receive(buffer)
+        }
+    }
+
+    /// The chosen Kokoro voice's id, if a Kokoro voice is chosen and its model is ready.
+    private func readyKokoroVoice() -> String? {
+        guard kokoroModel.state == .ready, let chosen = chosenVoice, chosen.engine == .kokoro else { return nil }
+        return KokoroCatalog.kokoroVoice(forOptionID: chosen.id)
+    }
+
+    /// Kokoro doesn't stream, so `text` is rendered a sentence at a time off the main actor, and
+    /// each sentence is fed to `playback` once it's ready. Cancelling the returned task stops
+    /// it: no further sentence is rendered, and the caller cancels `playback` too, so the one
+    /// rendering then is dropped. If rendering fails, or the model is freed because another
+    /// voice was chosen, `systemVoice` is handed the rest of the text to say.
+    private func synthesizeWithKokoro(
+        _ text: String,
+        voice: String,
+        into playback: SpeechPlayback,
+        systemVoice: @escaping @MainActor (String) -> Void
+    ) -> Task<Void, Never> {
+        let sentences = KokoroText.sentences(in: text)
+        let speed = KokoroSpeed.speed(forRate: speechRate)
+        let engine = kokoroModel.engine
+        return Task {
+            // Kokoro can't pronounce digits. Only its text is changed: the system voice gets
+            // the sentences as written.
+            let numbers = KokoroNumbers()
+            for (index, sentence) in sentences.enumerated() {
+                guard !Task.isCancelled else { return }
+                guard kokoroModel.state == .ready else {
+                    // Another voice was chosen, which freed the model.
+                    systemVoice(sentences[index...].joined(separator: " "))
+                    return
+                }
+                let samples: [Float]
+                do {
+                    samples = try await engine.synthesize(numbers.spelledOut(sentence), voice: voice, speed: speed)
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    // Codes only: KokoroTTS's messages can list voices and paths.
+                    Self.log.error(
+                        "kokoro synthesis failed; speaking with the system voice",
+                        error.logCodes(["sentence": "\(index)", "sentences": "\(sentences.count)"])
+                    )
+                    systemVoice(sentences[index...].joined(separator: " "))
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                for buffer in KokoroAudio.buffers(samples) {
+                    playback.receive(buffer)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            playback.synthesisFinished()
+        }
+    }
+
+    /// Starts loading the Kokoro model if a Kokoro voice is chosen.
+    private func loadKokoroModelIfChosen() {
+        guard isKokoroVoiceChosen else { return }
+        kokoroModel.load()
+    }
+
+    private var isKokoroVoiceChosen: Bool {
+        chosenVoice?.engine == .kokoro
     }
 
     private func speechFinished(_ playback: SpeechPlayback) {
@@ -817,6 +1002,7 @@ public final class VoiceLoop {
         let replyEnded = logReplyEnded(playback, reason: "finished")
         pipeline?.timeline.speechFinished(replyEnded)
         currentSpeech = nil
+        kokoroSynthesis = nil
         consumeEcho()
         updateListeningState()
         speakNextIfIdle()
@@ -839,9 +1025,11 @@ public final class VoiceLoop {
         logReplyEnded(currentSpeech, reason: reason)
         self.currentSpeech = nil
         currentSpeech.cancel()
+        kokoroSynthesis?.cancel()
+        kokoroSynthesis = nil
         synthesizer.stopSpeaking(at: .immediate)
         if let pipeline {
-            pipeline.player.stop()
+            pipeline.speech.player.stop()
             pipeline.timeline.speechStopped(outputLatency: pipeline.engine.outputNode.presentationLatency)
         }
         if consumingEcho {
@@ -854,12 +1042,14 @@ public final class VoiceLoop {
     /// Logs how a reply ended and the loudest microphone level while it played, after echo
     /// cancellation. That level includes the user talking and room noise as well as any of the
     /// reply that got through, so it only measures leakage for a reply that played to the end
-    /// in a quiet room. Counts and levels only. Returns the line's fields, which "speech
-    /// finished" on the timeline repeats: taking the peak level resets it.
+    /// in a quiet room. Counts and levels only. `kokoro` says whether Kokoro rendered the reply
+    /// (or its start, if it failed partway) rather than the system voice. Returns the line's
+    /// fields, which "speech finished" on the timeline repeats: taking the peak level resets it.
     @discardableResult
     private func logReplyEnded(_ playback: SpeechPlayback, reason: String) -> [String: CustomStringConvertible] {
         let fields: [String: CustomStringConvertible] = [
             "reason": reason,
+            "kokoro": kokoroSynthesis != nil,
             "ms": Int(playback.started.duration(to: .now) / .milliseconds(1)),
             "ignoredResults": ignoredResultsThisReply,
             "micPeakDb": pipeline?.voiceActivity.takePeakDecibels() ?? -120,
@@ -895,30 +1085,45 @@ public final class VoiceLoop {
         return utterance
     }
 
+    /// The chosen system voice, or the best one on offer when none is chosen, a Kokoro voice is
+    /// chosen, or the chosen voice isn't on offer (see `chosenVoice`).
     private func voice() -> AVSpeechSynthesisVoice? {
-        if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
-            return voice
-        }
-        return Self.availableVoices().first.flatMap { AVSpeechSynthesisVoice(identifier: $0.id) }
+        let voices = voices
+        let chosen = voices.first { $0.id == voiceIdentifier && $0.engine == .system }
+        let system = chosen ?? voices.first { $0.engine == .system }
+        return system.flatMap { AVSpeechSynthesisVoice(identifier: $0.id) }
     }
 }
 
 /// A text-to-speech voice the user can pick.
 public struct VoiceOption: Identifiable, Hashable, Sendable {
-    /// `AVSpeechSynthesisVoice.identifier`.
+    /// `AVSpeechSynthesisVoice.identifier` for a system voice. For a Kokoro voice, `kokoro.`
+    /// and its Kokoro voice id, such as `kokoro.af_heart`.
     public let id: String
     public let name: String
+    /// A system voice's quality. Kokoro voices have no quality levels, and are `.standard`.
     public let quality: Quality
+    public let engine: Engine
 
     public enum Quality: Int, Comparable, Sendable {
         case standard, enhanced, premium
         public static func < (lhs: Quality, rhs: Quality) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
-    public init(id: String, name: String, quality: Quality) {
+    /// What speaks with the voice.
+    public enum Engine: Sendable {
+        /// `AVSpeechSynthesizer`.
+        case system
+        /// The Kokoro-82M neural model, which runs on the device and is downloaded the first
+        /// time a Kokoro voice is used.
+        case kokoro
+    }
+
+    public init(id: String, name: String, quality: Quality, engine: Engine = .system) {
         self.id = id
         self.name = name
         self.quality = quality
+        self.engine = engine
     }
 }
 
@@ -939,8 +1144,9 @@ public enum VoiceLoopError: Error, Sendable, Equatable {
 }
 
 #if os(iOS)
-/// The parts of an `AVAudioSession` interruption notification the loop acts on.
-private enum InterruptionEvent: Sendable {
+/// The parts of an `AVAudioSession` interruption notification the loop and the preview player
+/// act on.
+enum InterruptionEvent: Sendable {
     case began
     case ended(shouldResume: Bool)
 

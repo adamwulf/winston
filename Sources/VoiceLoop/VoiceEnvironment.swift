@@ -17,30 +17,39 @@ package protocol Recognizer: Sendable {
 }
 
 /// The system services the voice loop runs on: the permission prompts, the speech recognizer,
-/// and the audio hardware. None of them is available to a test, so the loop takes them from
-/// here. `live` is the real thing. Tests pass a scripted recognizer and an engine that renders
-/// offline, and everything else (the loop, the pipeline, speech playback) runs as it does in
-/// the app.
+/// the audio hardware, and the Kokoro voices' model. None of them is available to a test, so the
+/// loop takes them from here. `live` is the real thing. Tests pass a scripted recognizer, an
+/// engine that renders offline and a fake Kokoro, and everything else (the loop, the pipeline,
+/// speech playback) runs as it does in the app.
 package struct VoiceEnvironment: Sendable {
     /// Asks for microphone and speech permission. Throws a `VoiceLoopError` when one is missing.
     package var requestPermissions: @MainActor @Sendable () async throws -> Void
     /// A recognizer for the current locale, with its model installed. Throws
     /// `VoiceLoopError.speechModelUnavailable` when there is none.
     package var makeRecognizer: @MainActor @Sendable () async throws -> any Recognizer
-    /// A new audio engine for one listening session.
+    /// A new audio engine for one listening session, or for one voice preview while the loop is off.
     package var makeEngine: @MainActor @Sendable () throws -> AVAudioEngine
     /// Turns on voice processing (echo cancellation) for the engine's microphone.
     package var enableVoiceProcessing: @MainActor @Sendable (AVAudioInputNode) throws -> Void
+    /// Speaks with the Kokoro voices, once its model has downloaded and loaded.
+    package var kokoro: any KokoroEngine
+    /// The language voices are offered for, as `AVSpeechSynthesisVoice.currentLanguageCode()`
+    /// gives it, such as `en-US`.
+    package var languageCode: @MainActor @Sendable () -> String
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
         makeRecognizer: @escaping @MainActor @Sendable () async throws -> any Recognizer,
         makeEngine: @escaping @MainActor @Sendable () throws -> AVAudioEngine,
-        enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void
+        enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void,
+        kokoro: any KokoroEngine,
+        languageCode: @escaping @MainActor @Sendable () -> String
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
         self.makeEngine = makeEngine
         self.enableVoiceProcessing = enableVoiceProcessing
+        self.kokoro = kokoro
+        self.languageCode = languageCode
     }
 }

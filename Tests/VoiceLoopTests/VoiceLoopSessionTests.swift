@@ -54,6 +54,14 @@ private func startedLoop(on bed: VoiceTestBed) async throws -> VoiceLoop {
     return loop
 }
 
+/// The pitch shift that speech plays through in `engine`.
+@MainActor
+private func pitchShift(in engine: AVAudioEngine?) throws -> AVAudioUnitTimePitch {
+    let shifts = try #require(engine).attachedNodes.compactMap { $0 as? AVAudioUnitTimePitch }
+    #expect(shifts.count == 1)
+    return try #require(shifts.first)
+}
+
 /// Lets queued main-actor work and the audio engine run for a moment, before checking that
 /// something did NOT happen.
 private func settle(_ duration: Duration = .milliseconds(250)) async throws {
@@ -270,13 +278,19 @@ struct StartingTests {
 struct ListeningTests {
     @Test func whatIsHeardShowsAsTheLiveTranscriptAndIsSentAfterAPause() async throws {
         let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
+        let loop = bed.makeLoop()
+        // Long until the final result is in: a short pause could end the utterance at the
+        // partial "Mark that" before the final arrives.
+        loop.pauseThreshold = .seconds(30)
+        try await loop.start()
         defer { loop.stop() }
         #expect(loop.state == .listening(partial: ""))
 
         bed.recognizer.hear("Mark that", over: 0...0.5)
         #expect(await eventually { loop.state == .listening(partial: "Mark that") })
         bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true, alternatives: ["Mark that red."])
+        #expect(await eventually { loop.state == .listening(partial: "Mark that read.") })
+        loop.pauseThreshold = .milliseconds(50)
 
         let utterance = await nextUtterance(of: loop)
         #expect(utterance?.text == "Mark that read.")
@@ -563,20 +577,71 @@ struct SpeakingTests {
         #expect(abs(bed.audio.playedFrames - playedBeforePreview - previewAlone) <= previewAlone / 4)
     }
 
-    @Test func aVoicePreviewWhileOffLeavesTheEngineAlone() async throws {
+    /// Previews `text` while the loop is off and waits until it has played. Returns how much
+    /// sound came out of the speaker.
+    private func framesPlayed(previewing text: String, by loop: VoiceLoop, on bed: VoiceTestBed) async throws -> Int {
+        let before = bed.audio.playedFrames
+        loop.preview(text)
+        let engine = try #require(bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        return bed.audio.playedFrames - before
+    }
+
+    @Test func aVoicePreviewWhileOffPlaysOnAnEngineOfItsOwnAtTheChosenPitch() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
+        loop.speechPitch = VoiceLoop.speechPitches.upperBound
 
-        // Nothing to pronounce, so the test run stays silent: this goes to the real speaker.
-        loop.preview("")
+        loop.preview("Hi.")
 
         #expect(loop.state == .off)
-        #expect(bed.audio.engines.isEmpty)
+        #expect(bed.audio.engines.count == 1)
+        let engine = try #require(bed.audio.engines.first)
+        let shift = try pitchShift(in: engine)
+        #expect(shift.pitch == 1200)
+        #expect(!shift.bypass)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // Its engine stops once it has played.
+        #expect(await eventually { !engine.isRunning })
+        #expect(loop.state == .off)
+    }
 
-        // Starting stops any preview and listens as usual.
+    @Test func aNewVoicePreviewCutsOffTheOneBefore() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        let previewAlone = try await framesPlayed(previewing: "Hi.", by: loop, on: bed)
+
+        loop.preview(longReply)
+        #expect(await eventually { bed.audio.playedFrames > previewAlone })
+        let first = try #require(bed.audio.engines.last)
+        let playedBeforeSecond = bed.audio.playedFrames
+        let second = try await framesPlayed(previewing: "Hi.", by: loop, on: bed)
+
+        #expect(!first.isRunning)
+        // Only the second preview played after that: the long one didn't carry on.
+        #expect(previewAlone > 0)
+        #expect(abs(bed.audio.playedFrames - playedBeforeSecond - previewAlone) <= previewAlone / 4)
+        #expect(abs(second - previewAlone) <= previewAlone / 4)
+    }
+
+    @Test func startingStopsAVoicePreviewAndListensAsUsual() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.preview(longReply)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        let previewEngine = try #require(bed.audio.engines.last)
+
         try await loop.start()
         defer { loop.stop() }
+
+        #expect(!previewEngine.isRunning)
         #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.engines.count == 2)
+        // Nothing more of the preview plays.
+        try await settle(.milliseconds(50))
+        let playedWhenStarted = bed.audio.playedFrames
+        try await settle()
+        #expect(bed.audio.playedFrames == playedWhenStarted)
     }
 
     @Test func anUnknownVoiceFallsBackToAnInstalledOne() async throws {
@@ -587,7 +652,7 @@ struct SpeakingTests {
         loop.voiceIdentifier = "com.example.no-such-voice"
         #expect(await framesPlayed(saying: ["Hi."], by: loop, on: bed) > 0)
 
-        loop.voiceIdentifier = try #require(VoiceLoop.availableVoices().last?.id)
+        loop.voiceIdentifier = try #require(loop.voices.last { $0.engine == .system }?.id)
         #expect(await framesPlayed(saying: ["Hi."], by: loop, on: bed) > 0)
     }
 }
@@ -743,8 +808,11 @@ struct EngineStopTests {
         #expect(!bed.recognizer.isCancelled)
         #expect(loop.state == .listening(partial: "Mark that"))
 
-        loop.pauseThreshold = .milliseconds(50)
         bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Mark that read.") })
+        // Shortened only now: before the final arrives, "Mark that" has long been unchanged,
+        // so a short pause could end the utterance there.
+        loop.pauseThreshold = .milliseconds(50)
         #expect(await nextUtterance(of: loop)?.text == "Mark that read.")
     }
 
@@ -892,6 +960,76 @@ struct VoiceSettingsTests {
         #expect(fast > 0)
         #expect(fast < normal)
         #expect(normal < slow)
+    }
+
+    /// How much sound the loop makes saying `text` at `pitch`.
+    private func framesPlayed(saying text: String, atPitch pitch: Float, by loop: VoiceLoop, on bed: VoiceTestBed) async -> Int {
+        let before = bed.audio.playedFrames
+        loop.speechPitch = pitch
+        loop.speak(text)
+        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        return bed.audio.playedFrames - before
+    }
+
+    @Test func eachReplyIsShiftedToThePitchSetWhenItStarts() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let shift = try pitchShift(in: bed.audio.engines.last)
+        #expect(loop.speechPitch == VoiceLoop.defaultSpeechPitch)
+        #expect(VoiceLoop.speechPitches.contains(VoiceLoop.defaultSpeechPitch))
+        // At normal pitch the voice plays as the synthesizer made it.
+        #expect(shift.bypass)
+
+        // Not right away: the next reply takes it.
+        loop.speechPitch = VoiceLoop.speechPitches.upperBound
+        #expect(shift.bypass)
+
+        #expect(await framesPlayed(saying: "Hi.", atPitch: VoiceLoop.speechPitches.upperBound, by: loop, on: bed) > 0)
+        #expect(shift.pitch == 1200)
+        #expect(!shift.bypass)
+
+        #expect(await framesPlayed(saying: "Hi.", atPitch: VoiceLoop.speechPitches.lowerBound, by: loop, on: bed) > 0)
+        #expect(shift.pitch == -1200)
+        #expect(!shift.bypass)
+
+        #expect(await framesPlayed(saying: "Hi.", atPitch: VoiceLoop.defaultSpeechPitch, by: loop, on: bed) > 0)
+        #expect(shift.bypass)
+    }
+
+    @Test func aShiftedReplyTakesAsLongAsAnUnshiftedOne() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let text = "One, two, three."
+
+        let normal = await framesPlayed(saying: text, atPitch: VoiceLoop.defaultSpeechPitch, by: loop, on: bed)
+        let high = await framesPlayed(saying: text, atPitch: VoiceLoop.speechPitches.upperBound, by: loop, on: bed)
+        let low = await framesPlayed(saying: text, atPitch: VoiceLoop.speechPitches.lowerBound, by: loop, on: bed)
+
+        // The shift keeps the speed, and every word is played. Its overlapping windows smear a
+        // little sound into the gaps between words (about 1-3% more here).
+        #expect(normal > 0)
+        #expect(abs(high - normal) <= normal / 20)
+        #expect(abs(low - normal) <= normal / 20)
+    }
+
+    @Test func aRebuiltEngineShiftsRepliesToo() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.speechPitch = VoiceLoop.speechPitches.upperBound
+
+        loop.pausesOtherAudio = false
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        let before = bed.audio.playedFrames
+        loop.speak("Hi.")
+
+        // Spoken on the new engine: the reply waits in the queue if that is still starting.
+        #expect(await eventually { bed.audio.playedFrames > before })
+        #expect(bed.audio.engines.count == 2)
+        #expect(try pitchShift(in: bed.audio.engines.last).pitch == 1200)
     }
 
     // What the setting does to other apps' audio can't be seen here: the offline engine has no
@@ -1111,13 +1249,16 @@ struct SoundCueTests {
 
 @Suite struct VoiceOptionTests {
     @MainActor
-    @Test func availableVoicesAreForTheCurrentLanguageBestQualityFirst() throws {
-        let voices = VoiceLoop.availableVoices()
+    @Test func availableSystemVoicesAreForTheCurrentLanguageBestQualityFirst() throws {
+        let all = VoiceLoop.availableVoices()
+        let voices = all.filter { $0.engine == .system }
         let language = AVSpeechSynthesisVoice.currentLanguageCode()
         let systemDefault = AVSpeechSynthesisVoice(language: language)?.identifier
 
         #expect(!voices.isEmpty)
-        #expect(Set(voices.map(\.id)).count == voices.count)
+        #expect(Set(all.map(\.id)).count == all.count)
+        // The system voices come first, then any Kokoro voices.
+        #expect(Array(all.prefix(voices.count)) == voices)
         for option in voices {
             let voice = try #require(AVSpeechSynthesisVoice(identifier: option.id))
             #expect(voice.language == language)
@@ -1143,5 +1284,6 @@ struct SoundCueTests {
         #expect(option.id == "voice.id")
         #expect(option.name == "Ava")
         #expect(option.quality == .premium)
+        #expect(option.engine == .system)
     }
 }
