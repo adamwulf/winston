@@ -1014,8 +1014,11 @@ struct VoiceSettingsTests {
 
         loop.pausesOtherAudio = false
         #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
-        #expect(await framesPlayed(saying: "Hi.", atPitch: VoiceLoop.speechPitches.upperBound, by: loop, on: bed) > 0)
+        let before = bed.audio.playedFrames
+        loop.speak("Hi.")
 
+        // Spoken on the new engine: the reply waits in the queue if that is still starting.
+        #expect(await eventually { bed.audio.playedFrames > before })
         #expect(bed.audio.engines.count == 2)
         #expect(try pitchShift(in: bed.audio.engines.last).pitch == 1200)
     }
