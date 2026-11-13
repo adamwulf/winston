@@ -9,6 +9,13 @@
 
 set -e
 
+# A test action runs xcodebuild twice: build-for-testing, then test-without-building in a
+# fresh environment that has ci_scripts but not the source code. Only the build needs the stamp.
+if [ "$CI_XCODEBUILD_ACTION" = "test-without-building" ]; then
+    echo "Running tests without building; skipping build number stamp."
+    exit 0
+fi
+
 if [ -z "$CI_BUILD_NUMBER" ]; then
     echo "CI_BUILD_NUMBER is not set; skipping build number stamp."
     exit 0
