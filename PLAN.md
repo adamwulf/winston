@@ -249,6 +249,13 @@ Inside it:
   - **With AirPods or headphones,** there is no echo path, so barge-in just
     works. One side effect: `playAndRecord` switches AirPods to the headset
     profile, which sounds lower quality. That's fine for speech.
+  - **On the Mac, voice mode is half-duplex.** macOS voice processing fails
+    on Adam's Mac even with the built-in mic and speakers ("Unable to build a
+    valid aggregate", err -10875), and each attempt blocks the main thread for
+    seconds. So the Mac never enables it. The mic is ignored while a reply
+    plays, and the stop button is the only way to interrupt, even with
+    headphones. iOS also falls back to this mode if voice processing fails
+    to start.
 - **Voice:** the best installed voice for the system language (Premium,
   then Enhanced, then default), with a voice picker in settings.
 

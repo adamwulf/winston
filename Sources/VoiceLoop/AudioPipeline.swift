@@ -2,8 +2,8 @@
 import Speech
 import Synchronization
 
-/// The audio engine for one listening session: the microphone, normally with voice processing
-/// on, feeding converted buffers to the analyzer, and a player node for speech in the same engine.
+/// The audio engine for one listening session: the microphone (with voice processing on iOS)
+/// feeding converted buffers to the analyzer, and a player node for speech in the same engine.
 @MainActor
 final class Pipeline {
     let engine = AVAudioEngine()
@@ -108,6 +108,8 @@ final class SpeechPlayback: Sendable {
         var converter: AVAudioConverter?
         /// Held back until the next buffer arrives, so the last one can carry the completion handler.
         var pending: AVAudioPCMBuffer?
+        /// The synthesizer has delivered every buffer.
+        var isSynthesized = false
         var isCancelled = false
     }
 
@@ -129,30 +131,47 @@ final class SpeechPlayback: Sendable {
         self.onFinished = onFinished
     }
 
-    /// Takes one synthesizer buffer. A zero-length buffer marks the end of the message.
+    /// Takes one synthesizer buffer.
     func receive(_ buffer: AVAudioBuffer) {
-        let finishedNow = state.withLock { state -> Bool in
-            guard !state.isCancelled, let pcm = buffer as? AVAudioPCMBuffer else { return false }
-            if pcm.frameLength == 0 {
-                guard let last = state.pending else { return true }
-                state.pending = nil
-                state.player.scheduleBuffer(last, completionCallbackType: .dataPlayedBack) { [self] _ in
-                    onFinished(self)
-                }
-                return false
-            }
+        state.withLock { state in
+            guard !state.isCancelled, let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else { return }
             if state.converter?.inputFormat != pcm.format {
                 state.converter = AVAudioConverter(from: pcm.format, to: state.format)
                 state.converter?.primeMethod = .none
             }
-            guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return false }
+            guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return }
+            if state.isSynthesized {
+                // Arrived after the synthesizer said it was done; this buffer now ends the message.
+                scheduleLast(converted, on: state.player)
+                return
+            }
             if let previous = state.pending {
                 state.player.scheduleBuffer(previous)
             }
             state.pending = converted
+        }
+    }
+
+    /// Called when the synthesizer has delivered every buffer
+    /// (`AVSpeechSynthesizerDelegate.speechSynthesizer(_:didFinish:)`). The message finishes
+    /// once the last buffer has played. The synthesizer doesn't reliably send a zero-length
+    /// buffer at the end: on macOS 27 the last buffer has one frame.
+    func synthesisFinished() {
+        let finishedNow = state.withLock { state -> Bool in
+            guard !state.isCancelled, !state.isSynthesized else { return false }
+            state.isSynthesized = true
+            guard let last = state.pending else { return true }
+            state.pending = nil
+            scheduleLast(last, on: state.player)
             return false
         }
         if finishedNow { onFinished(self) }
+    }
+
+    private func scheduleLast(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode) {
+        player.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [self] _ in
+            onFinished(self)
+        }
     }
 
     /// Ignores any further buffers. The caller stops the player.
@@ -161,6 +180,26 @@ final class SpeechPlayback: Sendable {
             state.isCancelled = true
             state.pending = nil
         }
+    }
+}
+
+/// The synthesizer's delegate. Its only job is to tell the playback for the utterance being
+/// written when synthesis has finished, since the buffer callback has no reliable end marker.
+final class SynthesisObserver: NSObject, AVSpeechSynthesizerDelegate, Sendable {
+    private let current = Mutex<(utterance: ObjectIdentifier, playback: SpeechPlayback)?>(nil)
+
+    /// Call before `write(_:toBufferCallback:)`; one utterance is written at a time.
+    func track(_ utterance: AVSpeechUtterance, playback: SpeechPlayback) {
+        current.withLock { $0 = (ObjectIdentifier(utterance), playback) }
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        let playback = current.withLock { current -> SpeechPlayback? in
+            guard let tracked = current, tracked.utterance == ObjectIdentifier(utterance) else { return nil }
+            current = nil
+            return tracked.playback
+        }
+        playback?.synthesisFinished()
     }
 }
 

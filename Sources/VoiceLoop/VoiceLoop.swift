@@ -7,13 +7,15 @@ import UIKit
 #endif
 
 /// Hands-free voice loop: listens, detects the end of an utterance, speaks replies,
-/// and stops speaking when the user talks over it (barge-in).
+/// and, on iOS, stops speaking when the user talks over it (barge-in).
 ///
-/// One `AVAudioEngine` does everything. Its input node has voice processing on, so the app's
-/// own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer` running
-/// `SpeechTranscriber`. On macOS, or if voice processing can't start, the engine runs without
-/// it and the microphone is ignored while a reply plays. Speech is rendered with `AVSpeechSynthesizer.write(_:toBufferCallback:)`
-/// and played on an `AVAudioPlayerNode` in the same engine.
+/// One `AVAudioEngine` does everything. On iOS its input node has voice processing on, so the
+/// app's own speech is removed from the microphone signal, and feeds a `SpeechAnalyzer`
+/// running `SpeechTranscriber`. On macOS, or if voice processing can't start, the engine runs
+/// without it and the microphone is ignored while a reply plays (half-duplex: only
+/// `stopSpeaking()` interrupts). Speech is rendered with
+/// `AVSpeechSynthesizer.write(_:toBufferCallback:)` and played on an `AVAudioPlayerNode` in
+/// the same engine.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -21,7 +23,8 @@ public final class VoiceLoop {
         case off
         /// Listening; `partial` is the live transcript of the current utterance (may be empty).
         case listening(partial: String)
-        /// Speaking a reply. Listening continues so the user can interrupt.
+        /// Speaking a reply. With echo cancellation, listening continues so the user can
+        /// interrupt by talking; without it, only `stopSpeaking()` interrupts.
         case speaking
     }
 
@@ -66,6 +69,9 @@ public final class VoiceLoop {
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
+    /// The synthesizer's delegate (held strongly; `delegate` is weak). Tells the playback
+    /// when synthesis has finished.
+    @ObservationIgnored private let synthesisObserver = SynthesisObserver()
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
@@ -73,8 +79,9 @@ public final class VoiceLoop {
     /// echo). When speaking ends, all audio fed so far is consumed if this is set,
     /// `bargeInMinimumWords` is above 1, or echo cancellation is off (echo is expected then,
     /// and a short reply's echo may only arrive after playback). That also covers the echo of the last words, whose results
-    /// lag behind the audio. At the default of 1 nothing is consumed, so words spoken right
-    /// as a reply ends are kept.
+    /// lag behind the audio. With echo cancellation at the default of 1 nothing is consumed,
+    /// so words spoken right as a reply ends are kept; without it everything fed so far, plus
+    /// a short margin, is consumed.
     @ObservationIgnored private var ignoredWhileSpeaking = false
     /// Set once voice processing fails to start, so later starts go straight to an engine
     /// without it. Set from the start on macOS: there voice processing fails even with the
@@ -88,6 +95,7 @@ public final class VoiceLoop {
 
     public init() {
         (utterances, utteranceContinuation) = AsyncStream.makeStream(of: Utterance.self)
+        synthesizer.delegate = synthesisObserver
         observeAppAndSession()
     }
 
@@ -513,6 +521,7 @@ public final class VoiceLoop {
         }
         currentSpeech = playback
         state = .speaking
+        synthesisObserver.track(utterance, playback: playback)
         synthesizer.write(utterance) { @Sendable buffer in
             playback.receive(buffer)
         }
@@ -545,11 +554,20 @@ public final class VoiceLoop {
     /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for
     /// when the audio fed so far is consumed.
     private func consumeEcho() {
-        if let pipeline, ignoredWhileSpeaking || bargeInMinimumWords > 1 || !pipeline.hasVoiceProcessing {
+        guard let pipeline else { return }
+        if !pipeline.hasVoiceProcessing {
+            // The fed audio lags the speaker by a tap buffer plus device latency, and without
+            // echo cancellation the reply's last moment reaches the microphone at full volume.
+            // Consume a little past it, so a reply cut off mid-word isn't heard as a word.
+            transcript.consume(through: pipeline.fedAudio.time + Self.halfDuplexEchoMargin)
+        } else if ignoredWhileSpeaking || bargeInMinimumWords > 1 {
             transcript.consume(through: pipeline.fedAudio.time)
         }
         ignoredWhileSpeaking = false
     }
+
+    /// Words starting this soon after a reply ends are dropped when there is no echo cancellation.
+    private static let halfDuplexEchoMargin = CMTime(value: 3, timescale: 10)
 
     private func voice() -> AVSpeechSynthesisVoice? {
         if let voiceIdentifier, let voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier) {
