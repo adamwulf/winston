@@ -1109,22 +1109,38 @@ struct VoiceSettingsTests {
         #expect(bed.audio.engines.count == 1)
     }
 
-    @Test func theVoicesOnOfferAreListedAgainWhenTheSystemsVoicesChange() async throws {
+    @Test func theSystemVoicesAreListedOnceAndAgainWhenTheyOrTheLanguageChange() async throws {
         let bed = VoiceTestBed()
+        let samantha = VoiceOption(id: "voice.samantha", name: "Samantha", quality: .standard)
+        let ava = VoiceOption(id: "voice.ava", name: "Ava", quality: .premium)
+        bed.systemVoices = [samantha]
         let loop = bed.makeLoop()
-        #expect(loop.voices == VoiceLoop.availableVoices(language: bed.languageCode))
+        loop.voiceIdentifier = samantha.id
+
+        // A voice picker reads the choice once for every voice it lists.
+        for _ in 0..<50 {
+            #expect(loop.chosenVoice == samantha)
+        }
+        #expect(loop.voices.filter { $0.engine == .system } == [samantha])
+        #expect(bed.systemVoiceListings == ["en-US"])
+
+        // A voice is installed: settings is told, and the new list is read.
         let changed = ChangeFlag()
         withObservationTracking {
             _ = loop.voices
         } onChange: {
             MainActor.assumeIsolated { changed.isSet = true }
         }
-
-        // As when a voice is installed or removed.
+        bed.systemVoices = [ava, samantha]
         NotificationCenter.default.post(name: AVSpeechSynthesizer.availableVoicesDidChangeNotification, object: nil)
-
         #expect(await eventually { changed.isSet })
-        #expect(loop.voices == VoiceLoop.availableVoices(language: bed.languageCode))
+        #expect(loop.voices.filter { $0.engine == .system } == [ava, samantha])
+        #expect(bed.systemVoiceListings == ["en-US", "en-US"])
+
+        // Another language has voices of its own.
+        bed.languageCode = "en-GB"
+        _ = loop.voices
+        #expect(bed.systemVoiceListings == ["en-US", "en-US", "en-GB"])
     }
 }
 

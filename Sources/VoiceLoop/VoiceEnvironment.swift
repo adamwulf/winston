@@ -17,10 +17,11 @@ package protocol Recognizer: Sendable {
 }
 
 /// The system services the voice loop runs on: the permission prompts, the speech recognizer,
-/// the audio hardware, and the Kokoro voices' model. None of them is available to a test, so the
-/// loop takes them from here. `live` is the real thing. Tests pass a scripted recognizer, an
-/// engine that renders offline and a fake Kokoro, and everything else (the loop, the pipeline,
-/// speech playback) runs as it does in the app.
+/// the audio hardware, the Kokoro voices' model, the language and the installed voices. None of
+/// the first four is available to a test, and a test can't change the last two, so the loop
+/// takes them from here. `live` is the real thing. Tests pass a scripted recognizer, an engine
+/// that renders offline and a fake Kokoro, and everything else (the loop, the pipeline, speech
+/// playback) runs as it does in the app.
 package struct VoiceEnvironment: Sendable {
     /// Asks for microphone and speech permission. Throws a `VoiceLoopError` when one is missing.
     package var requestPermissions: @MainActor @Sendable () async throws -> Void
@@ -36,6 +37,9 @@ package struct VoiceEnvironment: Sendable {
     /// The language voices are offered for, as `AVSpeechSynthesisVoice.currentLanguageCode()`
     /// gives it, such as `en-US`.
     package var languageCode: @MainActor @Sendable () -> String
+    /// The installed system voices for a language code, as `VoiceLoop.systemVoices(language:)`
+    /// lists them.
+    package var systemVoices: @MainActor @Sendable (String) -> [VoiceOption]
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
@@ -43,7 +47,8 @@ package struct VoiceEnvironment: Sendable {
         makeEngine: @escaping @MainActor @Sendable () throws -> AVAudioEngine,
         enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void,
         kokoro: any KokoroEngine,
-        languageCode: @escaping @MainActor @Sendable () -> String
+        languageCode: @escaping @MainActor @Sendable () -> String,
+        systemVoices: @escaping @MainActor @Sendable (String) -> [VoiceOption]
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
@@ -51,5 +56,6 @@ package struct VoiceEnvironment: Sendable {
         self.enableVoiceProcessing = enableVoiceProcessing
         self.kokoro = kokoro
         self.languageCode = languageCode
+        self.systemVoices = systemVoices
     }
 }

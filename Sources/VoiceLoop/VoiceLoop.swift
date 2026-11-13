@@ -524,13 +524,13 @@ public final class VoiceLoop {
         if let systemVoiceCache, systemVoiceCache.language == language {
             return systemVoiceCache.voices
         }
-        let voices = Self.systemVoices(language: language)
+        let voices = environment.systemVoices(language)
         systemVoiceCache = (language, voices)
         return voices
     }
 
     /// The system voices of `availableVoices(language:)`.
-    private static func systemVoices(language: String) -> [VoiceOption] {
+    package static func systemVoices(language: String) -> [VoiceOption] {
         let defaultID = AVSpeechSynthesisVoice(language: language)?.identifier
         return AVSpeechSynthesisVoice.speechVoices()
             .filter { $0.language == language && !$0.voiceTraits.contains(.isNoveltyVoice) }

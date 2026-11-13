@@ -26,6 +26,10 @@ package final class VoiceTestBed {
     /// The system's language. American English unless a test changes it, so the American Kokoro
     /// voices (`af_heart` and the like) are on offer whatever the Mac running the tests uses.
     package var languageCode = "en-US"
+    /// The installed system voices, whatever the language. The Mac's own unless a test sets them.
+    package var systemVoices: [VoiceOption]?
+    /// The language of each time the loop listed the system voices, oldest first.
+    package private(set) var systemVoiceListings: [String] = []
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -66,7 +70,11 @@ package final class VoiceTestBed {
                 }
             },
             kokoro: kokoro,
-            languageCode: { [self] in languageCode }
+            languageCode: { [self] in languageCode },
+            systemVoices: { [self] language in
+                systemVoiceListings.append(language)
+                return systemVoices ?? VoiceLoop.systemVoices(language: language)
+            }
         )
     }
 
