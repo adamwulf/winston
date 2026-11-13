@@ -1,0 +1,36 @@
+{
+  "fill" : {
+    "automatic-gradient" : "srgb:0.66800,0.47512,0.25860,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162.png",
+          "name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162",
+          "position" : {
+            "scale" : 1.62,
+            "translation-in-points" : [
+              7.875,
+              -44.3359375
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
