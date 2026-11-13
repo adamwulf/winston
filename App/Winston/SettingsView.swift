@@ -2,7 +2,7 @@ import SwiftUI
 import VoiceLoop
 import WinstonLogging
 
-/// The pause threshold, the voice, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice and its speed, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -65,6 +65,23 @@ struct SettingsView: View {
                 .onChange(of: model.voiceIdentifier) {
                     model.previewVoice()
                 }
+                LabeledContent("Speaking speed") {
+                    Text(speedDescription)
+                }
+                Slider(value: $model.speechRate, in: VoiceLoop.speechRates, step: 0.05) {
+                    Text("Speaking speed")
+                } minimumValueLabel: {
+                    Image(systemName: "tortoise")
+                        .accessibilityLabel("Slower")
+                } maximumValueLabel: {
+                    Image(systemName: "hare")
+                        .accessibilityLabel("Faster")
+                } onEditingChanged: { isEditing in
+                    if !isEditing {
+                        model.previewVoice()
+                    }
+                }
+                .labelsHidden()
             } header: {
                 Text("Voice Mode")
             } footer: {
@@ -138,6 +155,15 @@ struct SettingsView: View {
         }
     }
     #endif
+
+    /// The speech rate scale isn't linear, so the slider shows no number, only how it compares to normal.
+    /// The tolerance absorbs rounding in the slider's steps.
+    private var speedDescription: String {
+        let difference = model.speechRate - VoiceLoop.defaultSpeechRate
+        if difference < -0.01 { return "Slower" }
+        if difference > 0.01 { return "Faster" }
+        return "Normal"
+    }
 
     private func label(for voice: VoiceOption) -> String {
         switch voice.quality {
