@@ -1,0 +1,296 @@
+import Foundation
+import Testing
+import TelegramLink
+import TelegramLinkTestSupport
+import VoiceLoop
+import VoiceLoopTestSupport
+import WinstonCore
+
+// The real `VoiceLoop` on a `VoiceTestBed`: replies are spoken by the real synthesizer into an
+// offline audio engine, and `bed.audio.playedFrames` is how much sound came out of the speaker.
+// Speech takes real time, so the replies spoken here are short.
+
+/// Voice mode: what is heard goes to the bot, and the bot's replies are spoken.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct VoiceModeTests {
+    @Test func whatIsSaidIsSentToTheCurrentChatMarkedAsSpoken() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.pauseThreshold = 0.05
+
+        await model.setVoiceMode(true)
+        #expect(model.isVoiceMode)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        harness.bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true, alternatives: ["Mark that red."])
+
+        #expect(await eventually {
+            harness.fake.requests.last == .sendText(chatID: 1, text: "🎙️ Mark that read. (alt: Mark that red.)")
+        })
+    }
+
+    @Test func inVoiceModeAReplyInTheCurrentChatIsSpokenAndOneElsewhereIsNot() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        // The other chat's reply is shown but not read out.
+        harness.fake.receive(textMessage(id: 21, chatID: 2, "Starting the coordinator."))
+        #expect(await eventually { model.messages[ChatID(2)]?.last?.text == "Starting the coordinator." })
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(harness.bed.audio.playedFrames == 0)
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+        #expect(await eventually { model.voiceLoop.state == .speaking })
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.audio.playedFrames > 0)
+    }
+
+    @Test func turningVoiceModeOnStartsListeningAndTurningItOffStops() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        await model.setVoiceMode(true)
+
+        #expect(model.isVoiceMode)
+        #expect(!model.isStartingVoice)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(harness.bed.recognizers.count == 1)
+        #expect(harness.bed.recognizer.isStarted)
+
+        await model.setVoiceMode(false)
+
+        #expect(!model.isVoiceMode)
+        #expect(model.voiceLoop.state == .off)
+        #expect(await eventually { harness.bed.recognizer.isCancelled })
+    }
+
+    @Test func withoutTheMicrophoneVoiceModeStaysOffAndSaysWhy() async throws {
+        let harness = Harness()
+        harness.bed.permissionError = .microphonePermissionDenied
+        let model = harness.model
+
+        await model.setVoiceMode(true)
+
+        #expect(!model.isVoiceMode)
+        #expect(!model.isStartingVoice)
+        #expect(model.errorMessage == userMessage(for: VoiceLoopError.microphonePermissionDenied))
+        #expect(model.voiceLoop.state == .off)
+        #expect(harness.bed.recognizers.isEmpty)
+    }
+
+    @Test func turningVoiceModeOffWhileItIsStartingLeavesItOff() async throws {
+        let harness = Harness()
+        let model = harness.model
+        harness.bed.whenRequestingPermissions = { await model.setVoiceMode(false) }
+
+        await model.setVoiceMode(true)
+
+        #expect(!model.isVoiceMode)
+        #expect(!model.isStartingVoice)
+        #expect(model.voiceLoop.state == .off)
+        #expect(harness.bed.recognizers.allSatisfy { !$0.isStarted })
+        try await settle()
+        #expect(model.voiceLoop.state == .off)
+    }
+
+    @Test func turningVoiceModeOnAgainWhileItIsStartingStartsOneSession() async throws {
+        let harness = Harness()
+        let model = harness.model
+        var startingAfterSecondTap = false
+        harness.bed.whenRequestingPermissions = {
+            await model.setVoiceMode(true)
+            startingAfterSecondTap = model.isStartingVoice
+        }
+
+        await model.setVoiceMode(true)
+
+        // The first start still owned the flag after the second tap, and cleared it when done.
+        #expect(startingAfterSecondTap)
+        #expect(model.isVoiceMode)
+        #expect(!model.isStartingVoice)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(harness.bed.recognizers.count == 1)
+        #expect(harness.bed.audio.engines.count == 1)
+    }
+
+    @Test func turningVoiceModeOnWhileListeningChangesNothing() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        await model.setVoiceMode(true)
+
+        #expect(model.isVoiceMode)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(harness.bed.recognizers.count == 1)
+        #expect(harness.bed.audio.engines.count == 1)
+        #expect(!harness.bed.recognizer.isCancelled)
+    }
+
+    @Test func aVoicePreviewInVoiceModeIsSpokenThroughTheLoop() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        model.previewVoice()
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { harness.bed.audio.playedFrames > 0 })
+    }
+}
+
+/// Which of the bot's messages voice mode reads out.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct SpokenMessageTests {
+    @Test func aPhotoWithoutACaptionIsAnnounced() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        harness.fake.receive(photoMessage(id: 12, chatID: 1, sizes: [photoSize(fileID: 5, width: 1280, height: 960)]))
+
+        #expect(await eventually { harness.bed.audio.playedFrames > 0 })
+        #expect(model.currentMessages.last?.text == "")
+        #expect(model.currentMessages.last?.attachment == .photo(FileRef(id: 5, localPath: nil), width: 1280, height: 960))
+    }
+
+    @Test func aDocumentIsAnnounced() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        harness.fake.receive(documentMessage(
+            id: 12,
+            chatID: 1,
+            document: file(id: 6, size: 2048),
+            fileName: "notes.txt",
+            mimeType: "text/plain"
+        ))
+
+        #expect(await eventually { harness.bed.audio.playedFrames > 0 })
+        #expect(model.currentMessages.last?.attachment == .document(
+            FileRef(id: 6, localPath: nil),
+            fileName: "notes.txt",
+            mimeType: "text/plain",
+            size: 2048
+        ))
+    }
+
+    @Test func aMessageWithNoTextAndNoAttachmentIsNotSpoken() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        // A photo TDLib sent no sizes for, and no caption.
+        harness.fake.receive(photoMessage(id: 12, chatID: 1, sizes: []))
+
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(12) })
+        #expect(model.currentMessages.last?.text == "")
+        #expect(model.currentMessages.last?.attachment == nil)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == 0)
+    }
+
+    @Test func anOutgoingMessageIsNotReadBack() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        #expect(await model.sendText("Run the tests."))
+        #expect(await eventually { model.currentMessages.last?.text == "Run the tests." })
+        let pending = try #require(model.currentMessages.last)
+        #expect(pending.isOutgoing)
+        harness.fake.confirmSend(of: pending.id.rawValue, in: 1, as: 13)
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(13) })
+
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == 0)
+    }
+
+    @Test func aMessageThatReplacesOneAlreadyShownIsNotSpokenAgain() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+        // Spoken, and finished.
+        #expect(await eventually {
+            harness.bed.audio.playedFrames > 0 && model.voiceLoop.state == .listening(partial: "")
+        })
+        let played = harness.bed.audio.playedFrames
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done, all green."))
+
+        #expect(await eventually { model.currentMessages.last?.text == "Done, all green." })
+        #expect(model.currentMessages.map(\.id) == [MessageID(10), MessageID(11), MessageID(12)])
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == played)
+    }
+
+    @Test func nothingIsSpokenOnceVoiceModeIsOff() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+        await model.setVoiceMode(false)
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+
+        #expect(await eventually { model.currentMessages.last?.text == "Done." })
+        #expect(model.voiceLoop.state == .off)
+        try await settle()
+        #expect(harness.bed.audio.playedFrames == 0)
+    }
+}
+
+/// The voice settings: how long a pause ends what Adam says, and the voice replies are read in.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct VoiceSettingsTests {
+    @Test func theDefaultsAreAPauseOfOnePointTwoSecondsAndTheDefaultVoice() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        #expect(model.pauseThreshold == 1.2)
+        #expect(model.voiceIdentifier == nil)
+        #expect(model.voiceLoop.pauseThreshold == .seconds(1.2))
+        #expect(model.voiceLoop.voiceIdentifier == nil)
+    }
+
+    @Test func settingsAreSavedAppliedToTheLoopAndRestoredOnRelaunch() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let voice = "com.apple.voice.compact.en-US.Samantha"
+
+        model.pauseThreshold = 0.8
+        model.voiceIdentifier = voice
+
+        #expect(harness.defaults.object(forKey: "pauseThreshold") as? Double == 0.8)
+        #expect(harness.defaults.string(forKey: "voiceIdentifier") == voice)
+        #expect(model.voiceLoop.pauseThreshold == .seconds(0.8))
+        #expect(model.voiceLoop.voiceIdentifier == voice)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.pauseThreshold == 0.8)
+        #expect(relaunched.voiceIdentifier == voice)
+        #expect(relaunched.voiceLoop.pauseThreshold == .seconds(0.8))
+        #expect(relaunched.voiceLoop.voiceIdentifier == voice)
+
+        // Back to the default voice.
+        model.voiceIdentifier = nil
+
+        #expect(harness.defaults.object(forKey: "voiceIdentifier") == nil)
+        #expect(model.voiceLoop.voiceIdentifier == nil)
+        #expect(harness.relaunchedModel().voiceIdentifier == nil)
+    }
+}
