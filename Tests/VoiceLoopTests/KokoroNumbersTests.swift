@@ -28,16 +28,65 @@ import Testing
         #expect(say("10-20%") == "ten to twenty percent")
         #expect(say("$10-$20") == "ten dollars to twenty dollars")
         #expect(say("1.5-2.5") == "one point five to two point five")
+        // Scores and votes.
+        #expect(say("They won 3-2.") == "They won three to two.")
+        #expect(say("It passed 5-4.") == "It passed five to four.")
         // A minus that starts the first number still makes it negative.
         #expect(say("-5-10") == "minus five to ten")
-        // A dash after a word is a hyphen, as in a name.
-        #expect(say("COVID-19") == "COVID-nineteen")
+    }
+
+    @Test func aScaleAfterARangeAppliesToBothEnds() {
+        #expect(say("5-10k users") == "five to ten thousand users")
+        #expect(say("$5-10M") == "five to ten million dollars")
+        #expect(say("€2-3bn") == "two to three billion euros")
+        // Without money an "m" could be metres, so it stays a letter.
+        #expect(say("5-10m") == "five to ten m")
+    }
+
+    @Test func aPhoneNumberIsReadDigitByDigit() {
+        #expect(say("Call 555-0123") == "Call five five five, zero one two three")
+        #expect(say("(212) 555-1234") == "(two one two) five five five, one two three four")
+    }
+
+    @Test func numbersGluedToAWordByADashNameSomething() {
+        #expect(say("GPT-4-32k") == "GPT four thirty-two k")
+        #expect(say("Llama-3.1-8B") == "Llama three point one eight B")
+        #expect(say("COVID-19") == "COVID nineteen")
     }
 
     @Test func threeOrMoreNumbersJoinedByDashesAreReadGroupByGroup() {
         #expect(say("Call 555-123-4567.") == "Call five five five, one two three, four five six seven.")
         #expect(say("on 2026-11-13") == "on two zero two six, one one, one three")
         #expect(say("1-800-555-0199") == "one, eight zero zero, five five five, zero one nine nine")
+        // Not plain digit runs: each in its own words.
+        #expect(say("$5m-$10m-$20m") == "five million dollars, ten million dollars, twenty million dollars")
+        #expect(say("10%-20%-30%") == "ten percent, twenty percent, thirty percent")
+        #expect(say("9:00-12:00-17:00") == "nine o'clock, twelve o'clock, seventeen o'clock")
+    }
+
+    @Test func decades() {
+        #expect(say("the 1990s") == "the nineteen nineties")
+        #expect(say("the 90s") == "the nineties")
+        #expect(say("the '90s") == "the nineties")
+        #expect(say("the 1990's") == "the nineteen nineties")
+        #expect(say("the 2000s") == "the two thousands")
+        #expect(say("in their 20s") == "in their twenties")
+        // Two digits with an "s" otherwise are more likely seconds.
+        #expect(say("wait 30s") == "wait thirty s")
+    }
+
+    @Test func slashesBetweenNumbers() {
+        #expect(say("1/2") == "one half")
+        #expect(say("3/4 cup") == "three quarters cup")
+        #expect(say("2/3") == "two thirds")
+        #expect(say("1/4") == "one quarter")
+        #expect(say("1-1/2") == "one and a half")
+        #expect(say("1 1/2 hours") == "one and a half hours")
+        #expect(say("2 3/4") == "two and three quarters")
+        // Not a common fraction: a space for the slash.
+        #expect(say("24/7") == "twenty-four seven")
+        #expect(say("50/50") == "fifty fifty")
+        #expect(say("1/12") == "one twelve")
     }
 
     @Test func decimalsAndVersionsAreReadDigitByDigitAfterThePoint() {
