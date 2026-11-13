@@ -76,10 +76,13 @@ private enum LiveSpeech {
               let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) else {
             throw VoiceLoopError.speechModelUnavailable
         }
+        // `.fastResults` reports about every second of audio instead of about every four, so
+        // barge-in and the live transcript follow the speaker sooner. See
+        // docs/research/voice-barge-in-latency.md.
         let transcriber = SpeechTranscriber(
             locale: locale,
             transcriptionOptions: [],
-            reportingOptions: [.volatileResults, .alternativeTranscriptions],
+            reportingOptions: [.volatileResults, .alternativeTranscriptions, .fastResults],
             attributeOptions: [.audioTimeRange]
         )
         do {

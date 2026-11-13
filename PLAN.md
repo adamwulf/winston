@@ -186,8 +186,11 @@ Inside it:
 
 - **One `AVAudioEngine`.** Its input node has voice processing on and feeds a
   `SpeechAnalyzer` running `SpeechTranscriber`, with the
-  `.volatileResults` and `.alternativeTranscriptions` reporting options. An
-  `AVAudioPlayerNode` plays the TTS buffers.
+  `.volatileResults`, `.alternativeTranscriptions` and `.fastResults`
+  reporting options. `.fastResults` makes results arrive about every second
+  of audio instead of about every four, so barge-in comes sooner (see
+  [the barge-in latency research](docs/research/voice-barge-in-latency.md)).
+  An `AVAudioPlayerNode` plays the TTS buffers.
 - **`PauseDetector`** is a small pure type. It takes transcript-change events
   and the current time, and reports "utterance complete" once there have been
   no new results for `pauseThreshold`. It gets unit tests with an injected
