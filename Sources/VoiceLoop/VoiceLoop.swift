@@ -171,7 +171,6 @@ public final class VoiceLoop {
         let analyzer = SpeechAnalyzer(modules: [transcriber])
         var newPipeline: Pipeline?
         do {
-            try Self.activateAudioSession(pausingOtherAudio: pausesOtherAudio)
             let pipeline = try makeRunningPipeline(analyzerFormat: analyzerFormat)
             newPipeline = pipeline
             // Microphone buffers queue in `pipeline.inputs` until the analyzer starts reading.
@@ -234,16 +233,17 @@ public final class VoiceLoop {
         speakNextIfIdle()
     }
 
-    /// Builds and starts the engine with voice processing (echo cancellation), or without it
-    /// if voice processing can't start. Without echo cancellation the loop is half-duplex:
-    /// replies can't be interrupted by voice.
+    /// Activates the iOS session and builds and starts the engine with voice processing (echo
+    /// cancellation), or without it if voice processing can't start. Without echo cancellation
+    /// the loop is half-duplex: replies can't be interrupted by voice.
     private func makeRunningPipeline(analyzerFormat: AVAudioFormat) throws -> Pipeline {
-        let ducksOtherAudio = pausesOtherAudio
+        let pausingOtherAudio = pausesOtherAudio
         func started(voiceProcessing: Bool) throws -> Pipeline {
-            try Self.startedPipeline(
+            try Self.activateAudioSession(voiceProcessing: voiceProcessing, pausingOtherAudio: pausingOtherAudio)
+            return try Self.startedPipeline(
                 analyzerFormat: analyzerFormat,
                 voiceProcessing: voiceProcessing,
-                ducksOtherAudio: ducksOtherAudio
+                ducksOtherAudio: pausingOtherAudio
             )
         }
         if !skipVoiceProcessing {
@@ -548,16 +548,22 @@ public final class VoiceLoop {
 
     // MARK: - Audio session
 
+    /// Sets up and activates the iOS session for an engine with or without voice processing.
     /// Without `pausingOtherAudio` the session mixes with other apps' audio instead of
     /// interrupting it. macOS has no audio session; there only voice processing affects other audio.
-    private static func activateAudioSession(pausingOtherAudio: Bool) throws {
+    private static func activateAudioSession(voiceProcessing: Bool, pausingOtherAudio: Bool) throws {
         #if os(iOS)
         var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP, .defaultToSpeaker]
         if !pausingOtherAudio {
             options.insert(.mixWithOthers)
         }
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .default, options: options)
+        // Voice processing puts a session that isn't in a chat mode into voice chat (call volume),
+        // which changes the audio hardware and stops the engine. With `.default` here, every
+        // rebuild switched it back, so the engine was rebuilt twice a second and never heard
+        // anything. Without voice processing, voice chat would only lower the playback level.
+        let mode: AVAudioSession.Mode = voiceProcessing ? .voiceChat : .default
+        try session.setCategory(.playAndRecord, mode: mode, options: options)
         try session.setActive(true)
         #endif
     }
