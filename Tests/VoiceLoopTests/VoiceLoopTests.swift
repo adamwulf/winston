@@ -113,6 +113,40 @@ import Testing
     }
 }
 
+@Suite struct VoiceActivityDetectorTests {
+    @Test func firstBufferOnlySetsTheNoiseFloor() {
+        var detector = VoiceActivityDetector()
+        let isVoice = detector.process(rms: 0.5)
+        #expect(!isVoice)
+        #expect(detector.noiseFloor == 0.5)
+    }
+
+    @Test func speechWellAboveTheNoiseFloorIsVoice() {
+        var detector = VoiceActivityDetector()
+        for _ in 0..<20 { _ = detector.process(rms: 0.004) }
+        let speech = detector.process(rms: 0.05)
+        let roomNoise = detector.process(rms: 0.005)
+        #expect(speech)
+        #expect(!roomNoise)
+    }
+
+    @Test func nearSilenceIsNeverVoice() {
+        var detector = VoiceActivityDetector()
+        _ = detector.process(rms: 0.0001)
+        let isVoice = detector.process(rms: 0.002)
+        #expect(!isVoice)
+    }
+
+    @Test func aLouderRoomIsLearned() {
+        var detector = VoiceActivityDetector()
+        _ = detector.process(rms: 0.004)
+        // A steady fan or TV at 0.02: voice at first, then the floor catches up.
+        var stillVoice = true
+        for _ in 0..<400 { stillVoice = detector.process(rms: 0.02) }
+        #expect(!stillVoice)
+    }
+}
+
 @Suite struct PauseDetectorTests {
     let start = ContinuousClock.Instant.now
 
@@ -147,6 +181,34 @@ import Testing
         detector.update(text: "if I can talk over you?", at: at(500))
         #expect(!detector.isComplete(at: at(1699)))
         #expect(detector.isComplete(at: at(1700)))
+    }
+
+    @Test func voiceKeepsTheUtteranceOpenWhileTheTranscriptLags() {
+        // The paragraph case: the transcript stalls after a sentence while the speaker keeps talking.
+        var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
+        detector.update(text: "Yeah, let me see if it'll understand this.", at: at(0))
+        detector.heardVoice(at: at(1000))
+        detector.heardVoice(at: at(2000))
+        #expect(!detector.isComplete(at: at(3000)))
+        #expect(detector.isComplete(at: at(3200)))
+    }
+
+    @Test func endlessVoiceStillCompletesAfterFourPauses() {
+        var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
+        detector.update(text: "turn it down.", at: at(0))
+        for time in stride(from: 100, through: 6000, by: 100) {
+            detector.heardVoice(at: at(time))
+        }
+        #expect(!detector.isComplete(at: at(4799)))
+        #expect(detector.isComplete(at: at(4800)))
+    }
+
+    @Test func resetForgetsVoice() {
+        var detector = PauseDetector(pauseThreshold: .milliseconds(1200))
+        detector.heardVoice(at: at(1000))
+        detector.reset()
+        detector.update(text: "next.", at: at(0))
+        #expect(detector.isComplete(at: at(1200)))
     }
 
     @Test func sentenceEndingsIgnoreClosingQuotesAndBrackets() {

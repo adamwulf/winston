@@ -18,6 +18,8 @@ final class Pipeline {
     private let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     /// How far along the analyzer's timeline the fed audio reaches.
     let fedAudio: FedAudioClock
+    /// Whether the microphone has heard someone talking, from its loudness.
+    let voiceActivity = VoiceActivity()
     var analyzer: SpeechAnalyzer?
     var tasks: [Task<Void, Never>] = []
 
@@ -58,7 +60,12 @@ final class Pipeline {
             onBus: 0,
             bufferSize: 4096,
             format: inputFormat,
-            block: Self.microphoneTap(converter: converter, continuation: inputContinuation, clock: fedAudio)
+            block: Self.microphoneTap(
+                converter: converter,
+                continuation: inputContinuation,
+                clock: fedAudio,
+                voiceActivity: voiceActivity
+            )
         )
 
         engine.attach(player)
@@ -76,13 +83,18 @@ final class Pipeline {
         inputContinuation.finish()
     }
 
-    /// Runs on the audio thread: converts each microphone buffer for the analyzer.
+    /// Runs on the audio thread: measures each microphone buffer's loudness and converts it
+    /// for the analyzer.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
         continuation: AsyncStream<AnalyzerInput>.Continuation,
-        clock: FedAudioClock
+        clock: FedAudioClock,
+        voiceActivity: VoiceActivity
     ) -> AVAudioNodeTapBlock {
         { buffer, _ in
+            if let samples = buffer.floatChannelData?[0] {
+                voiceActivity.process(samples, count: Int(buffer.frameLength))
+            }
             guard let converted = convert(buffer, with: converter) else { return }
             clock.add(frames: converted.frameLength)
             continuation.yield(AnalyzerInput(buffer: converted))

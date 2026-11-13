@@ -330,6 +330,9 @@ public final class VoiceLoop {
 
     private func checkForPause() {
         pauseDetector.pauseThreshold = pauseThreshold
+        if pipeline?.voiceActivity.takeHeardVoice() == true {
+            pauseDetector.heardVoice(at: .now)
+        }
         guard pauseDetector.isComplete(at: .now) else { return }
         let utterance = transcript.take()
         pauseDetector.reset()
