@@ -43,6 +43,17 @@ struct WinstonApp: App {
         .commands {
             // One window: a second one would share the same model and Telegram session.
             CommandGroup(replacing: .newItem) {}
+            #if os(macOS)
+            CommandGroup(after: .help) {
+                Divider()
+                Button("Open Log Folder") {
+                    DebugLogs.openLogFolder()
+                }
+                Button("Export Debug Logs…") {
+                    Task { await DebugLogs.export() }
+                }
+            }
+            #endif
         }
         #if os(macOS)
         // The standard Settings window, opened with Cmd-, or Winston > Settings…

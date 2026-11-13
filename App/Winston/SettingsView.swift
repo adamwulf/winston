@@ -1,12 +1,19 @@
 import SwiftUI
 import VoiceLoop
+import WinstonLogging
 
-/// The pause threshold, the voice, and Log out. AppModel persists the settings and applies them to the voice loop.
-/// A sheet on iOS; the standard Settings window on macOS.
+/// The pause threshold, the voice, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingLogOut = false
+    #if os(iOS)
+    private static let log = Logger(label: "app.settings")
+    @State private var isExportingLogs = false
+    @State private var exportedLogs: SharedFile?
+    @State private var exportError: String?
+    #endif
     private let voices = VoiceLoop.availableVoices()
 
     var body: some View {
@@ -19,6 +26,15 @@ struct SettingsView: View {
                         Button("Done") { dismiss() }
                     }
                 }
+        }
+        .sheet(item: $exportedLogs) { file in
+            ShareSheet(url: file.url) { exportedLogs = nil }
+                .presentationDetents([.medium, .large])
+        }
+        .alert("Couldn't Export Debug Logs", isPresented: showingExportError) {
+            Button("OK") {}
+        } message: {
+            Text(exportError ?? "")
         }
         #else
         form
@@ -49,6 +65,19 @@ struct SettingsView: View {
             } footer: {
                 Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
             }
+            Section("Debug Logs") {
+                #if os(iOS)
+                Button("Export Debug Logs…", action: exportLogs)
+                    .disabled(isExportingLogs)
+                #else
+                Button("Export Debug Logs…") {
+                    Task { await DebugLogs.export() }
+                }
+                Button("Open Log Folder") {
+                    DebugLogs.openLogFolder()
+                }
+                #endif
+            }
             // On the Mac the Settings window opens before login too; only offer Log Out once logged in.
             if model.authState == .ready {
                 Section {
@@ -66,6 +95,31 @@ struct SettingsView: View {
             }
         }
     }
+
+    #if os(iOS)
+    /// Zips the Logs folder, then offers the zip in the share sheet. Failures are logged and shown in an alert.
+    private func exportLogs() {
+        isExportingLogs = true
+        Task {
+            defer { isExportingLogs = false }
+            do {
+                exportedLogs = SharedFile(url: try await LogExporter.exportLogs())
+            } catch {
+                // Codes only: a file error's description can name the folder's path.
+                Self.log.error("debug log export failed", error.logCodes())
+                exportError = error.localizedDescription
+            }
+        }
+    }
+
+    private var showingExportError: Binding<Bool> {
+        Binding {
+            exportError != nil
+        } set: { isShowing in
+            if !isShowing { exportError = nil }
+        }
+    }
+    #endif
 
     private func label(for voice: VoiceOption) -> String {
         switch voice.quality {
