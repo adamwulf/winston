@@ -467,8 +467,15 @@ requires; counts, levels and times only, never text[^40].
 and `VoiceActivity.process` reading to `MicrophoneTimeline`, which only records
 them under a `Mutex`; `SpeechPlayback` records when its first buffer is
 scheduled. `VoiceTimeline.writeRecorded()` writes those lines on the main
-actor: `VoiceLoop.checkForPause` calls it every 100 ms, and every other line
-calls it first, so the file stays in order.
+actor: `VoiceLoop.checkForPause` calls it every 100 ms, every other line calls
+it first, and an engine restart and a teardown call it so nothing recorded is
+lost.
+
+**File order is the order lines were written, not the order things
+happened.** Recorded lines are dated when the thing happened but written up
+to 100 ms later, the microphone's before the reply's whatever their times, and
+"voice ended" is dated about 500 ms before it can be written. To see a session
+in time order, sort its lines by `tMs`.
 
 | # | Message | Where it is written | Extra keys |
 |---|---|---|---|
@@ -494,7 +501,10 @@ What the keys measure:
 
 - "voice started" is the first buffer the existing detector calls voice after
   quiet. `speaking` is whether a reply was playing when the line was written,
-  up to 100 ms after the buffer.
+  which is up to 100 ms after the buffer was captured. A reply writes what was
+  recorded before it starts, so a voice start written then says
+  `speaking=false`: that voice began before the reply did, and the "speech
+  started" line that follows shows `voiceActive=true`.
 - "voice ended" is written once the voice has been absent for 0.5 s of audio
   (counted in frames, so the gaps between words don't end it). Its `tMs` and
   `audioMs` are where that quiet began, so the voice stopped at `tMs` and the
@@ -510,9 +520,14 @@ What the keys measure:
 - `wordStartMs` is where the result's first kept word starts, from the
   word's `audioTimeRange`; it and `lagMs` are left out if the result has no
   word timings.
-- `replyMs` is how long the reply had been playing; `synthMs` is from just
-  before `synthesizer.write` to the first buffer scheduled on the player;
-  `stopMs` is from line 10 to line 11.
+- `replyMs` and `synthMs` count from the reply's start, taken immediately
+  before `synthesizer.write`, after the voice has been looked up and the
+  playback set up: `replyMs` to the barge-in decision, `synthMs` to the first
+  buffer being scheduled on the player. The speaker plays that buffer later,
+  after whatever the player has queued and `outputLatencyMs`. The "speech
+  started" line itself is written after `player.play()`, a little after the
+  reply's start.
+- `stopMs` is from line 10 to line 11.
 - `resultToStopMs` is from the barge-in decision (when the result was
   handled) to the player having stopped.
 
@@ -521,8 +536,11 @@ latency the system reports on both platforms[^20], so "the speaker went quiet"
 is about `tMs + outputLatencyMs`. Measuring the real moment would need a tap
 on the output, which isn't worth it for diagnosis.
 
-"first mic buffer" is also when audio first reaches the recognizer: the same
-tap callback converts the buffer and queues it[^5].
+"first mic buffer" is dated when the buffer was captured. The tap ran
+`deliveryMs` later and only then converted the buffer and queued it for the
+recognizer[^5], so `tMs + deliveryMs` is when it was queued. When the
+recognizer read it is not measured: at startup, buffers wait in the queue
+until the recognizer starts reading, which "recognizer started" shows.
 
 **Differences from the first draft of this section:**
 
@@ -989,7 +1007,7 @@ out("done wall=\(f3(box.elapsed()))")
 [^37]: [VoiceLoop.makeRunningPipeline](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.makeRunningPipeline)
 [^38]: [VoiceLoop.engineStopped](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.engineStopped)
 [^39]: [FellerBuncher, Logger+Convenience.swift, the category overloads](https://github.com/adamwulf/FellerBuncher/blob/main/Sources/FellerBuncher/Logger+Convenience.swift)
-[^40]: [README, Logging conventions](../../README.md:146-185)
+[^40]: [README, Logging conventions](../../README.md:148-187)
 [^41]: [FedAudioClock](../../Sources/VoiceLoop/AudioPipeline.swift:FedAudioClock)
 [^42]: [SpeechPlayback.receive](../../Sources/VoiceLoop/AudioPipeline.swift:SpeechPlayback.receive)
 [^43]: [VoiceLoop.speechFinished](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.speechFinished)

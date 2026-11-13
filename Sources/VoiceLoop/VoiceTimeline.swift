@@ -288,8 +288,9 @@ final class VoiceTimeline {
     }
 
     /// Writes what the microphone tap and the reply's playback recorded since the last call.
-    /// Every other line except the first two writes these first, so the log stays in order;
-    /// `VoiceLoop.checkForPause` also calls it every 100 ms.
+    /// `VoiceLoop.checkForPause` calls it every 100 ms, and every other line except the first two
+    /// calls it first. The lines it writes are dated when each thing happened, so the file is not
+    /// in `tMs` order: sort a session's lines by `tMs` to see them in time order.
     func writeRecorded() {
         let time = now()
         if let buffer = microphone.takeFirstBuffer() {

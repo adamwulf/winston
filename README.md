@@ -131,7 +131,9 @@ Voice mode logs each step from the microphone to the transcript, and from a
 reply starting to it stopping, under its own label, so
 `grep label=voice.timeline` on a log file shows where the time went. Every
 line has `tMs`, milliseconds since that listening session started on the
-monotonic host clock, and `session`. Section 5 of
+monotonic host clock, and `session`. Some lines are written after what they
+describe, so sort a session's lines by `tMs` to read them in time order.
+Section 5 of
 [the barge-in latency research](docs/research/voice-barge-in-latency.md)
 lists the lines and how to read them.
 
