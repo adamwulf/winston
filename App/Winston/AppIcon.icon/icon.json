@@ -17,6 +17,17 @@
       "blur-material" : null,
       "layers" : [
         {
+          "image-name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162.png",
+          "name" : "vertical",
+          "position" : {
+            "scale" : 1.67,
+            "translation-in-points" : [
+              282.8984375,
+              300.34375
+            ]
+          }
+        },
+        {
           "blend-mode-specializations" : [
             {
               "appearance" : "dark",
@@ -33,13 +44,14 @@
               "value" : "automatic"
             }
           ],
+          "hidden" : true,
           "image-name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162 2.png",
-          "name" : "silhouette-two-faces-kissing-minimalist-illustration-one-line-drawing-252730162 2",
+          "name" : "tilted",
           "position" : {
-            "scale" : 1.62,
+            "scale" : 1.79,
             "translation-in-points" : [
-              341.484375,
-              73.3
+              368.890625,
+              371.89375
             ]
           }
         }
