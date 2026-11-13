@@ -246,23 +246,20 @@ struct StartingTests {
         #expect(bed.audio.playedFrames == 0)
     }
 
-    @Test func anEngineThatStopsWhileTheRecognizerStartsIsRebuilt() async throws {
+    @Test func anEngineThatStopsWhileTheRecognizerStartsIsStartedAgain() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
-        bed.whenRecognizerStarts = {
-            // Only the first session's engine stops under it.
-            if bed.recognizers.count == 1 {
-                bed.audio.engines.last?.stop()
-            }
-        }
+        // The hardware changes before anything is watching for it.
+        bed.whenRecognizerStarts = { bed.audio.engines.last?.stop() }
 
         try await loop.start()
         defer { loop.stop() }
 
-        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
         #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.engines.count == 1)
         #expect(bed.audio.engines.last?.isRunning == true)
-        #expect(bed.recognizers.first?.isCancelled == true)
+        #expect(bed.recognizers.count == 1)
+        #expect(bed.recognizer.isStarted && !bed.recognizer.isCancelled)
     }
 }
 
@@ -715,29 +712,62 @@ struct BargeInTests {
     }
 }
 
-// MARK: - Rebuilding
+// MARK: - The engine stopping itself
 
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
-struct RebuildTests {
-    @Test func anEngineThatStopsByItselfIsRebuiltAndListeningCarriesOn() async throws {
+struct EngineStopTests {
+    /// The audio hardware changed (AirPods connected): the engine stops itself and says so.
+    private func stopByItself(_ engine: AVAudioEngine) {
+        engine.stop()
+        postConfigurationChange(for: engine)
+    }
+
+    @Test func anEngineThatStopsByItselfIsStartedAgainWithTheUtteranceInProgressKept() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        // Long enough that the utterance is still open after the engine is back.
+        loop.pauseThreshold = .seconds(30)
+        try await loop.start()
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        bed.recognizer.hear("Mark that", over: 0...0.5)
+        #expect(await eventually { loop.state == .listening(partial: "Mark that") })
+
+        stopByItself(engine)
+
+        // The same engine and the same recognizer carry on.
+        #expect(await eventually { engine.isRunning })
+        #expect(bed.audio.engines.count == 1)
+        #expect(bed.recognizers.count == 1)
+        #expect(!bed.recognizer.isCancelled)
+        #expect(loop.state == .listening(partial: "Mark that"))
+
+        loop.pauseThreshold = .milliseconds(50)
+        bed.recognizer.hear("Mark that read.", over: 0...1, isFinal: true)
+        #expect(await nextUtterance(of: loop)?.text == "Mark that read.")
+    }
+
+    @Test func aReplyBeingSpokenStartsOverWhenTheEngineIsStartedAgain() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
-        let first = try #require(bed.audio.engines.last)
+        let engine = try #require(bed.audio.engines.last)
+        let reply = "Hi there, how are you doing today?"
+        loop.speak(reply)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let wholeReply = bed.audio.playedFrames
 
-        // The audio hardware changed (AirPods connected): the engine stops itself.
-        first.stop()
-        postConfigurationChange(for: first)
+        loop.speak(reply)
+        #expect(await eventually { bed.audio.playedFrames > wholeReply + wholeReply / 5 })
+        stopByItself(engine)
 
-        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
-        #expect(loop.state == .listening(partial: ""))
-        #expect(bed.audio.engines.count == 2)
-        #expect(bed.audio.engines.last?.isRunning == true)
-        #expect(bed.recognizers.first?.isCancelled == true)
-
-        bed.recognizer.hear("Still here.", over: 0...1, isFinal: true)
-        #expect(await nextUtterance(of: loop)?.text == "Still here.")
+        #expect(await eventually { engine.isRunning && loop.state == .speaking })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        // The part played before the stop, then the whole reply again.
+        let secondTime = bed.audio.playedFrames - wholeReply
+        #expect(secondTime > wholeReply + wholeReply / 10)
+        #expect(bed.audio.engines.count == 1)
     }
 
     @Test func aConfigurationChangeThatLeavesTheEngineRunningChangesNothing() async throws {
@@ -751,10 +781,56 @@ struct RebuildTests {
 
         #expect(bed.recognizers.count == 1)
         #expect(bed.audio.engines.count == 1)
+        #expect(engine.isRunning)
         #expect(loop.state == .listening(partial: ""))
     }
 
-    @Test func aReplyCutOffByARebuildIsSpokenAgain() async throws {
+    @Test func anEngineThatKeepsStoppingTurnsTheLoopOffAndTheNextStartCountsAfresh() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        let engine = try #require(bed.audio.engines.last)
+
+        // Three stops in a row are each recovered from.
+        for _ in 0..<3 {
+            stopByItself(engine)
+            #expect(await eventually { engine.isRunning })
+            #expect(loop.state == .listening(partial: ""))
+        }
+        // A fourth within ten seconds isn't: starting it again won't help.
+        stopByItself(engine)
+
+        #expect(await eventually { loop.state == .off })
+        #expect(!engine.isRunning)
+        #expect(await eventually { bed.recognizer.isCancelled })
+
+        try await loop.start()
+        defer { loop.stop() }
+        let next = try #require(bed.audio.engines.last)
+        stopByItself(next)
+        #expect(await eventually { next.isRunning })
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func anEngineThatCannotBeStartedAgainIsReplacedAndListeningCarriesOn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let first = try #require(bed.audio.engines.last)
+
+        try bed.audio.breakEngine(first)
+        postConfigurationChange(for: first)
+
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.engines.count == 2)
+        #expect(bed.audio.engines.last?.isRunning == true)
+        #expect(bed.recognizers.first?.isCancelled == true)
+
+        bed.recognizer.hear("Still here.", over: 0...1, isFinal: true)
+        #expect(await nextUtterance(of: loop)?.text == "Still here.")
+    }
+
+    @Test func aReplyCutOffWhenTheEngineIsReplacedIsSpokenAgain() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
@@ -762,7 +838,7 @@ struct RebuildTests {
 
         loop.speak("Hi there, how are you doing today?")
         #expect(await eventually { bed.audio.playedFrames > 0 })
-        first.stop()
+        try bed.audio.breakEngine(first)
         postConfigurationChange(for: first)
 
         // The new engine says it again.
@@ -772,16 +848,125 @@ struct RebuildTests {
         #expect(bed.audio.engines.last?.isRunning == true)
     }
 
-    @Test func aRebuildThatFailsTurnsTheLoopOff() async throws {
+    @Test func whenTheEngineCannotBeReplacedTheLoopTurnsOff() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
         let first = try #require(bed.audio.engines.last)
 
         bed.permissionError = .microphonePermissionDenied
-        first.stop()
+        try bed.audio.breakEngine(first)
         postConfigurationChange(for: first)
 
         #expect(await eventually { loop.state == .off })
+        #expect(bed.audio.engines.count == 1)
+    }
+}
+
+// MARK: - Speaking speed and other apps' audio
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct VoiceSettingsTests {
+    /// How much sound the loop makes saying `text` at `rate`.
+    private func framesPlayed(saying text: String, atRate rate: Float, by loop: VoiceLoop, on bed: VoiceTestBed) async -> Int {
+        let before = bed.audio.playedFrames
+        loop.speechRate = rate
+        loop.speak(text)
+        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        return bed.audio.playedFrames - before
+    }
+
+    @Test func aFasterSpeechRateSaysTheSameWordsInLessTime() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        #expect(loop.speechRate == VoiceLoop.defaultSpeechRate)
+        #expect(VoiceLoop.speechRates.contains(VoiceLoop.defaultSpeechRate))
+        let text = "One, two, three."
+
+        let slow = await framesPlayed(saying: text, atRate: VoiceLoop.speechRates.lowerBound, by: loop, on: bed)
+        let normal = await framesPlayed(saying: text, atRate: VoiceLoop.defaultSpeechRate, by: loop, on: bed)
+        let fast = await framesPlayed(saying: text, atRate: VoiceLoop.speechRates.upperBound, by: loop, on: bed)
+
+        #expect(fast > 0)
+        #expect(fast < normal)
+        #expect(normal < slow)
+    }
+
+    // What the setting does to other apps' audio can't be seen here: the offline engine has no
+    // voice processing to duck with, and macOS has no audio session. The iOS half (the session
+    // mixing with others) is checked in VoiceLoopInterruptionTests. These check when it applies.
+
+    @Test func changingPauseOtherAudioWhileOffRebuildsNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        #expect(loop.pausesOtherAudio)
+
+        loop.pausesOtherAudio = false
+        try await settle()
+        #expect(loop.state == .off)
+        #expect(bed.audio.engines.isEmpty)
+
+        // The next start is an ordinary one.
+        try await loop.start()
+        defer { loop.stop() }
+        #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.engines.count == 1)
+        #expect(bed.recognizers.count == 1)
+    }
+
+    @Test func changingPauseOtherAudioWhileListeningRebuildsTheEngineToApplyIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let first = try #require(bed.audio.engines.last)
+
+        loop.pausesOtherAudio = false
+
+        // Voice mode stays on through the rebuild.
+        #expect(loop.state == .listening(partial: ""))
+        #expect(!first.isRunning)
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        let second = try #require(bed.audio.engines.last)
+        #expect(bed.audio.engines.count == 2)
+        #expect(second.isRunning)
+        #expect(bed.recognizers.first?.isCancelled == true)
+
+        // The same value again changes nothing.
+        loop.pausesOtherAudio = false
+        try await settle()
+        #expect(bed.audio.engines.count == 2)
+        #expect(bed.recognizers.count == 2)
+    }
+
+    @Test func aReplyBeingSpokenWhenPauseOtherAudioChangesIsSpokenAgainAfterTheRebuild() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+
+        loop.speak("Hi there, how are you doing today?")
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        loop.pausesOtherAudio = false
+
+        // Cut off by the rebuild, then said again on the new engine.
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await eventually { bed.audio.engines.count == 2 && loop.state == .speaking })
+        let playedBeforeRebuild = bed.audio.playedFrames
+        #expect(await eventually { bed.audio.playedFrames > playedBeforeRebuild })
+    }
+
+    @Test func stoppingRightAfterASettingsRebuildBeginsLeavesTheLoopOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+
+        // The rebuild's new start is queued; the stop comes before it runs.
+        loop.pausesOtherAudio = false
+        loop.stop()
+        try await settle()
+
+        #expect(loop.state == .off)
+        #expect(bed.recognizers.count == 1)
         #expect(bed.audio.engines.count == 1)
     }
 }

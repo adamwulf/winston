@@ -217,6 +217,51 @@ struct InterruptionTests {
         #expect(await eventually { loop.state == .listening(partial: "") })
         #expect(bed.audio.playedFrames > 0)
     }
+
+    // MARK: - The audio session
+    //
+    // In this suite because the session is process-wide too.
+
+    @Test func withVoiceProcessingTheSessionIsAVoiceChatThatPausesOtherAudio() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let session = AVAudioSession.sharedInstance()
+
+        #expect(session.category == .playAndRecord)
+        #expect(session.mode == .voiceChat)
+        #expect(session.categoryOptions.contains(.defaultToSpeaker))
+        #expect(!session.categoryOptions.contains(.mixWithOthers))
+    }
+
+    @Test func withoutVoiceProcessingTheSessionKeepsTheDefaultMode() async throws {
+        let bed = VoiceTestBed()
+        bed.hasVoiceProcessing = false
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let session = AVAudioSession.sharedInstance()
+
+        // Voice chat without voice processing would only lower the playback level.
+        #expect(session.category == .playAndRecord)
+        #expect(session.mode == .default)
+    }
+
+    @Test func withPauseOtherAudioOffTheSessionMixesWithOtherAudio() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.pausesOtherAudio = false
+        try await loop.start()
+        defer { loop.stop() }
+        let session = AVAudioSession.sharedInstance()
+        #expect(session.categoryOptions.contains(.mixWithOthers))
+
+        // Turned back on while listening: the engine is rebuilt and the session interrupts again.
+        loop.pausesOtherAudio = true
+
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(!session.categoryOptions.contains(.mixWithOthers))
+        #expect(loop.state == .listening(partial: ""))
+    }
 }
 
 /// Stands for the engine failing to start while another app still holds the audio session.

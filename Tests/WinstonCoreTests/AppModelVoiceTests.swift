@@ -116,6 +116,30 @@ struct VoiceModeTests {
         #expect(harness.bed.audio.engines.count == 1)
     }
 
+    @Test func aQuickOffAndOnWhileStartingLeavesVoiceModeListening() async throws {
+        let harness = Harness()
+        let model = harness.model
+        var permissionRequests = 0
+        harness.bed.whenRequestingPermissions = {
+            permissionRequests += 1
+            // The mic button is tapped off and on again during the first start only.
+            guard permissionRequests == 1 else { return }
+            await model.setVoiceMode(false)
+            await model.setVoiceMode(true)
+        }
+
+        await model.setVoiceMode(true)
+
+        // The off made the first start give up, so the model started again for the on. Before,
+        // the button showed voice mode while the loop was off.
+        #expect(permissionRequests == 2)
+        #expect(model.isVoiceMode)
+        #expect(!model.isStartingVoice)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(harness.bed.recognizer.isStarted)
+        #expect(harness.bed.audio.engines.count == 1)
+    }
+
     @Test func turningVoiceModeOnWhileListeningChangesNothing() async throws {
         let harness = Harness()
         let model = harness.model
@@ -292,5 +316,48 @@ struct VoiceSettingsTests {
         #expect(harness.defaults.object(forKey: "voiceIdentifier") == nil)
         #expect(model.voiceLoop.voiceIdentifier == nil)
         #expect(harness.relaunchedModel().voiceIdentifier == nil)
+    }
+
+    @Test func repliesAreSpokenAtNormalSpeedAndOtherAudioPausesByDefault() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        #expect(model.speechRate == VoiceLoop.defaultSpeechRate)
+        #expect(model.pausesOtherAudio)
+        #expect(model.voiceLoop.speechRate == VoiceLoop.defaultSpeechRate)
+        #expect(model.voiceLoop.pausesOtherAudio)
+    }
+
+    @Test func theSpeakingSpeedAndPauseOtherAudioAreSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let fastest = VoiceLoop.speechRates.upperBound
+
+        model.speechRate = fastest
+        model.pausesOtherAudio = false
+
+        #expect(harness.defaults.object(forKey: "speechRate") as? Float == fastest)
+        #expect(harness.defaults.object(forKey: "pausesOtherAudio") as? Bool == false)
+        #expect(model.voiceLoop.speechRate == fastest)
+        #expect(!model.voiceLoop.pausesOtherAudio)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.speechRate == fastest)
+        #expect(!relaunched.pausesOtherAudio)
+        #expect(relaunched.voiceLoop.speechRate == fastest)
+        #expect(!relaunched.voiceLoop.pausesOtherAudio)
+    }
+
+    @Test func turningPauseOtherAudioOffInVoiceModeRebuildsTheEngineAndKeepsListening() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setVoiceMode(true)
+
+        model.pausesOtherAudio = false
+
+        #expect(model.isVoiceMode)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(await eventually { harness.bed.recognizers.count == 2 && harness.bed.recognizer.isStarted })
+        #expect(harness.bed.audio.engines.count == 2)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
     }
 }

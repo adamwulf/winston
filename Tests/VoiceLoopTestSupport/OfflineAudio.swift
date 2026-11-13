@@ -35,22 +35,13 @@ package final class OfflineAudio {
         }
         try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
 
-        let input = engine.inputNode
-        // An engine fed in a format other than the one its input node reports, and whose
-        // input feeds nothing, fails to start (-10868).
-        let cannotStart = nextEngineCannotStart
-        nextEngineCannotStart = false
-        let inputFormat = cannotStart ? renderFormat : input.outputFormat(forBus: 0)
-        guard let source = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: 16_384) else {
-            throw OfflineAudioError.noMicrophoneBuffer
-        }
-        let microphone = microphone
-        let accepted = input.setManualRenderingInputPCMFormat(inputFormat) { frameCount in
-            microphone.fill(source, frameCount: frameCount)
-            return UnsafePointer(source.audioBufferList)
-        }
-        guard accepted else { throw OfflineAudioError.microphoneFormatRejected }
-        if !cannotStart {
+        if nextEngineCannotStart {
+            nextEngineCannotStart = false
+            try makeUnstartable(engine)
+        } else {
+            let input = engine.inputNode
+            let inputFormat = input.outputFormat(forBus: 0)
+            try feedMicrophone(to: input, in: inputFormat)
             // An offline engine only pulls its input node when the node feeds the output.
             // Muted there, so the speaker carries speech alone; the pipeline's tap still gets it.
             engine.connect(input, to: engine.mainMixerNode, format: inputFormat)
@@ -62,19 +53,51 @@ package final class OfflineAudio {
         return engine
     }
 
-    /// Renders every running engine a few hundred times a second, far faster than real time.
-    /// Stops by itself once no engine has been running for a second, and starts again with
-    /// the next engine.
+    /// The audio hardware changes in a way `engine` can't follow: it stops, and starting it
+    /// again fails, so the voice loop has to build a new engine.
+    package func breakEngine(_ engine: AVAudioEngine) throws {
+        engine.stop()
+        engine.disconnectNodeOutput(engine.inputNode)
+        try makeUnstartable(engine)
+    }
+
+    /// An offline engine fails to start (-10868) when its input is fed in a format other than
+    /// the one its input node reports and the node feeds nothing.
+    private func makeUnstartable(_ engine: AVAudioEngine) throws {
+        let input = engine.inputNode
+        let reportedRate = input.outputFormat(forBus: 0).sampleRate
+        guard let otherFormat = AVAudioFormat(
+            standardFormatWithSampleRate: reportedRate == 48_000 ? 44_100 : 48_000,
+            channels: 1
+        ) else {
+            throw OfflineAudioError.noRenderFormat
+        }
+        try feedMicrophone(to: input, in: otherFormat)
+    }
+
+    /// Makes the pretend microphone the source of `input`, in `format`.
+    private func feedMicrophone(to input: AVAudioInputNode, in format: AVAudioFormat) throws {
+        guard let source = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16_384) else {
+            throw OfflineAudioError.noMicrophoneBuffer
+        }
+        let microphone = microphone
+        let accepted = input.setManualRenderingInputPCMFormat(format) { frameCount in
+            microphone.fill(source, frameCount: frameCount)
+            return UnsafePointer(source.audioBufferList)
+        }
+        guard accepted else { throw OfflineAudioError.microphoneFormatRejected }
+    }
+
+    /// Renders every running engine a few hundred times a second, far faster than real time,
+    /// for as long as this object lives. It idles while no engine is running.
     private func startRendering() {
         guard renderTask == nil else { return }
         renderTask = Task { [weak self] in
-            var idlePasses = 0
-            while idlePasses < 500 {
+            while true {
                 guard let self else { return }
-                idlePasses = self.renderOnce() ? 0 : idlePasses + 1
-                try? await Task.sleep(for: .milliseconds(2))
+                let isRendering = self.renderOnce()
+                try? await Task.sleep(for: .milliseconds(isRendering ? 2 : 50))
             }
-            self?.renderTask = nil
         }
     }
 

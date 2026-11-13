@@ -42,6 +42,12 @@ struct JPEGForSendingTests {
             try await PhotoFiles.jpegForSending(from: Data("not an image".utf8))
         }
     }
+
+    @Test func anEmptyFileIsUnreadable() async throws {
+        await #expect(throws: PhotoFiles.Failure.unreadableImage) {
+            try await PhotoFiles.jpegForSending(from: Data())
+        }
+    }
 }
 
 /// Decoding an image file to show in the chat.

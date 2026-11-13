@@ -13,6 +13,7 @@ private func makePlayingPipeline(on bed: VoiceTestBed) throws -> Pipeline {
     let pipeline = try Pipeline(
         analyzerFormat: ScriptedRecognizer().audioFormat,
         voiceProcessing: false,
+        ducksOtherAudio: true,
         environment: bed.environment
     )
     try pipeline.engine.start()
