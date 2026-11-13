@@ -46,6 +46,9 @@ final class AppModel {
     private(set) var isVoiceMode = false
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
     private(set) var isStartingVoice = false
+    /// Counts the times voice mode was turned off, so `setVoiceMode(_:)` can tell when a quick off-and-on
+    /// cancelled the start it is waiting on.
+    @ObservationIgnored private var voiceModeOffCount = 0
     /// Seconds the transcript must stay unchanged before voice mode sends it. Persisted.
     var pauseThreshold: Double = UserDefaults.standard.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2 {
         didSet {
@@ -442,15 +445,20 @@ final class AppModel {
     /// Turning it on again while already in voice mode resumes a loop that turned itself off.
     func setVoiceMode(_ on: Bool) async {
         if on {
-            // VoiceLoop ignores a second start() while one is in progress.
-            guard voiceLoop.state == .off else { return }
             isVoiceMode = true
-            // Toggled back on while the first start() is still running: let that one finish and own the flag.
-            guard !isStartingVoice else { return }
+            // A running loop needs no start. Toggled back on while the first start() is still running: that
+            // one owns the flag, and starts again below if a quick off cancelled it.
+            guard voiceLoop.state == .off, !isStartingVoice else { return }
             isStartingVoice = true
             defer { isStartingVoice = false }
             do {
-                try await voiceLoop.start()
+                var offCount: Int
+                repeat {
+                    offCount = voiceModeOffCount
+                    try await voiceLoop.start()
+                    // Turning voice mode off stops the loop, which makes a start() in progress give up. If it
+                    // was turned back on since, start again.
+                } while isVoiceMode && voiceModeOffCount != offCount
                 // Voice mode may have been turned off while start() waited for permission.
                 if !isVoiceMode { voiceLoop.stop() }
             } catch {
@@ -459,6 +467,7 @@ final class AppModel {
                 errorMessage = userMessage(for: error)
             }
         } else {
+            voiceModeOffCount += 1
             voiceLoop.stop()
             isVoiceMode = false
         }
