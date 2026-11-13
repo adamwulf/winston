@@ -1,5 +1,6 @@
 @preconcurrency import AVFoundation
 import Logging
+import LogSupport
 
 /// Plays speech while the voice loop is off, for voice previews in settings. Each preview gets
 /// an engine of its own that plays straight to the speaker, through the same pitch shift as
@@ -10,7 +11,8 @@ import Logging
 /// each buffer, then `synthesisFinished()` after the last. Any source of buffers works, such
 /// as `AVSpeechSynthesizer.write(_:toBufferCallback:)`. A new preview cuts off the one before,
 /// and the engine stops once a preview has played. If the engine stops on its own (the audio
-/// hardware changed, say AirPods connected), the preview ends there.
+/// hardware changed, say AirPods connected) or, on iOS, a call or Siri interrupts the audio
+/// session, the preview ends there.
 @MainActor
 final class PreviewPlayer {
     private static let log = Logger(label: "voice.preview")
@@ -19,8 +21,8 @@ final class PreviewPlayer {
         let engine: AVAudioEngine
         let output: SpeechOutput
         let playback: SpeechPlayback
-        /// Ends the preview if the engine stops on its own.
-        let watcher: Task<Void, Never>
+        /// End the preview if the engine stops on its own or the session is interrupted.
+        let watchers: [Task<Void, Never>]
     }
 
     private let environment: VoiceEnvironment
@@ -48,6 +50,10 @@ final class PreviewPlayer {
             named: .AVAudioEngineConfigurationChange,
             object: engine
         )
+        #if os(iOS)
+        let interruptions = NotificationCenter.default.notifications(named: AVAudioSession.interruptionNotification)
+            .map { InterruptionEvent($0) }
+        #endif
         do {
             try Self.activateAudioSession()
             engine.prepare()
@@ -58,16 +64,30 @@ final class PreviewPlayer {
             throw error
         }
         output.player.play()
-        let watcher = Task { [weak self, weak engine] in
+        let engineWatcher = Task { [weak self, weak engine] in
             for await _ in configurationChanges {
                 guard let self, let engine else { return }
                 if !engine.isRunning {
-                    self.engineStopped(playback)
+                    self.endEarly(playback, reason: "configurationChange")
                     return
                 }
             }
         }
-        current = Preview(engine: engine, output: output, playback: playback, watcher: watcher)
+        #if os(iOS)
+        let interruptionWatcher = Task { [weak self] in
+            for await event in interruptions {
+                guard let self else { return }
+                if case .began = event {
+                    self.endEarly(playback, reason: "interruption")
+                    return
+                }
+            }
+        }
+        let watchers = [engineWatcher, interruptionWatcher]
+        #else
+        let watchers = [engineWatcher]
+        #endif
+        current = Preview(engine: engine, output: output, playback: playback, watchers: watchers)
         return playback
     }
 
@@ -75,7 +95,7 @@ final class PreviewPlayer {
     func stop() {
         guard let current else { return }
         self.current = nil
-        current.watcher.cancel()
+        for watcher in current.watchers { watcher.cancel() }
         current.playback.cancel()
         current.output.player.stop()
         current.engine.stop()
@@ -88,11 +108,13 @@ final class PreviewPlayer {
         stop()
     }
 
-    /// The engine stopped itself because the audio hardware changed. A preview is short, so
-    /// it ends rather than starting again, and other audio comes back up.
-    private func engineStopped(_ playback: SpeechPlayback) {
+    /// The engine stopped itself because the audio hardware changed, or a call or Siri took
+    /// the audio session. Either way the preview may never report finishing. A preview is
+    /// short, so it ends rather than starting again, and other audio comes back up. `reason`
+    /// says which, for the logs.
+    private func endEarly(_ playback: SpeechPlayback, reason: String) {
         guard current?.playback === playback else { return }
-        Self.log.notice("voice preview stopped by an audio configuration change")
+        Self.log.notice("voice preview ended early", ["reason": reason])
         stop()
     }
 

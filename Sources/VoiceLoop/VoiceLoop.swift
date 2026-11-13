@@ -965,8 +965,9 @@ public enum VoiceLoopError: Error, Sendable, Equatable {
 }
 
 #if os(iOS)
-/// The parts of an `AVAudioSession` interruption notification the loop acts on.
-private enum InterruptionEvent: Sendable {
+/// The parts of an `AVAudioSession` interruption notification the loop and the preview player
+/// act on.
+enum InterruptionEvent: Sendable {
     case began
     case ended(shouldResume: Bool)
 
