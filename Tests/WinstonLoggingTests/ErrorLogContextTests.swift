@@ -87,4 +87,21 @@ struct ErrorLogContextTests {
         #expect(metadata["op"]?.description == "write")
         #expect(metadata["errorCase"]?.description.contains("failed(status: 7)") == true)
     }
+
+    @Test
+    func metadataErrorFieldsWinOverExtraWithTheSameKey() {
+        let error = NSError(domain: "Test", code: 7, userInfo: [NSLocalizedDescriptionKey: "Disk full."])
+
+        let metadata = error.logMetadata([
+            "op": "write",
+            "error": "caller error",
+            "errorDomain": "caller domain",
+            "errorCode": "caller code",
+        ])
+
+        #expect(metadata["op"]?.description == "write")
+        #expect(metadata["error"]?.description == "Disk full.")
+        #expect(metadata["errorDomain"]?.description == "Test")
+        #expect(metadata["errorCode"]?.description == "7")
+    }
 }
