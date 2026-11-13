@@ -25,9 +25,18 @@ enum DebugLogs {
         }
     }
 
+    /// True from the start of `export()` until its zip is removed.
+    private static var isExporting = false
+
     /// Zips the Logs folder, asks where to save the zip, and copies it there. Failures are logged
-    /// and shown in an alert.
+    /// and shown in an alert. Does nothing while an earlier export is still running: the save
+    /// panel is modeless, so the menu item and the Settings button stay enabled, and a second
+    /// export would empty the export folder under the first one's zip.
     static func export() async {
+        guard !isExporting else { return }
+        isExporting = true
+        defer { isExporting = false }
+
         let archive: URL
         do {
             archive = try await LogExporter.exportLogs()
