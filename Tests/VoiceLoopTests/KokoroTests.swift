@@ -1070,6 +1070,28 @@ struct KokoroLanguageTests {
         // Nothing more to remove.
         #expect(try await engine.removeStoredModel() == false)
     }
+
+    @Test func theDictionaryWordsAreTheOnesKokoroFindsInLowercase() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // As KokoroTTS has them: a phoneme string, or one for each part of speech.
+        try Data(#"{"nasa": "nˈæsə", "NATO": "nˈAɾO", "ID": {"DEFAULT": "ˈɪd", "NOUN": null}, "dB": "dˌibˈi"}"#.utf8)
+            .write(to: folder.appending(path: "us_gold.json"))
+        try Data(#"{"isn't": "ˈɪzᵊnt"}"#.utf8).write(to: folder.appending(path: "us_silver.json"))
+
+        // Not "db": KokoroTTS looks "DB" up as "db", and has no such key.
+        #expect(LiveKokoro.dictionaryWords(in: folder) == ["nasa", "nato", "id", "isn't"])
+        // Without one of the dictionaries, there are no words at all.
+        try FileManager.default.removeItem(at: folder.appending(path: "us_silver.json"))
+        #expect(LiveKokoro.dictionaryWords(in: folder).isEmpty)
+    }
+
+    @Test func withoutALoadedModelThereAreNoDictionaryWords() async throws {
+        let engine = LiveKokoro(directory: FileManager.default.temporaryDirectory.appending(path: "winston-unused-\(UUID())"))
+
+        #expect(await engine.dictionaryWords().isEmpty)
+    }
 }
 
 // MARK: - The real model

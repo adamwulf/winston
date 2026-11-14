@@ -122,20 +122,31 @@ package actor LiveKokoro: KokoroEngine {
         return !stored.isEmpty
     }
 
-    /// The keys of KokoroTTS's American English dictionaries, which it downloads with each model
-    /// into the model's folder. Its British voices use them too.
+    /// The loaded model's dictionary words: see `dictionaryWords(in:)`.
     package func dictionaryWords() -> Set<String> {
         guard let variant = loaded?.variant else { return [] }
+        return Self.dictionaryWords(in: modelFolder(variant))
+    }
+
+    /// The words KokoroTTS finds in the American English dictionaries it downloads into each
+    /// model's `folder` (its British voices use them too). It looks words up in lowercase, and has
+    /// each key that starts with a capital in lowercase too, so it finds those and the lowercase
+    /// keys, but not a key such as "dB": "DB" isn't one of its words. Empty if either dictionary
+    /// can't be read.
+    static func dictionaryWords(in folder: URL) -> Set<String> {
         var words = Set<String>()
         for file in ["us_gold.json", "us_silver.json"] {
             do {
-                let data = try Data(contentsOf: modelFolder(variant).appending(path: file, directoryHint: .notDirectory))
+                let data = try Data(contentsOf: folder.appending(path: file, directoryHint: .notDirectory))
                 guard let entries = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                     Self.log.warning("kokoro dictionary isn't an object; acronyms are left as written", ["file": file])
                     return []
                 }
-                for word in entries.keys {
-                    words.insert(word.lowercased())
+                for key in entries.keys {
+                    let lowercased = key.lowercased()
+                    if key == lowercased || key.first?.isUppercase == true {
+                        words.insert(lowercased)
+                    }
                 }
             } catch {
                 // Codes only: a file error's message names the model's folder.

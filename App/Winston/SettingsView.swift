@@ -142,7 +142,10 @@ struct SettingsView: View {
             Section {
                 ForEach($model.pronunciations) { $pronunciation in
                     PronunciationRow(pronunciation: $pronunciation) {
-                        model.pronunciations.removeAll { $0.id == pronunciation.id }
+                        // Read through the binding first: reading it while removeAll changes
+                        // the array it reads from is an exclusive access conflict.
+                        let id = pronunciation.id
+                        model.pronunciations.removeAll { $0.id == id }
                     }
                 }
                 .onDelete { offsets in

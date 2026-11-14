@@ -36,16 +36,21 @@ struct KokoroAcronyms {
     /// A word with any acronyms in it spelled out.
     private func spoken(_ word: Substring) -> String {
         guard word.allSatisfy({ $0.isASCII || Self.isApostrophe($0) }) else { return String(word) }
-        if let apostrophe = word.firstIndex(where: Self.isApostrophe) {
-            let letters = word[..<apostrophe]
-            guard word[apostrophe...].dropFirst() == "s", letters.count >= 2, letters.allSatisfy(\.isUppercase) else {
-                return String(word)
-            }
-            return spelled(letters, plural: true) ?? String(word)
+        guard let apostrophe = word.firstIndex(where: Self.isApostrophe) else {
+            return spoken(word, possessive: nil)
         }
+        // Any apostrophe but an "'s" makes a contraction ("ISN'T") or a name ("O'BRIEN").
+        guard word[apostrophe...].dropFirst() == "s" else { return String(word) }
+        return spoken(word[..<apostrophe], possessive: word[apostrophe...])
+    }
+
+    /// `word`, without apostrophes, with any acronyms in it spelled out. `possessive` is the
+    /// "'s" after it, if any, which makes an acronym that ends the word plural.
+    private func spoken(_ word: Substring, possessive: Substring?) -> String {
         // The acronyms, each with the rest of the word before it, if any.
         var parts: [String] = []
         var rest = ""
+        var possessive = possessive
         var index = word.startIndex
         while index < word.endIndex {
             let runEnd = word[index...].firstIndex { !$0.isUppercase } ?? word.endIndex
@@ -55,23 +60,31 @@ struct KokoroAcronyms {
                 continue
             }
             var end = runEnd
-            var plural = false
-            if runEnd < word.endIndex {
-                if word[runEnd...] == "s" {
-                    plural = true
-                } else {
-                    // The run's last capital starts the next word: "URLSession".
-                    end = word.index(before: runEnd)
-                }
+            // What makes the acronym plural: an "s" that ends the word, or the possessive.
+            var plural: Substring?
+            if runEnd == word.endIndex {
+                plural = possessive
+            } else if word[runEnd...] == "s" {
+                plural = word[runEnd...]
+            } else {
+                // The run's last capital starts the next word: "URLSession".
+                end = word.index(before: runEnd)
             }
             if !rest.isEmpty {
                 parts.append(rest)
                 rest = ""
             }
             let letters = word[index..<end]
-            parts.append(spelled(letters, plural: plural) ?? String(letters) + (plural ? "s" : ""))
-            index = plural ? word.endIndex : end
+            parts.append(spelled(letters, plural: plural != nil) ?? String(letters) + (plural ?? ""))
+            if plural != nil {
+                possessive = nil
+                index = word.endIndex
+            } else {
+                index = end
+            }
         }
+        // Unless the word ends in an acronym, a possessive stays as it is: "GitHub's".
+        rest += possessive ?? ""
         if !rest.isEmpty {
             parts.append(rest)
         }

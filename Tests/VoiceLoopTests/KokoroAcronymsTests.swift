@@ -29,6 +29,14 @@ import Testing
         #expect(say("the API's docs") == "the eh P eyes docs")
         #expect(say("the API’s docs") == "the eh P eyes docs")
         #expect(say("GPUs, URLs") == "G P ewes, U R ells")
+        // Inside a word too.
+        #expect(say("SwiftUI's layout") == "Swift U eyes layout")
+        #expect(say("macOS’s menus") == "mac O esses menus")
+    }
+
+    @Test func aPossessiveStaysWhenTheWordDoesNotEndInAnAcronymToSpellOut() {
+        #expect(say("GitHub's, NASA's and URLSession's") == "GitHub's, NASA's and U R L Session's")
+        #expect(say("It's") == "It's")
     }
 
     @Test func everyLettersPluralIsWrittenAsItsNameWithAnS() {
