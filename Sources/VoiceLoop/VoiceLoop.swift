@@ -64,6 +64,15 @@ public final class VoiceLoop {
     public var kokoroModelState: KokoroModelState {
         kokoroModel.state
     }
+    /// Which Kokoro model speaks the Kokoro voices. Choosing another while a Kokoro voice is
+    /// chosen loads it in place of the one loaded, downloading it the first time, and until it is
+    /// ready the best system voice speaks.
+    public var kokoroModelVariant: KokoroModelVariant {
+        get { kokoroModel.variant }
+        set { kokoroModel.variant = newValue }
+    }
+    /// The Kokoro model until another is chosen.
+    public static let defaultKokoroModelVariant = KokoroModelVariant.fifteenSecond
     /// `AVSpeechUtterance.rate` to speak at, within `speechRates`. The scale isn't linear:
     /// `defaultSpeechRate` (the middle) is normal speed. Applies from the next message spoken.
     public var speechRate: Float = VoiceLoop.defaultSpeechRate
@@ -519,11 +528,12 @@ public final class VoiceLoop {
         loadKokoroModelIfChosen()
     }
 
-    /// Deletes the Kokoro voices' stored model, about 410 MB, if no Kokoro voice has been chosen
-    /// for a day. Choosing one again downloads it again. Without a record of when the last one
-    /// was unchosen (a model downloaded by an earlier version), the day starts now. Does nothing
-    /// while a Kokoro voice is chosen or the model is loading. For the app to call at launch,
-    /// once it has set the saved `voiceIdentifier`, and when it returns to the foreground.
+    /// Deletes the Kokoro voices' stored models (both, if both have been used) if no Kokoro voice
+    /// has been chosen for a day. Choosing one again downloads the chosen model again. Without a
+    /// record of when the last one was unchosen (a model downloaded by an earlier version), the
+    /// day starts now. Does nothing while a Kokoro voice is chosen or a model is loading. For the
+    /// app to call at launch, once it has set the saved `voiceIdentifier`, and when it returns to
+    /// the foreground.
     public func removeUnusedKokoroModel() {
         kokoroModel.removeIfUnused()
     }

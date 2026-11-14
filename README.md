@@ -125,22 +125,32 @@ child process (logging bootstrap, the real `Library` folder) only run on macOS.
 
 ## Kokoro voices
 
-All the Kokoro voices share one model, about 410 MB: FluidAudio's 15 s
-end-to-end Kokoro graph (`FluidInference/kokoro-82m-coreml`), with the American
-and British English voices. It renders a sentence of up to about 200 phoneme
-tokens in one pass, and has no speed input, so every speech rate speaks at
-speed 1. `LiveKokoro` downloads it into `<Application Support>/Kokoro/` the
-first time a Kokoro voice is chosen: the `Kokoro-82M-15s` folder, then a
-`Kokoro-82M-15s.downloaded` marker once the download is complete. The 5 s model
-used before, in the `Kokoro-82M-CoreML` folder, is no longer used or deleted.
+All the Kokoro voices share one model, chosen in settings
+(`KokoroModelVariant`):
+
+| Model | Source | Size | Folder |
+|---|---|---|---|
+| Whole Sentences (the default) | FluidAudio's 15 s graph, `FluidInference/kokoro-82m-coreml`, with the American and British English voices | about 410 MB | `Kokoro-82M-15s` |
+| Original | speech-swift's 5 s graph, `aufklarer/Kokoro-82M-CoreML` | about 335 MB | `Kokoro-82M-CoreML` |
+
+Whole Sentences renders a sentence of up to about 200 phoneme tokens in one
+pass, but each pass takes about a second however short the sentence, and it
+has no speed input, so every speech rate speaks at speed 1. Original renders
+about 56 tokens per pass, so a long sentence is cut into pieces and its tone of
+voice resets at each cut.
+
+`LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
+the first time a Kokoro voice uses it: its folder, then a `<folder>.downloaded`
+marker once the download is complete. Choosing the other model while a Kokoro
+voice is chosen loads it in place of the first, which stays stored.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so
   `~/Library/Containers/com.milestonemade.winston/Data/Library/Application Support/Kokoro/`.
 
 Choosing a system voice frees the model's memory but keeps it stored. Once no
-Kokoro voice has been chosen for a day, the folder and the marker are deleted,
-and choosing a Kokoro voice again downloads the model again. `KokoroModel`
+Kokoro voice has been chosen for a day, every model's folder and marker are
+deleted, and choosing a Kokoro voice again downloads the chosen model again. `KokoroModel`
 records when the last Kokoro voice was unchosen in the standard user defaults,
 under `kokoroUnchosenSince`. `AppModel` checks it at launch and each time the
 app comes back to the foreground. A model with no record (downloaded before the

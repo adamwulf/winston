@@ -531,6 +531,34 @@ struct VoiceSettingsTests {
         #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
     }
 
+    @Test func theKokoroModelIsSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        let model = harness.model
+        #expect(model.kokoroModelVariant == VoiceLoop.defaultKokoroModelVariant)
+        #expect(model.voiceLoop.kokoroModelVariant == VoiceLoop.defaultKokoroModelVariant)
+
+        model.kokoroModelVariant = .fiveSecond
+
+        #expect(harness.defaults.string(forKey: "kokoroModelVariant") == "5s")
+        #expect(model.voiceLoop.kokoroModelVariant == .fiveSecond)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.kokoroModelVariant == .fiveSecond)
+        #expect(relaunched.voiceLoop.kokoroModelVariant == .fiveSecond)
+    }
+
+    @Test func aRelaunchWithAKokoroVoiceLoadsOnlyTheSavedModel() async throws {
+        let harness = Harness()
+        harness.model.kokoroModelVariant = .fiveSecond
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { harness.model.voiceLoop.kokoroModelState == .ready })
+
+        let bed = VoiceTestBed()
+        let relaunched = harness.relaunchedModel(on: bed)
+
+        #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.fiveSecond])
+    }
+
     @Test func aKokoroVoiceChosenInAnotherLanguageIsKeptButNotUsedAfterARelaunch() async throws {
         let harness = Harness()
         harness.model.voiceIdentifier = "kokoro.af_heart"

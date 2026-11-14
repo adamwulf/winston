@@ -3,7 +3,7 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -118,7 +118,12 @@ struct SettingsView: View {
             }
             if voices.contains(where: { $0.engine == .kokoro }) {
                 Section {
-                    LabeledContent("Voice model") {
+                    Picker("Voice model", selection: $model.kokoroModelVariant) {
+                        ForEach(KokoroModelVariant.allCases, id: \.self) { variant in
+                            Text(variant.name).tag(variant)
+                        }
+                    }
+                    LabeledContent("Status") {
                         kokoroModelStatus
                     }
                     // Its own row, full width under the status, like the sliders under theirs.
@@ -131,7 +136,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 410 MB. Until it's ready, the best system voice speaks. The model is removed after a day without a Kokoro voice.")
+                    Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. Original cuts long sentences into pieces. Whole Sentences speaks each sentence in one piece, but takes longer to start and speaks only at normal speed. The models are removed after a day without a Kokoro voice.")
                 }
             }
             Section {
@@ -223,14 +228,14 @@ struct SettingsView: View {
         }
     }
 
-    /// Where the Kokoro model is: its size before anything has asked for it, the download's
+    /// Where the chosen Kokoro model is: its size before anything has asked for it, the download's
     /// percentage (its progress bar is a row of its own), ready with a button that plays a
     /// sample, or failed with a retry.
     @ViewBuilder
     private var kokoroModelStatus: some View {
         switch model.voiceLoop.kokoroModelState {
         case .notLoaded:
-            Text("About 410 MB")
+            Text("About \(model.kokoroModelVariant.downloadMegabytes) MB")
         case .loading, .downloading(progress: 1...):
             HStack {
                 ProgressView()

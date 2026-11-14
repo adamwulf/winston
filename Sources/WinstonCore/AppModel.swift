@@ -15,6 +15,7 @@ private enum StorageKey {
     static let selectedChatID = "selectedChatID"
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
+    static let kokoroModelVariant = "kokoroModelVariant"
     static let speechRate = "speechRate"
     static let speechPitch = "speechPitch"
     static let pausesOtherAudio = "pausesOtherAudio"
@@ -64,6 +65,13 @@ public final class AppModel {
     public var voiceIdentifier: String? {
         didSet {
             defaults.set(voiceIdentifier, forKey: StorageKey.voiceIdentifier)
+            applyVoiceSettings()
+        }
+    }
+    /// Which Kokoro model speaks the Kokoro voices, as `VoiceLoop.kokoroModelVariant`. Persisted.
+    public var kokoroModelVariant: KokoroModelVariant {
+        didSet {
+            defaults.set(kokoroModelVariant.rawValue, forKey: StorageKey.kokoroModelVariant)
             applyVoiceSettings()
         }
     }
@@ -125,6 +133,8 @@ public final class AppModel {
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
+        kokoroModelVariant = defaults.string(forKey: StorageKey.kokoroModelVariant)
+            .flatMap(KokoroModelVariant.init(rawValue:)) ?? VoiceLoop.defaultKokoroModelVariant
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
@@ -159,6 +169,8 @@ public final class AppModel {
 
     private func applyVoiceSettings() {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
+        // Before the voice: choosing a Kokoro voice loads the model chosen by then.
+        voiceLoop.kokoroModelVariant = kokoroModelVariant
         voiceLoop.voiceIdentifier = voiceIdentifier
         voiceLoop.speechRate = speechRate
         voiceLoop.speechPitch = speechPitch
