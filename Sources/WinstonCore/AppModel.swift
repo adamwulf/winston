@@ -45,6 +45,11 @@ public final class AppModel {
     }
     public private(set) var messages: [ChatID: [ChatMessage]] = [:]
     public private(set) var typingChats: Set<ChatID> = []
+    /// The latest 👍 Adam added from this app, set once TDLib's update shows it on its message in the
+    /// current chat. The message list scrolls it into view, so it doesn't land behind the bottom bar.
+    public private(set) var addedThumbsUp: AddedThumbsUp?
+    /// The message Adam is adding a 👍 to from this app, until TDLib's update shows it there.
+    @ObservationIgnored private var thumbsUpBeingAdded: (chat: ChatID, message: MessageID)?
     public private(set) var downloadedFiles: [Int32: URL] = [:]
     public private(set) var downloadingFiles: Set<Int32> = []
     public private(set) var isSendingPhoto = false
@@ -356,6 +361,8 @@ public final class AppModel {
         chatsError = nil
         messages = [:]
         typingChats = []
+        addedThumbsUp = nil
+        thumbsUpBeingAdded = nil
         downloadedFiles = [:]
     }
 
@@ -429,14 +436,22 @@ public final class AppModel {
             }
         case .reactionsChanged(let chat, let id, let reactions):
             var botAddedThumbsUp = false
+            var showsMyThumbsUp = false
             updateMessage(id, in: chat) { message in
                 let before = message.othersThumbsUpCount
                 message.reactions = reactions
                 botAddedThumbsUp = message.othersThumbsUpCount > before
+                showsMyThumbsUp = message.hasMyThumbsUp
             }
             // In voice mode Adam may not be looking, so the bot's 👍 in the chat he's in chimes.
             if botAddedThumbsUp, isVoiceMode, chat == currentChat?.id {
                 voiceLoop.play(.reaction)
+            }
+            if showsMyThumbsUp, let adding = thumbsUpBeingAdded, adding == (chat, id) {
+                thumbsUpBeingAdded = nil
+                if chat == currentChat?.id {
+                    addedThumbsUp = AddedThumbsUp(messageID: id, number: (addedThumbsUp?.number ?? 0) + 1)
+                }
             }
         case .typing(let chat, let isTyping):
             guard isBotChat(chat) else { return }
@@ -516,8 +531,13 @@ public final class AppModel {
         }
     }
 
+    /// Adds Adam's 👍 to `message`, or removes it. An added 👍 becomes `addedThumbsUp` once it shows.
     public func toggleThumbsUp(on message: ChatMessage) async {
         guard let link else { return }
+        // Noted before the request: TDLib's update can arrive before toggleReaction returns.
+        if !message.hasMyThumbsUp {
+            thumbsUpBeingAdded = (message.chatID, message.id)
+        }
         do {
             try await link.toggleReaction("👍", on: message.id, in: message.chatID)
         } catch {
@@ -526,6 +546,9 @@ public final class AppModel {
                 "messageID": message.id.description,
             ]))
             errorMessage = userMessage(for: error)
+            if let adding = thumbsUpBeingAdded, adding == (message.chatID, message.id) {
+                thumbsUpBeingAdded = nil
+            }
         }
     }
 
@@ -614,6 +637,13 @@ public final class AppModel {
         guard !text.isEmpty else { return }
         voiceLoop.preview(text)
     }
+}
+
+/// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.
+public struct AddedThumbsUp: Equatable, Sendable {
+    public let messageID: MessageID
+    /// Counts the 👍s added, so adding one to the same message again is a change too.
+    let number: Int
 }
 
 extension ChatMessage {

@@ -6,7 +6,7 @@ import VoiceLoop
 import VoiceLoopTestSupport
 import WinstonCore
 
-/// The 👍 button on the bot's latest message, and marking messages read.
+/// The 👍 Adam toggles on a message, and marking messages read.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct ReactionAndReadTests {
@@ -48,6 +48,98 @@ struct ReactionAndReadTests {
         #expect(harness.fake.requests.last == .addReaction(chatID: 1, messageID: 11, emoji: "👍"))
         #expect(model.errorMessage == "REACTION_INVALID")
         #expect(model.latestIncomingMessage?.reactions == [])
+        #expect(model.addedThumbsUp == nil)
+
+        // The refused 👍 is forgotten: one Adam adds in another app afterwards isn't scrolled to.
+        try harness.fake.adamReactsInAnotherApp("👍", to: 11, in: 1)
+        #expect(await eventually { model.latestIncomingMessage?.hasMyThumbsUp == true })
+        #expect(model.addedThumbsUp == nil)
+    }
+
+    @Test func aThumbsUpAdamAddsIsScrolledToOnceItShows() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        let latest = try #require(model.latestIncomingMessage)
+        harness.fake.hold(.addMessageReaction)
+
+        let toggle = Task { await model.toggleThumbsUp(on: latest) }
+
+        #expect(await eventually { harness.fake.isWaiting(on: .addMessageReaction) })
+        #expect(model.addedThumbsUp == nil)
+        // An update to the message without Adam's 👍 yet, such as the bot's 👀, isn't it.
+        try harness.fake.botReacts("👀", to: 11, in: 1)
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👀", count: 1, isChosen: false)]
+        })
+        #expect(model.addedThumbsUp == nil)
+        // TDLib's update can arrive before the request returns. An update showing Adam's 👍 while
+        // the request is still held stands in for it.
+        try harness.fake.adamReactsInAnotherApp("👍", to: 11, in: 1)
+        #expect(await eventually { model.addedThumbsUp?.messageID == MessageID(11) })
+        // Set with the 👍 itself, so the message list has the reaction to scroll to.
+        #expect(model.latestIncomingMessage?.hasMyThumbsUp == true)
+        harness.fake.release(.addMessageReaction)
+        await toggle.value
+    }
+
+    @Test func eachThumbsUpAdamAddsIsScrolledToOnceButRemovingOneIsNot() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+
+        await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
+        #expect(await eventually { model.addedThumbsUp != nil })
+        let first = try #require(model.addedThumbsUp)
+
+        // A later change to the message, with Adam's 👍 still on it, isn't scrolled to again.
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 2, isChosen: true)]
+        })
+        #expect(model.addedThumbsUp == first)
+
+        await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
+        #expect(model.addedThumbsUp == first)
+
+        // Adding it back is a change the message list sees, though the message is the same.
+        await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
+        #expect(await eventually { model.addedThumbsUp != first })
+        #expect(model.addedThumbsUp?.messageID == MessageID(11))
+    }
+
+    @Test func aThumbsUpFromTheBotOrFromAnotherAppIsNotScrolledTo() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+        try harness.fake.adamReactsInAnotherApp("👍", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 2, isChosen: true)]
+        })
+        #expect(model.addedThumbsUp == nil)
+    }
+
+    @Test func aThumbsUpThatShowsAfterAdamChangesChatsIsNotScrolledTo() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        let latest = try #require(model.latestIncomingMessage)
+        harness.fake.hold(.addMessageReaction)
+
+        let toggle = Task { await model.toggleThumbsUp(on: latest) }
+
+        #expect(await eventually { harness.fake.isWaiting(on: .addMessageReaction) })
+        model.selectedChatID = ChatID(2)
+        harness.fake.release(.addMessageReaction)
+        await toggle.value
+        #expect(await eventually { model.messages[ChatID(1)]?.last?.hasMyThumbsUp == true })
+        #expect(model.addedThumbsUp == nil)
     }
 
     @Test func markingAnIncomingMessageReadViewsItInTDLib() async throws {

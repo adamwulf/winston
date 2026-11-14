@@ -241,18 +241,13 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     /// The bot reacts to a message with `emoji`, as the coordinator does with 👍: the count
     /// goes up and whether Adam chose it stays as it was. The link is told, as TDLib does.
     package func botReacts(_ emoji: String, to messageID: Int64, in chatID: Int64) throws {
-        let type = ReactionType.reactionTypeEmoji(ReactionTypeEmoji(emoji: emoji))
-        try react(chatID: chatID, messageID: messageID) { reactions in
-            if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
-                reactions[index] = messageReaction(
-                    type,
-                    count: reactions[index].totalCount + 1,
-                    isChosen: reactions[index].isChosen
-                )
-            } else {
-                reactions.append(messageReaction(type, count: 1, isChosen: false))
-            }
-        }
+        try reactOutsideTheLink(emoji, to: messageID, in: chatID, byAdam: false)
+    }
+
+    /// Adam reacts to a message with `emoji` from another Telegram app, not through the link:
+    /// the count goes up and he has chosen it. The link is told, as TDLib does.
+    package func adamReactsInAnotherApp(_ emoji: String, to messageID: Int64, in chatID: Int64) throws {
+        try reactOutsideTheLink(emoji, to: messageID, in: chatID, byAdam: true)
     }
 
     /// The server rejects a pending message.
@@ -599,6 +594,23 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
             return emoji.emoji
         }
         return ""
+    }
+
+    /// One more `emoji` reaction on a message, from the bot or from Adam in another app. Adam's
+    /// chooses it; the bot's leaves whether Adam chose it as it was.
+    private func reactOutsideTheLink(_ emoji: String, to messageID: Int64, in chatID: Int64, byAdam: Bool) throws {
+        let type = ReactionType.reactionTypeEmoji(ReactionTypeEmoji(emoji: emoji))
+        try react(chatID: chatID, messageID: messageID) { reactions in
+            if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
+                reactions[index] = messageReaction(
+                    type,
+                    count: reactions[index].totalCount + 1,
+                    isChosen: byAdam || reactions[index].isChosen
+                )
+            } else {
+                reactions.append(messageReaction(type, count: 1, isChosen: byAdam))
+            }
+        }
     }
 
     /// Changes a stored message's reactions and tells the link, as TDLib does.
