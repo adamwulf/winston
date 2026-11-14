@@ -53,7 +53,7 @@ can't see them.
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
-| The Kokoro voices' 410 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, and keeps track of whether its model is stored |
+| The Kokoro voices' 410 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words the test gives it |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -162,6 +162,20 @@ records when the last Kokoro voice was unchosen in the standard user defaults,
 under `kokoroUnchosenSince`. `AppModel` checks it at launch and each time the
 app comes back to the foreground. A model with no record (downloaded before the
 record was kept) gets a day from the first check.
+
+KokoroTTS can't read digits, and reads an acronym its pronunciation dictionary
+doesn't have as if it were a word ("API" as "ay"), so the text Kokoro is given
+has numbers written as words (`KokoroNumbers`) and those acronyms spelled out a
+letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
+("NASA"), or a word in capitals for emphasis ("NOT"), stays as it is.
+`LiveKokoro` reads the dictionary's words from the loaded model's folder:
+`us_gold.json` and `us_silver.json`, the same files in both repositories.
+System voices get the text as written.
+
+Settings → Pronunciations lists words every voice says differently: each word,
+matched with its case and only as a whole word, is replaced before anything
+else, so "JSON" said as "Jason" isn't spelled out. `AppModel` saves them in the
+standard user defaults, under `pronunciations`.
 
 ## Logging
 

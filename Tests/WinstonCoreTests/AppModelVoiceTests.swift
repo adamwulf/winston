@@ -753,6 +753,39 @@ struct VoiceSettingsTests {
         #expect(relaunched.voiceLoop.speechPitch == highest)
     }
 
+    @Test func thereAreNoPronunciationsByDefault() async throws {
+        let harness = Harness()
+
+        #expect(harness.model.pronunciations.isEmpty)
+        #expect(harness.model.voiceLoop.pronunciations.isEmpty)
+    }
+
+    @Test func pronunciationsAreSavedAppliedAndRestoredInOrder() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let pronunciations = [
+            Pronunciation(word: "JSON", replacement: "Jason"),
+            Pronunciation(word: "Kokoro", replacement: "Ko ko ro"),
+        ]
+
+        model.pronunciations = pronunciations
+
+        #expect(harness.defaults.data(forKey: "pronunciations") != nil)
+        #expect(model.voiceLoop.pronunciations == pronunciations)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.pronunciations == pronunciations)
+        #expect(relaunched.voiceLoop.pronunciations == pronunciations)
+    }
+
+    @Test func unreadableSavedPronunciationsAreDropped() async throws {
+        let harness = Harness()
+        harness.defaults.set(Data("not json".utf8), forKey: "pronunciations")
+
+        let relaunched = harness.relaunchedModel()
+
+        #expect(relaunched.pronunciations.isEmpty)
+    }
+
     @Test func turningPauseOtherAudioOffInVoiceModeRebuildsTheEngineAndKeepsListening() async throws {
         let harness = Harness()
         let model = harness.model

@@ -51,6 +51,7 @@ package final class FakeKokoro: KokoroEngine {
         var failingRequest: Int?
         var holdsSynthesis = false
         var heldSyntheses: [CheckedContinuation<Void, Never>] = []
+        var dictionary: Set<String> = []
     }
 
     private let state = Mutex(State())
@@ -100,6 +101,13 @@ package final class FakeKokoro: KokoroEngine {
     package var holdsSynthesis: Bool {
         get { state.withLock { $0.holdsSynthesis } }
         set { state.withLock { $0.holdsSynthesis = newValue } }
+    }
+
+    /// What `dictionaryWords()` returns. Empty unless the test sets it, which leaves acronyms as
+    /// written.
+    package var dictionary: Set<String> {
+        get { state.withLock { $0.dictionary } }
+        set { state.withLock { $0.dictionary = newValue } }
     }
 
     /// Sentences waiting in `holdsSynthesis`.
@@ -186,6 +194,10 @@ package final class FakeKokoro: KokoroEngine {
             state.removals += 1
             return state.isStored
         }
+    }
+
+    package func dictionaryWords() async -> Set<String> {
+        dictionary
     }
 
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {

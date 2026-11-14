@@ -154,6 +154,34 @@ struct KokoroSpeakingTests {
         ])
     }
 
+    @Test func kokoroIsGivenAcronymsItsDictionaryLacksSpelledOut() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.dictionary = ["not", "nasa"]
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        _ = await framesPlayed(saying: "The API is NOT up 5% at NASA.", by: loop, on: bed)
+        // The dictionary is asked for again when the model is loaded again.
+        loop.voiceIdentifier = nil
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        _ = await framesPlayed(saying: "Two PRs.", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests.map(\.text) == ["The eh P eye is NOT up five percent at NASA.", "Two P Rs."])
+    }
+
+    @Test func pronunciationsAreSaidInPlaceOfTheirWordsBeforeAcronymsAreSpelledOut() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.dictionary = ["valid"]
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "JSON", replacement: "Jason")]
+
+        _ = await framesPlayed(saying: "The JSON is valid, and so is the XML. Not json.", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests.map(\.text) == ["The Jason is valid, and so is the X M L.", "Not json."])
+    }
+
     @Test func choosingAKokoroVoiceLoadsTheModelOnceAndASystemVoiceDoesNot() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
@@ -318,6 +346,18 @@ struct KokoroPreviewTests {
         #expect(await eventually { !engine.isRunning })
         #expect(bed.kokoro.requests == [FakeKokoro.Request(text: "Hello there.", voice: "af_heart", speed: 1)])
         #expect(abs(zeroCrossingsPerSecond(on: bed) - 1760) <= 1760 / 10)
+    }
+
+    @Test func aPreviewWhileOffSaysThePronunciations() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.pronunciations = [Pronunciation(word: "Heart", replacement: "Hart")]
+
+        loop.preview("This is the Heart voice.")
+
+        #expect(await eventually { bed.kokoro.requests.count == 1 })
+        #expect(bed.kokoro.requests.map(\.text) == ["This is the Hart voice."])
+        loop.stopPreview()
     }
 
     @Test func aPreviewWhileOffBeforeTheModelIsReadyIsSpokenByTheSystemVoice() async throws {
@@ -1080,6 +1120,10 @@ private final class RecordingKokoro: KokoroEngine {
 
     func removeStoredModel() async throws -> Bool {
         try await engine.removeStoredModel()
+    }
+
+    func dictionaryWords() async -> Set<String> {
+        await engine.dictionaryWords()
     }
 
     func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {

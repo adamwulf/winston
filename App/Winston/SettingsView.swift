@@ -3,7 +3,7 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -140,6 +140,23 @@ struct SettingsView: View {
                 }
             }
             Section {
+                ForEach($model.pronunciations) { $pronunciation in
+                    PronunciationRow(pronunciation: $pronunciation) {
+                        model.pronunciations.removeAll { $0.id == pronunciation.id }
+                    }
+                }
+                .onDelete { offsets in
+                    model.pronunciations.remove(atOffsets: offsets)
+                }
+                Button("Add Pronunciation") {
+                    model.pronunciations.append(Pronunciation())
+                }
+            } header: {
+                Text("Pronunciations")
+            } footer: {
+                Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
+            }
+            Section {
                 Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
             } footer: {
                 Text("Turn this off to keep music and other audio playing during voice mode.")
@@ -272,5 +289,36 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// One pronunciation: the word, and what to say in its place. Both are typed exactly as written,
+/// since the word matches only with the same case. On iOS a row is removed by swiping it; on the
+/// Mac, with its remove button.
+private struct PronunciationRow: View {
+    @Binding var pronunciation: Pronunciation
+    let remove: () -> Void
+
+    var body: some View {
+        HStack {
+            TextField("Word", text: $pronunciation.word, prompt: Text("Word"))
+            Image(systemName: "arrow.right")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Say as", text: $pronunciation.replacement, prompt: Text("Say as"))
+            #if os(macOS)
+            Button(action: remove) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove")
+            .accessibilityLabel("Remove pronunciation")
+            #endif
+        }
+        .labelsHidden()
+        .autocorrectionDisabled()
+        #if os(iOS)
+        .textInputAutocapitalization(.never)
+        #endif
     }
 }

@@ -19,6 +19,7 @@ private enum StorageKey {
     static let speechRate = "speechRate"
     static let speechPitch = "speechPitch"
     static let pausesOtherAudio = "pausesOtherAudio"
+    static let pronunciations = "pronunciations"
 }
 
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
@@ -96,6 +97,18 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
+    /// Words every voice says differently, as `VoiceLoop.pronunciations`, in the order settings
+    /// lists them. Persisted.
+    public var pronunciations: [Pronunciation] {
+        didSet {
+            do {
+                defaults.set(try JSONEncoder().encode(pronunciations), forKey: StorageKey.pronunciations)
+            } catch {
+                Self.log.error("saving pronunciations failed", error.logCodes())
+            }
+            applyVoiceSettings()
+        }
+    }
     /// A user-facing error from the last action. The chat screen shows it in an alert.
     public var errorMessage: String?
 
@@ -138,6 +151,7 @@ public final class AppModel {
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
+        pronunciations = Self.savedPronunciations(in: defaults)
         applyVoiceSettings()
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
@@ -175,6 +189,18 @@ public final class AppModel {
         voiceLoop.speechRate = speechRate
         voiceLoop.speechPitch = speechPitch
         voiceLoop.pausesOtherAudio = pausesOtherAudio
+        voiceLoop.pronunciations = pronunciations
+    }
+
+    /// The pronunciations saved in `defaults`, or none if there are none or they can't be read.
+    private static func savedPronunciations(in defaults: UserDefaults) -> [Pronunciation] {
+        guard let data = defaults.data(forKey: StorageKey.pronunciations) else { return [] }
+        do {
+            return try JSONDecoder().decode([Pronunciation].self, from: data)
+        } catch {
+            log.error("saved pronunciations unreadable; starting with none", error.logCodes())
+            return []
+        }
     }
 
     /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has

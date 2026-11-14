@@ -122,6 +122,30 @@ package actor LiveKokoro: KokoroEngine {
         return !stored.isEmpty
     }
 
+    /// The keys of KokoroTTS's American English dictionaries, which it downloads with each model
+    /// into the model's folder. Its British voices use them too.
+    package func dictionaryWords() -> Set<String> {
+        guard let variant = loaded?.variant else { return [] }
+        var words = Set<String>()
+        for file in ["us_gold.json", "us_silver.json"] {
+            do {
+                let data = try Data(contentsOf: modelFolder(variant).appending(path: file, directoryHint: .notDirectory))
+                guard let entries = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    Self.log.warning("kokoro dictionary isn't an object; acronyms are left as written", ["file": file])
+                    return []
+                }
+                for word in entries.keys {
+                    words.insert(word.lowercased())
+                }
+            } catch {
+                // Codes only: a file error's message names the model's folder.
+                Self.log.warning("kokoro dictionary unreadable; acronyms are left as written", error.logCodes(["file": file]))
+                return []
+            }
+        }
+        return words
+    }
+
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         // A request waits here while an earlier one renders. If its speech was stopped meanwhile
         // (a newer preview, say), rendering it would only delay the next one.

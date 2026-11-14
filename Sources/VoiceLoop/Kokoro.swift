@@ -63,6 +63,9 @@ package protocol KokoroEngine: Sendable {
     /// Deletes every stored model, freeing the loaded one first, so the next `load` downloads
     /// again. Returns whether any of them was stored.
     func removeStoredModel() async throws -> Bool
+    /// The words in the loaded model's English pronunciation dictionary, lowercased, for
+    /// `KokoroAcronyms`. Empty if no model is loaded or the dictionary can't be read.
+    func dictionaryWords() async -> Set<String>
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
@@ -106,12 +109,16 @@ final class KokoroModel {
             case .ready, .failed:
                 // Only while a Kokoro voice is chosen: `release()` leaves neither.
                 state = .notLoaded
+                dictionaryWords = []
                 load()
             case .notLoaded, .loading, .downloading:
                 break
             }
         }
     }
+    /// The model's dictionary words (see `KokoroEngine.dictionaryWords()`) while it is ready, and
+    /// empty otherwise.
+    @ObservationIgnored private(set) var dictionaryWords: Set<String> = []
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
@@ -171,6 +178,9 @@ final class KokoroModel {
                 }
                 return
             }
+            // Before the check below, so no wait comes between it and `.ready`: a `release()`
+            // during one would go unseen.
+            let words = await engine.dictionaryWords()
             guard self.isWanted else {
                 // A system voice was chosen while it loaded. The download is kept. The state
                 // changes first, so a `load()` from now on queues a new load after the unload.
@@ -187,6 +197,7 @@ final class KokoroModel {
                 self.load()
                 return
             }
+            self.dictionaryWords = words
             self.state = .ready
             Self.log.notice("kokoro model ready", [
                 "model": requested.rawValue,
@@ -209,6 +220,7 @@ final class KokoroModel {
         switch state {
         case .ready:
             state = .notLoaded
+            dictionaryWords = []
             Self.log.notice("kokoro model released")
             callEngine { [engine] in
                 await engine.unload()
