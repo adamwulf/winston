@@ -15,12 +15,19 @@ import LogSupport
 /// concurrency thread.
 package actor LiveKokoro: KokoroEngine {
     private static let log = Logger(label: "voice.kokoro.live")
+    /// What every model may run on. Not `.all`, the default: on macOS 27 compiling these models
+    /// for the GPU aborts the process in MPSGraph ("invalid axis (122) for input of rank 2"), which
+    /// can't be caught. The Neural Engine and CPU work. Core ML picks which of them each operation
+    /// runs on; `logPlacement` logs what it picked.
+    private static let computeUnits = MLComputeUnits.cpuAndNeuralEngine
 
     /// Holds the models' folders and, for each model, the marker saying its download finished.
     private let directory: URL
     private let queue = DispatchSerialQueue(label: "voice.kokoro")
     /// The loaded model, and which one it is.
     private var loaded: (variant: KokoroModelVariant, model: KokoroTTSModel)?
+    /// The models whose placement has been logged in this launch.
+    private var placementLogged: Set<KokoroModelVariant> = []
 
     package nonisolated var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
@@ -61,6 +68,7 @@ package actor LiveKokoro: KokoroEngine {
         if FileManager.default.fileExists(atPath: marker.path) {
             do {
                 loaded = (variant, try await Self.load(variant, from: folder, offline: true, downloadProgress: nil))
+                notePlacement(variant, in: folder)
                 return
             } catch {
                 // Codes only: KokoroTTS's messages name the folder.
@@ -77,6 +85,7 @@ package actor LiveKokoro: KokoroEngine {
         // the load fails, and a retry downloads nothing more but writes the marker again.
         try Data().write(to: marker)
         loaded = (variant, downloaded)
+        notePlacement(variant, in: folder)
     }
 
     private static func load(
@@ -91,13 +100,75 @@ package actor LiveKokoro: KokoroEngine {
             voiceFilter: variant.voiceFilter,
             cacheDir: folder,
             offlineMode: offline,
-            // Not `.all`, the default: on macOS 27 compiling these models for the GPU aborts the
-            // process in MPSGraph ("invalid axis (122) for input of rank 2"), which can't be
-            // caught. The Neural Engine and CPU work.
-            computeUnits: .cpuAndNeuralEngine
+            computeUnits: computeUnits
         ) { fraction, _ in
             // KokoroTTS reports the download as 0...0.7 of its progress, then loading.
             downloadProgress?(min(fraction / 0.7, 1))
+        }
+    }
+
+    /// Logs where Core ML runs `variant`, just loaded from `folder`, once per model per launch.
+    /// In the background, so speaking doesn't wait for it.
+    private func notePlacement(_ variant: KokoroModelVariant, in folder: URL) {
+        guard placementLogged.insert(variant).inserted else { return }
+        let model = folder.appending(path: "\(variant.modelFile).mlmodelc", directoryHint: .isDirectory)
+        Task.detached(priority: .background) {
+            await Self.logPlacement(of: model, variant: variant)
+        }
+    }
+
+    /// Logs how many of `model`'s operations Core ML prefers to run on the CPU, the GPU and the
+    /// Neural Engine, and each one's share of the operations' estimated cost, which says where
+    /// the time goes. From the model's compute plan, under the same compute units it loads with.
+    private static func logPlacement(of model: URL, variant: KokoroModelVariant) async {
+        let started = ContinuousClock.now
+        let configuration = MLModelConfiguration()
+        configuration.computeUnits = computeUnits
+        let plan: MLComputePlan
+        do {
+            plan = try await MLComputePlan.load(contentsOf: model, configuration: configuration)
+        } catch {
+            // Codes only: Core ML's messages name the model's folder.
+            log.warning("kokoro model placement unknown", error.logCodes(["model": variant.rawValue]))
+            return
+        }
+        guard case .program(let program) = plan.modelStructure, let main = program.functions["main"] else {
+            log.warning("kokoro model placement unknown: not an ML program", ["model": variant.rawValue])
+            return
+        }
+        var operations: [String: Int] = [:]
+        var costs: [String: Double] = [:]
+        var blocks = [main.block]
+        while let block = blocks.popLast() {
+            for operation in block.operations {
+                blocks.append(contentsOf: operation.blocks)
+                // Constants and the like run nowhere, and have no device.
+                guard let usage = plan.deviceUsage(for: operation) else { continue }
+                let device = deviceName(usage.preferred)
+                operations[device, default: 0] += 1
+                costs[device, default: 0] += plan.estimatedCost(of: operation)?.weight ?? 0
+            }
+        }
+        let totalCost = costs.values.reduce(0, +)
+        var metadata: [String: CustomStringConvertible] = [
+            "model": variant.rawValue,
+            "ms": Int(started.duration(to: .now) / .milliseconds(1)),
+        ]
+        for device in Set(operations.keys).union(["cpu", "gpu", "ane"]) {
+            metadata["\(device)Ops"] = operations[device, default: 0]
+            let share = totalCost > 0 ? costs[device, default: 0] / totalCost : 0
+            metadata["\(device)Cost"] = "\(Int((share * 100).rounded()))%"
+        }
+        log.notice("kokoro model placement", metadata)
+    }
+
+    /// `device` as the logs name it.
+    private static func deviceName(_ device: MLComputeDevice) -> String {
+        switch device {
+        case .cpu: "cpu"
+        case .gpu: "gpu"
+        case .neuralEngine: "ane"
+        @unknown default: "other"
         }
     }
 
