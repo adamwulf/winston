@@ -519,7 +519,7 @@ public final class VoiceLoop {
         loadKokoroModelIfChosen()
     }
 
-    /// Deletes the Kokoro voices' stored model, about 335 MB, if no Kokoro voice has been chosen
+    /// Deletes the Kokoro voices' stored model, about 410 MB, if no Kokoro voice has been chosen
     /// for a day. Choosing one again downloads it again. Without a record of when the last one
     /// was unchosen (a model downloaded by an earlier version), the day starts now. Does nothing
     /// while a Kokoro voice is chosen or the model is loading. For the app to call at launch,

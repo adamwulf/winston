@@ -131,7 +131,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 335 MB. Until it's ready, the best system voice speaks. The model is removed after a day without a Kokoro voice.")
+                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 410 MB. Until it's ready, the best system voice speaks. The model is removed after a day without a Kokoro voice.")
                 }
             }
             Section {
@@ -230,7 +230,7 @@ struct SettingsView: View {
     private var kokoroModelStatus: some View {
         switch model.voiceLoop.kokoroModelState {
         case .notLoaded:
-            Text("About 335 MB")
+            Text("About 410 MB")
         case .loading, .downloading(progress: 1...):
             HStack {
                 ProgressView()

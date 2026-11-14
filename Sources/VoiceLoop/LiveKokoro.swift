@@ -5,12 +5,17 @@ import Logging
 import LogSupport
 
 // The real Kokoro engine behind `KokoroEngine`: speech-swift's KokoroTTS. Like
-// `LiveVoiceEnvironment.swift`, the unit tests don't run this file: it downloads a 335 MB model.
+// `LiveVoiceEnvironment.swift`, the unit tests don't run this file: it downloads a 410 MB model.
 // `KokoroRealModelTests` runs it when the model has already been downloaded.
+//
+// The model is FluidAudio's 15 s end-to-end Kokoro graph, which renders a sentence of up to about
+// 200 phoneme tokens in one pass, so the tone of voice doesn't reset partway through a sentence.
+// It has no speed input: every speed renders at speed 1. The 5 s model used before, in the
+// `Kokoro-82M-CoreML` folder next to this one, is left where it is.
 
 /// speech-swift's `KokoroTTSModel`, downloaded into `directory` and loaded there. The model isn't
 /// `Sendable`, so it stays inside this actor, which runs on a queue of its own: a sentence takes
-/// a few hundred milliseconds to render, too long to hold a Swift concurrency thread.
+/// about a second to render, too long to hold a Swift concurrency thread.
 package actor LiveKokoro: KokoroEngine {
     private static let log = Logger(label: "voice.kokoro.live")
 
@@ -29,14 +34,15 @@ package actor LiveKokoro: KokoroEngine {
         self.directory = directory
     }
 
-    /// The model's files, as KokoroTTS lays them out.
+    /// The model's files, as KokoroTTS lays them out. A folder of its own: KokoroTTS loads every
+    /// voice file it finds, and the old model's voices have a different format.
     private var modelFolder: URL {
-        directory.appending(path: "Kokoro-82M-CoreML", directoryHint: .isDirectory)
+        directory.appending(path: "Kokoro-82M-15s", directoryHint: .isDirectory)
     }
 
     /// Present once the model has downloaded completely and loaded.
     private var downloadedMarker: URL {
-        directory.appending(path: "Kokoro-82M-CoreML.downloaded", directoryHint: .notDirectory)
+        directory.appending(path: "Kokoro-82M-15s.downloaded", directoryHint: .notDirectory)
     }
 
     package func load(downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
@@ -73,6 +79,10 @@ package actor LiveKokoro: KokoroEngine {
         downloadProgress: (@Sendable (Double) -> Void)?
     ) async throws -> KokoroTTSModel {
         try await KokoroTTSModel.fromPretrained(
+            modelId: "FluidInference/kokoro-82m-coreml",
+            modelFile: "kokoro_21_15s",
+            // American and British English: the voices `KokoroCatalog` offers.
+            voiceFilter: ["a*", "b*"],
             cacheDir: folder,
             offlineMode: offline,
             // Not `.all`, the default: on macOS 27 compiling this model for the GPU aborts the

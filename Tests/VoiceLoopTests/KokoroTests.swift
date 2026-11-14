@@ -899,10 +899,10 @@ struct KokoroLanguageTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         // As a finished download leaves them, plus a file of someone else's.
-        let folder = directory.appending(path: "Kokoro-82M-CoreML", directoryHint: .isDirectory)
+        let folder = directory.appending(path: "Kokoro-82M-15s", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
-        try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.bin"))
-        try Data().write(to: directory.appending(path: "Kokoro-82M-CoreML.downloaded"))
+        try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.json"))
+        try Data().write(to: directory.appending(path: "Kokoro-82M-15s.downloaded"))
         try Data().write(to: directory.appending(path: "other"))
         let engine = LiveKokoro(directory: directory)
 
@@ -928,7 +928,7 @@ private let realModelDirectory: URL = {
 }()
 
 private let realModelIsDownloaded = FileManager.default.fileExists(
-    atPath: realModelDirectory.appending(path: "Kokoro-82M-CoreML.downloaded").path
+    atPath: realModelDirectory.appending(path: "Kokoro-82M-15s.downloaded").path
 )
 
 /// Passes everything to the real engine, and counts the samples it rendered that aren't silent.
@@ -962,7 +962,7 @@ private final class RecordingKokoro: KokoroEngine {
 }
 
 /// The real KokoroTTS model, with no network: skipped unless the model has already been
-/// downloaded (335 MB) into `realModelDirectory`.
+/// downloaded (410 MB) into `realModelDirectory`.
 @MainActor
 @Suite(
     .serialized,

@@ -53,7 +53,7 @@ can't see them.
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
-| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, and keeps track of whether its model is stored |
+| The Kokoro voices' 410 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, and keeps track of whether its model is stored |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -125,10 +125,14 @@ child process (logging bootstrap, the real `Library` folder) only run on macOS.
 
 ## Kokoro voices
 
-All the Kokoro voices share one model, about 335 MB. `LiveKokoro` downloads it
-into `<Application Support>/Kokoro/` the first time a Kokoro voice is chosen:
-the `Kokoro-82M-CoreML` folder, then a `Kokoro-82M-CoreML.downloaded` marker
-once the download is complete.
+All the Kokoro voices share one model, about 410 MB: FluidAudio's 15 s
+end-to-end Kokoro graph (`FluidInference/kokoro-82m-coreml`), with the American
+and British English voices. It renders a sentence of up to about 200 phoneme
+tokens in one pass, and has no speed input, so every speech rate speaks at
+speed 1. `LiveKokoro` downloads it into `<Application Support>/Kokoro/` the
+first time a Kokoro voice is chosen: the `Kokoro-82M-15s` folder, then a
+`Kokoro-82M-15s.downloaded` marker once the download is complete. The 5 s model
+used before, in the `Kokoro-82M-CoreML` folder, is no longer used or deleted.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so
