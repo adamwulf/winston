@@ -176,6 +176,7 @@ struct SendSeveralDocumentsTests {
         let sent = sentDocuments(of: harness)
         let copies = sent.map { URL(filePath: $0.path) }
         defer { copies.forEach { try? FileManager.default.removeItem(at: $0.deletingLastPathComponent()) } }
+        try #require(copies.count == 2)
         #expect(sent.map(\.chatID) == [1, 1])
         #expect(sent.map(\.caption) == ["This week's runs.", nil])
         #expect(copies.map(\.lastPathComponent) == ["monday report.txt", "tuesday.log"])
@@ -251,7 +252,7 @@ struct SendSeveralDocumentsTests {
         // Wednesday's was never tried.
         #expect(sent.map { URL(filePath: $0.path).lastPathComponent } == [files[0].lastPathComponent, files[1].lastPathComponent])
         #expect(sent.first?.caption == "This week's runs.")
-        let mondayCopy = URL(filePath: sent[0].path)
+        let mondayCopy = URL(filePath: try #require(sent.first).path)
         defer { try? FileManager.default.removeItem(at: mondayCopy.deletingLastPathComponent()) }
         #expect(model.errorMessage == "FILE_PARTS_INVALID")
         #expect(!model.isSendingAttachment)
