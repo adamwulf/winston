@@ -294,6 +294,12 @@ Inside it:
   temporary folder (the picker's access to it ends before TDLib's upload
   does) and sent as an `inputMessageDocument` with content type detection
   off, so it always arrives as a document.
+- On the Mac, files dragged from Finder onto the chat are sent straight away,
+  the same way, one message each in the order dropped, with what's typed as
+  the first one's caption (no caption in voice mode). The chat shows a "Drop to
+  Send" outline while files are over it. A folder isn't sent, and if any
+  dropped file can't be read, none of them is. Not on iOS: a drag from the
+  Files app carries the file's contents but not its URL.
 - Photos from the bot download with `downloadFile` and show inline.
 
 ### Login and settings

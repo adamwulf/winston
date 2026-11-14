@@ -8,6 +8,8 @@ struct ChatScreen: View {
     @State private var draft = ""
     #if os(iOS)
     @State private var showingSettings = false
+    #else
+    @State private var isDropTargeted = false
     #endif
 
     var body: some View {
@@ -49,6 +51,22 @@ struct ChatScreen: View {
                 .safeAreaInset(edge: .bottom) {
                     BottomBar(draft: $draft)
                 }
+                #if os(macOS)
+                // Files dropped from Finder anywhere on the chat are sent straight away, as from the
+                // + button. Mac only: DroppedFile imports a file's URL, which drags from the iOS Files
+                // app don't carry.
+                .dropDestination(for: DroppedFile.self, isEnabled: !model.isSendingAttachment) { files, _ in
+                    sendDropped(files)
+                }
+                .onDropSessionUpdated { session in
+                    isDropTargeted = session.phase == .entering || session.phase == .active
+                }
+                .overlay {
+                    if isDropTargeted {
+                        dropHighlight
+                    }
+                }
+                #endif
         } else if let error = model.chatsError {
             ContentUnavailableView {
                 Label("Couldn't Load Chats", systemImage: "exclamationmark.triangle")
@@ -73,6 +91,33 @@ struct ChatScreen: View {
             ProgressView()
         }
     }
+
+    #if os(macOS)
+    /// Sends dropped files with what's typed as the first one's caption, and clears the text field once
+    /// they're sent, unless Adam has typed something else meanwhile. In voice mode the text field is
+    /// hidden, so they go without a caption and the draft stays.
+    private func sendDropped(_ files: [DroppedFile]) {
+        let caption = model.isVoiceMode ? "" : draft
+        Task {
+            if await model.sendDroppedFiles(files, caption: caption), draft == caption {
+                draft = ""
+            }
+        }
+    }
+
+    private var dropHighlight: some View {
+        RoundedRectangle(cornerRadius: 12)
+            .strokeBorder(.tint, lineWidth: 3)
+            .overlay {
+                Label("Drop to Send", systemImage: "arrow.up.doc")
+                    .font(.title3)
+                    .padding()
+                    .background(.regularMaterial, in: .capsule)
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+    }
+    #endif
 
     @ViewBuilder
     private var chatPicker: some View {
