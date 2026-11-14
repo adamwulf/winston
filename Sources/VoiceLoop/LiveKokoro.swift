@@ -6,7 +6,8 @@ import LogSupport
 
 // The real Kokoro engine behind `KokoroEngine`: speech-swift's KokoroTTS. Like
 // `LiveVoiceEnvironment.swift`, the unit tests don't run this file: it downloads 325-410 MB a
-// model. `KokoroRealModelTests` runs it when FluidAudio's 15 s model has already been downloaded.
+// model. `KokoroRealModelTests` runs it when the default model, the original one, has already
+// been downloaded.
 
 /// speech-swift's `KokoroTTSModel`, downloaded into `directory` and loaded there, one
 /// `KokoroModelVariant` at a time. The model isn't `Sendable`, so it stays inside this actor, which
