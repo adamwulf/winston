@@ -11,30 +11,40 @@ import Observation
 // for a day, the stored models are deleted. The real engine is speech-swift's KokoroTTS; see
 // `LiveKokoro.swift`.
 
-/// Which Kokoro model speaks the Kokoro voices. Each downloads the first time it is used, and
-/// stays stored until the stored models are deleted, a day after the last Kokoro voice was
-/// unchosen.
+/// Which Kokoro model speaks the Kokoro voices: one of four end-to-end graphs, each rendering up to
+/// a fixed length of speech per pass. A longer sentence is cut into pieces, and the tone of voice
+/// resets at each cut; a pass costs the same however short the sentence. Each model downloads the
+/// first time it is used, and stays stored until the stored models are deleted, a day after the
+/// last Kokoro voice was unchosen.
 public enum KokoroModelVariant: String, CaseIterable, Sendable {
-    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass, so a long sentence is cut into
-    /// pieces, and the tone of voice resets at each cut. It speaks at every speed.
-    case fiveSecond = "5s"
-    /// FluidAudio's 15 s graph: about 200 tokens per pass, a whole sentence. A pass takes about
-    /// a second however short the sentence, and it speaks at speed 1 whatever the speech rate.
-    case fifteenSecond = "15s"
+    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass. The only one that speaks at
+    /// the speech rate (FluidAudio's graphs have no speed input, so they speak at normal speed),
+    /// and the only one whose voices are averaged rather than matched to each sentence's length.
+    case original = "5s"
+    /// FluidAudio's 5 s graph (7.3 s in fact): about 90 tokens per pass.
+    case fluidAudio5s = "fluid5s"
+    /// FluidAudio's 10 s graph: about 130 tokens per pass.
+    case fluidAudio10s = "fluid10s"
+    /// FluidAudio's 15 s graph: about 200 tokens per pass, a whole sentence. A pass takes about a
+    /// second on a Mac.
+    case fluidAudio15s = "15s"
 
     /// Its name in settings.
     public var name: String {
         switch self {
-        case .fiveSecond: "Original"
-        case .fifteenSecond: "Whole Sentences"
+        case .original: "Original 5 s"
+        case .fluidAudio5s: "FluidAudio 5 s"
+        case .fluidAudio10s: "FluidAudio 10 s"
+        case .fluidAudio15s: "FluidAudio 15 s"
         }
     }
 
-    /// About how much it downloads, in megabytes.
+    /// About how much it downloads when nothing is stored yet, in megabytes. FluidAudio's models
+    /// share their voices, so a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
-        case .fiveSecond: 335
-        case .fifteenSecond: 410
+        case .original: 335
+        case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
         }
     }
 }

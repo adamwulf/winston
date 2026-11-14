@@ -499,20 +499,20 @@ struct KokoroModelChoiceTests {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
         defer { loop.stop() }
-        #expect(loop.kokoroModelVariant == .fifteenSecond)
-        #expect(bed.kokoro.loadedModel == .fifteenSecond)
+        #expect(loop.kokoroModelVariant == .fluidAudio15s)
+        #expect(bed.kokoro.loadedModel == .fluidAudio15s)
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
 
         #expect(loop.kokoroModelState == .loading)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.fifteenSecond, .fiveSecond])
-        #expect(bed.kokoro.loadedModel == .fiveSecond)
+        #expect(bed.kokoro.loadedModels == [.fluidAudio15s, .original])
+        #expect(bed.kokoro.loadedModel == .original)
         _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
         #expect(bed.kokoro.requests.map(\.text) == ["Hi."])
 
         // Choosing the model already chosen loads nothing.
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
         try await settle()
         #expect(bed.kokoro.loads == 2)
         #expect(loop.kokoroModelState == .ready)
@@ -524,14 +524,14 @@ struct KokoroModelChoiceTests {
         defer { loop.stop() }
         bed.kokoro.loadBehavior = .waits
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
         #expect(await eventually { bed.kokoro.loads == 2 })
 
         #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
         #expect(bed.kokoro.requests.isEmpty)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModel == .fiveSecond)
+        #expect(bed.kokoro.loadedModel == .original)
     }
 
     @Test func aModelChosenWhileAnotherLoadsIsLoadedOnceThatOneFinishes() async throws {
@@ -541,7 +541,7 @@ struct KokoroModelChoiceTests {
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { bed.kokoro.loads == 1 })
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
         // The download carries on.
         #expect(loop.kokoroModelState == .loading)
         bed.kokoro.finishLoading(succeeding: true)
@@ -550,8 +550,8 @@ struct KokoroModelChoiceTests {
         #expect(loop.kokoroModelState == .loading)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.fifteenSecond, .fiveSecond])
-        #expect(bed.kokoro.loadedModel == .fiveSecond)
+        #expect(bed.kokoro.loadedModels == [.fluidAudio15s, .original])
+        #expect(bed.kokoro.loadedModel == .original)
     }
 
     @Test func aModelChosenWhileAnotherFailsToLoadIsTriedInstead() async throws {
@@ -561,7 +561,7 @@ struct KokoroModelChoiceTests {
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { bed.kokoro.loads == 1 })
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
         bed.kokoro.finishLoading(succeeding: false)
 
         // No failure shown: the model chosen now is loading.
@@ -569,7 +569,7 @@ struct KokoroModelChoiceTests {
         #expect(loop.kokoroModelState == .loading)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModel == .fiveSecond)
+        #expect(bed.kokoro.loadedModel == .original)
     }
 
     @Test func choosingTheOtherModelAfterAFailureTriesIt() async throws {
@@ -580,24 +580,24 @@ struct KokoroModelChoiceTests {
         #expect(await eventually { loop.kokoroModelState == .failed })
 
         bed.kokoro.loadBehavior = .succeeds
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
 
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.fifteenSecond, .fiveSecond])
+        #expect(bed.kokoro.loadedModels == [.fluidAudio15s, .original])
     }
 
     @Test func withASystemVoiceChosenTheNextKokoroVoiceLoadsTheChosenModel() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop()
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
         try await settle()
         #expect(bed.kokoro.loads == 0)
         #expect(loop.kokoroModelState == .notLoaded)
 
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.fiveSecond])
+        #expect(bed.kokoro.loadedModels == [.original])
     }
 }
 
@@ -1009,12 +1009,16 @@ struct KokoroLanguageTests {
     @Test func removingTheStoredModelsDeletesEachFolderAndMarkerAndNothingElse() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        // As finished downloads of both models leave them, plus a file of someone else's.
+        // As finished downloads of every model leave them: the original model's folder, and
+        // FluidAudio's folder shared by its three models, each with its marker. Plus a file of
+        // someone else's.
         for name in ["Kokoro-82M-CoreML", "Kokoro-82M-15s"] {
             let folder = directory.appending(path: name, directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
             try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.json"))
-            try Data().write(to: directory.appending(path: "\(name).downloaded"))
+        }
+        for marker in ["Kokoro-82M-CoreML", "Kokoro-82M-15s", "Kokoro-82M-15s.kokoro_21_10s", "Kokoro-82M-15s.kokoro_21_5s"] {
+            try Data().write(to: directory.appending(path: "\(marker).downloaded"))
         }
         try Data().write(to: directory.appending(path: "other"))
         let engine = LiveKokoro(directory: directory)
@@ -1044,10 +1048,16 @@ private let realModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-15s.downloaded").path
 )
 
-/// Whether the 5 s model has been downloaded too (335 MB), next to the 15 s one.
+/// Whether the original 5 s model has been downloaded too (335 MB), next to the 15 s one.
 private let realFiveSecondModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-CoreML.downloaded").path
 )
+
+/// Whether FluidAudio's 10 s and 5 s models have been downloaded too (325 MB each), into the 15 s
+/// model's folder.
+private let realFluidAudioModelsAreDownloaded = ["Kokoro-82M-15s.kokoro_21_10s", "Kokoro-82M-15s.kokoro_21_5s"].allSatisfy {
+    FileManager.default.fileExists(atPath: realModelDirectory.appending(path: "\($0).downloaded").path)
+}
 
 /// Passes everything to the real engine, and counts the samples it rendered that aren't silent.
 private final class RecordingKokoro: KokoroEngine {
@@ -1134,12 +1144,34 @@ struct KokoroRealModelTests {
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
 
-        loop.kokoroModelVariant = .fiveSecond
+        loop.kokoroModelVariant = .original
 
         #expect(loop.kokoroModelState == .loading)
         #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
         loop.speak("Hello from the original model.")
         #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
         #expect(kokoro.audibleSamples > 24_000)
+    }
+
+    @Test(.enabled(if: realFluidAudioModelsAreDownloaded, "FluidAudio's 10 s and 5 s models haven't been downloaded"))
+    func fluidAudiosOtherModelsSpeakFromTheSharedFolder() async throws {
+        let bed = VoiceTestBed()
+        let kokoro = RecordingKokoro(LiveKokoro(directory: realModelDirectory))
+        var environment = bed.environment
+        environment.kokoro = kokoro
+        let loop = VoiceLoop(environment: environment)
+        loop.pauseThreshold = .milliseconds(50)
+        try await loop.start()
+        defer { loop.stop() }
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        for variant in [KokoroModelVariant.fluidAudio10s, .fluidAudio5s] {
+            let before = kokoro.audibleSamples
+            loop.kokoroModelVariant = variant
+            #expect(await eventually(timeout: .seconds(60)) { loop.kokoroModelState == .ready })
+            loop.speak("Hello from \(variant.name).")
+            #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
+            #expect(kokoro.audibleSamples - before > 24_000)
+        }
     }
 }

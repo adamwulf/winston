@@ -136,7 +136,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. Original cuts long sentences into pieces. Whole Sentences speaks each sentence in one piece, but takes longer to start and speaks only at normal speed. The models are removed after a day without a Kokoro voice.")
+                    Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
                 }
             }
             Section {

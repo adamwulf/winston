@@ -128,21 +128,28 @@ child process (logging bootstrap, the real `Library` folder) only run on macOS.
 All the Kokoro voices share one model, chosen in settings
 (`KokoroModelVariant`):
 
-| Model | Source | Size | Folder |
-|---|---|---|---|
-| Whole Sentences (the default) | FluidAudio's 15 s graph, `FluidInference/kokoro-82m-coreml`, with the American and British English voices | about 410 MB | `Kokoro-82M-15s` |
-| Original | speech-swift's 5 s graph, `aufklarer/Kokoro-82M-CoreML` | about 335 MB | `Kokoro-82M-CoreML` |
+| Model | Graph | Tokens per pass | First audio (Mac) | Marker |
+|---|---|---|---|---|
+| Original 5 s | speech-swift's `kokoro_5s`, `aufklarer/Kokoro-82M-CoreML` | about 56 | 0.4 s | `Kokoro-82M-CoreML.downloaded` |
+| FluidAudio 5 s | `kokoro_21_5s` (7.3 s), `FluidInference/kokoro-82m-coreml` | about 90 | 0.5 s | `Kokoro-82M-15s.kokoro_21_5s.downloaded` |
+| FluidAudio 10 s | `kokoro_21_10s` | about 130 | 0.9 s | `Kokoro-82M-15s.kokoro_21_10s.downloaded` |
+| FluidAudio 15 s (the default) | `kokoro_21_15s` | about 200 | 1.3 s | `Kokoro-82M-15s.downloaded` |
 
-Whole Sentences renders a sentence of up to about 200 phoneme tokens in one
-pass, but each pass takes about a second however short the sentence, and it
-has no speed input, so every speech rate speaks at speed 1. Original renders
-about 56 tokens per pass, so a long sentence is cut into pieces and its tone of
-voice resets at each cut.
+Each graph renders up to a fixed length of speech per pass, and a pass costs
+the same however short the sentence (the first-audio times are for a short
+sentence). A sentence longer than a pass is cut into pieces, and its tone of
+voice resets at each cut. FluidAudio's graphs have no speed input, so every
+speech rate speaks at speed 1 with them, and they use the voice matched to each
+piece's length, where Original uses an average of them.
 
 `LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
-the first time a Kokoro voice uses it: its folder, then a `<folder>.downloaded`
-marker once the download is complete. Choosing the other model while a Kokoro
-voice is chosen loads it in place of the first, which stays stored.
+the first time a Kokoro voice uses it, then writes its marker there once the
+download is complete. Original is stored in the `Kokoro-82M-CoreML` folder,
+about 335 MB. FluidAudio's models share the `Kokoro-82M-15s` folder (named when
+it held only the 15 s model) with their American and British English voices:
+about 410 MB for the first, 325 MB for each one after. Choosing another model
+while a Kokoro voice is chosen loads it in place of the first, which stays
+stored.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so
