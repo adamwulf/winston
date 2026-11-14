@@ -44,6 +44,21 @@ struct CopyForSendingTests {
         #expect(try Data(contentsOf: secondCopy) == Data("Tuesday".utf8))
     }
 
+    @Test func removingACopyRemovesItsFolderAndLeavesTheOriginal() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let report = folder.appending(path: "report.txt")
+        try Data("Monday".utf8).write(to: report)
+        let copy = try await DocumentFiles.copyForSending(from: report)
+        let copyFolder = copy.deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: copyFolder) }
+
+        DocumentFiles.removeCopy(copy)
+
+        #expect(!FileManager.default.fileExists(atPath: copyFolder.path(percentEncoded: false)))
+        #expect(try Data(contentsOf: report) == Data("Monday".utf8))
+    }
+
     @Test func aMissingFileThrows() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }

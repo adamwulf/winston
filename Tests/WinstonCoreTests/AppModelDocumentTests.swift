@@ -90,7 +90,7 @@ struct SendDocumentTests {
         #expect(harness.fake.requests.count == requests)
     }
 
-    @Test func aDocumentTDLibRefusesShowsTheError() async throws {
+    @Test func aDocumentTDLibRefusesShowsTheErrorAndRemovesTheCopy() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let report = folder.appending(path: "nightly-report.txt")
@@ -103,9 +103,13 @@ struct SendDocumentTests {
         #expect(await model.sendDocument(caption: "", fileURL: report) == false)
 
         let sent = try #require(lastSentDocument(of: harness))
-        try? FileManager.default.removeItem(at: URL(filePath: sent.path).deletingLastPathComponent())
+        let copyFolder = URL(filePath: sent.path).deletingLastPathComponent()
+        defer { try? FileManager.default.removeItem(at: copyFolder) }
         #expect(model.errorMessage == "FILE_PARTS_INVALID")
         #expect(!model.isSendingAttachment)
+        // Nothing will upload it, so the copy and its folder are gone; the picked file stays.
+        #expect(!FileManager.default.fileExists(atPath: copyFolder.path(percentEncoded: false)))
+        #expect(FileManager.default.fileExists(atPath: report.path(percentEncoded: false)))
     }
 
     @Test func withNoChatChosenNothingIsSent() async throws {

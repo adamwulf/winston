@@ -381,7 +381,7 @@ public final class AppModel {
         currentChat.map { typingChats.contains($0.id) } ?? false
     }
 
-    /// The bot's latest message in the current chat, which the 👍 button reacts to.
+    /// The bot's latest message in the current chat.
     public var latestIncomingMessage: ChatMessage? {
         currentMessages.last { !$0.isOutgoing }
     }
@@ -542,7 +542,13 @@ public final class AppModel {
             // TDLib uploads after sendDocument returns, and the sent message's document can keep pointing at
             // this copy, so it stays in the temporary directory for the system to clean up.
             let copy = try await DocumentFiles.copyForSending(from: fileURL)
-            try await link.sendDocument(fileURL: copy, caption: caption.isEmpty ? nil : caption, to: chat.id)
+            do {
+                try await link.sendDocument(fileURL: copy, caption: caption.isEmpty ? nil : caption, to: chat.id)
+            } catch {
+                // TDLib turned it down, so nothing will upload the copy, which can be large.
+                DocumentFiles.removeCopy(copy)
+                throw error
+            }
             return true
         } catch {
             // Codes only: a file error's description names the file, and a TDLib upload error's
