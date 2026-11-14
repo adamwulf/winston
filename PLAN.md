@@ -298,8 +298,10 @@ Inside it:
   the same way, one message each in the order dropped, with what's typed as
   the first one's caption (no caption in voice mode). The chat shows a "Drop to
   Send" outline while files are over it. A folder isn't sent, and if any
-  dropped file can't be read, none of them is. Not on iOS: a drag from the
-  Files app carries the file's contents but not its URL.
+  dropped file can't be read, none of them is. If Telegram turns one down, the
+  ones after it aren't sent; the caption still counts as sent once the first
+  one is. Not on iOS: a drag from the Files app carries the file's contents
+  but not its URL.
 - Photos from the bot download with `downloadFile` and show inline.
 
 ### Login and settings

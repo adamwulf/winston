@@ -42,7 +42,7 @@ struct WithoutSessionTests {
             return nil
         } == false)
         #expect(!loaded)
-        #expect(await model.sendDocument(caption: "", fileURL: URL(filePath: "/tmp/winston-tests/none.txt")) == false)
+        #expect(await model.sendDocuments(caption: "", fileURLs: [URL(filePath: "/tmp/winston-tests/none.txt")]) == false)
         await #expect(throws: TelegramLinkError.notStarted) {
             try await model.download(FileRef(id: 7, localPath: nil))
         }

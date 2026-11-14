@@ -53,10 +53,12 @@ struct ChatScreen: View {
                 }
                 #if os(macOS)
                 // Files dropped from Finder anywhere on the chat are sent straight away, as from the
-                // + button. Mac only: DroppedFile imports a file's URL, which drags from the iOS Files
-                // app don't carry.
-                .dropDestination(for: DroppedFile.self, isEnabled: !model.isSendingAttachment) { files, _ in
-                    sendDropped(files)
+                // + button. Each arrives as its URL, which keeps the file's name and, like the file
+                // picker's, gives access to it until the copy is made. Mac only: drags from the iOS
+                // Files app carry the file's contents, not its URL. (A folder or a web link arrives as
+                // a URL too, and sendDocuments says why it can't send it.)
+                .dropDestination(for: URL.self, isEnabled: !model.isSendingAttachment) { fileURLs, _ in
+                    sendDropped(fileURLs)
                 }
                 .onDropSessionUpdated { session in
                     isDropTargeted = session.phase == .entering || session.phase == .active
@@ -93,14 +95,14 @@ struct ChatScreen: View {
     }
 
     #if os(macOS)
-    /// Sends dropped files with what's typed as the first one's caption, and clears the text field once
-    /// they're sent, unless Adam has typed something else meanwhile. In voice mode the text field is
-    /// hidden, so they go without a caption and the draft stays.
-    private func sendDropped(_ files: [DroppedFile]) {
-        let caption = model.isVoiceMode ? "" : draft
-        Task {
-            if await model.sendDroppedFiles(files, caption: caption), draft == caption {
-                draft = ""
+    /// Sends dropped files with what's typed as the first one's caption, as the + button does. In voice
+    /// mode the text field is hidden, so they go without a caption and the draft stays.
+    private func sendDropped(_ fileURLs: [URL]) {
+        if model.isVoiceMode {
+            Task { await model.sendDocuments(caption: "", fileURLs: fileURLs) }
+        } else {
+            $draft.sendAsCaption { caption in
+                await model.sendDocuments(caption: caption, fileURLs: fileURLs)
             }
         }
     }
