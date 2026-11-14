@@ -67,6 +67,12 @@ struct ReactionAndReadTests {
 
         #expect(await eventually { harness.fake.isWaiting(on: .addMessageReaction) })
         #expect(model.addedThumbsUp == nil)
+        // An update to the message without Adam's 👍 yet, such as the bot's 👀, isn't it.
+        try harness.fake.botReacts("👀", to: 11, in: 1)
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👀", count: 1, isChosen: false)]
+        })
+        #expect(model.addedThumbsUp == nil)
         // TDLib's update can arrive before the request returns. An update showing Adam's 👍 while
         // the request is still held stands in for it.
         try harness.fake.adamReactsInAnotherApp("👍", to: 11, in: 1)
@@ -77,7 +83,7 @@ struct ReactionAndReadTests {
         await toggle.value
     }
 
-    @Test func eachThumbsUpAdamAddsIsScrolledToButRemovingOneIsNot() async throws {
+    @Test func eachThumbsUpAdamAddsIsScrolledToOnceButRemovingOneIsNot() async throws {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
         let model = harness.model
@@ -86,8 +92,17 @@ struct ReactionAndReadTests {
         #expect(await eventually { model.addedThumbsUp != nil })
         let first = try #require(model.addedThumbsUp)
 
+        // A later change to the message, with Adam's 👍 still on it, isn't scrolled to again.
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 2, isChosen: true)]
+        })
+        #expect(model.addedThumbsUp == first)
+
         await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
-        #expect(await eventually { model.latestIncomingMessage?.reactions == [] })
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
+        })
         #expect(model.addedThumbsUp == first)
 
         // Adding it back is a change the message list sees, though the message is the same.
