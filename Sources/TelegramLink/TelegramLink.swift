@@ -198,6 +198,23 @@ public actor TelegramLink {
         try await send(content, to: chat)
     }
 
+    /// Sends a local file as a document, named as the file is. TDLib uploads it after this
+    /// returns, so leave the file in place until `.sendSucceeded` or `.sendFailed` arrives for the
+    /// message. It always arrives as a document: TDLib doesn't turn a video or song into a video or
+    /// audio message, which the app couldn't show.
+    public func sendDocument(fileURL: URL, caption: String?, to chat: ChatID) async throws {
+        let document = InputDocument(
+            disableContentTypeDetection: true,
+            document: .inputFileLocal(InputFileLocal(path: fileURL.path(percentEncoded: false))),
+            thumbnail: nil
+        )
+        let content = InputMessageContent.inputMessageDocument(InputMessageDocument(
+            caption: caption.map { FormattedText(entities: [], text: $0) },
+            document: document
+        ))
+        try await send(content, to: chat)
+    }
+
     /// Adds `emoji` to the message if Adam hasn't reacted with it, otherwise removes it.
     public func toggleReaction(_ emoji: String, on message: MessageID, in chat: ChatID) async throws {
         try await perform { client in

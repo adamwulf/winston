@@ -148,6 +148,9 @@ struct LoginTests {
             try await link.sendPhoto(fileURL: URL(filePath: "/tmp/winston-tests/none.png"), caption: nil, to: chat)
         }
         await #expect(throws: TelegramLinkError.notStarted) {
+            try await link.sendDocument(fileURL: URL(filePath: "/tmp/winston-tests/none.txt"), caption: nil, to: chat)
+        }
+        await #expect(throws: TelegramLinkError.notStarted) {
             try await link.toggleReaction("👍", on: MessageID(1), in: chat)
         }
         await #expect(throws: TelegramLinkError.notStarted) {
@@ -431,6 +434,57 @@ struct SendingTests {
             caption: "notes",
             width: 0,
             height: 0
+        ))
+    }
+
+    @Test func sendDocumentPassesTheFileAndTheCaptionAndKeepsItADocument() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let report = folder.appending(path: "nightly-report.txt")
+        try Data("All 214 tests passed.".utf8).write(to: report)
+        let session = Session()
+        session.fake.addBotChat(id: 5, title: "Home", username: "home_bot")
+        try await session.startAndLogIn()
+
+        try await session.link.sendDocument(fileURL: report, caption: "last night's run", to: ChatID(5))
+
+        let path = report.path(percentEncoded: false)
+        #expect(session.fake.requests.last == .sendDocument(
+            chatID: 5,
+            path: path,
+            caption: "last night's run",
+            disableContentTypeDetection: true
+        ))
+        guard case .newMessage(let pending) = await session.nextEvent() else {
+            Issue.record("expected the pending document as a new message")
+            return
+        }
+        #expect(pending.text == "last night's run")
+        #expect(pending.attachment == .document(
+            FileRef(id: 1, localPath: path),
+            fileName: "nightly-report.txt",
+            mimeType: "",
+            size: 0
+        ))
+        #expect(pending.sendState == .pending)
+    }
+
+    @Test func sendDocumentWithoutCaptionSendsNoCaption() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let report = folder.appending(path: "nightly-report.txt")
+        try Data("All 214 tests passed.".utf8).write(to: report)
+        let session = Session()
+        session.fake.addBotChat(id: 5, title: "Home", username: "home_bot")
+        try await session.startAndLogIn()
+
+        try await session.link.sendDocument(fileURL: report, caption: nil, to: ChatID(5))
+
+        #expect(session.fake.requests.last == .sendDocument(
+            chatID: 5,
+            path: report.path(percentEncoded: false),
+            caption: nil,
+            disableContentTypeDetection: true
         ))
     }
 }

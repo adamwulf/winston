@@ -7,7 +7,8 @@ mode and a hands-free voice mode. See [PLAN.md](PLAN.md) for the design.
 
 - `Package.swift`: library targets `TelegramLink` (TDLibKit wrapper),
   `VoiceLoop` (listening, pause detection, speech, barge-in) and `WinstonCore`
-  (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`), plus
+  (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`,
+  `DocumentFiles`), plus
   their tests. `LogSupport` and `WinstonLogging` hold the logging (see
   [Logging](#logging)).
 - `App/Winston.xcodeproj`: the multiplatform SwiftUI app (iOS 26+, macOS 26+).
