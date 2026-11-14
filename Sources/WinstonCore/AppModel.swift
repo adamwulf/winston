@@ -575,21 +575,36 @@ public final class AppModel {
     }
 
     private func speak(_ message: ChatMessage) {
-        let label: String? = switch message.attachment {
-        case nil: nil
-        case .photo: "Photo"
-        case .document(_, let fileName, _, _): "File: \(fileName)"
-        }
-        let text = [label, message.text]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-            .joined(separator: ". ")
+        let text = message.spokenText
         guard !text.isEmpty else { return }
         voiceLoop.speak(text)
+    }
+
+    /// Says `message` again, for the message list's Speak menu item: in the chosen voice, Kokoro model,
+    /// speed and pitch, cutting off whatever was being said, with voice mode on or off, as a voice preview
+    /// does. A Kokoro voice whose model isn't ready yet speaks with the system voice, as a reply would.
+    public func readAloud(_ message: ChatMessage) {
+        let text = message.spokenText
+        guard !text.isEmpty else { return }
+        voiceLoop.preview(text)
     }
 }
 
 extension ChatMessage {
+    /// What voice mode says for this message: its attachment, if any ("Photo", or "File: " and its
+    /// name), then its text. Empty for a message with neither.
+    public var spokenText: String {
+        let label: String? = switch attachment {
+        case nil: nil
+        case .photo: "Photo"
+        case .document(_, let fileName, _, _): "File: \(fileName)"
+        }
+        return [label, text]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: ". ")
+    }
+
     /// Whether Adam's own 👍 is on this message: what `AppModel.toggleThumbsUp(on:)` flips.
     public var hasMyThumbsUp: Bool {
         reactions.contains { $0.emoji == "👍" && $0.isChosen }

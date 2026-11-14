@@ -424,8 +424,9 @@ public final class VoiceLoop {
         silence(consumingEcho: true, reason: "stopped")
     }
 
-    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings, cutting off
-    /// an earlier preview. While the loop is running it also stops any reply being spoken and
+    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings or
+    /// hearing a message again, cutting off an earlier preview. Strips markdown/code first, as
+    /// `speak(_:)` does. While the loop is running it also stops any reply being spoken and
     /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
     /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker
     /// on an engine of its own. Like a reply, it uses the system voice for a Kokoro voice whose
@@ -439,6 +440,8 @@ public final class VoiceLoop {
             speak(text)
             return
         }
+        let text = SpokenText.speakable(text)
+        guard !text.isEmpty else { return }
         let playback: SpeechPlayback
         do {
             playback = try previewPlayer.play(pitch: speechPitch)

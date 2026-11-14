@@ -243,6 +243,72 @@ struct VoiceModeTests {
     }
 }
 
+/// The message list's Speak item: a message said again in the chosen voice and model.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReadAloudTests {
+    @Test func outsideVoiceModeAMessageIsSaidAgainInTheChosenKokoroVoiceWithoutItsMarkdown() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "**Done.** Two jobs left."))
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(12) })
+        let message = try #require(model.currentMessages.last)
+
+        model.readAloud(message)
+
+        // The preview player's own engine plays it, and stops once it has played.
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.audio.playedFrames > 0)
+        #expect(harness.bed.kokoro.requests == [
+            FakeKokoro.Request(text: "Done.", voice: "af_heart", speed: 1),
+            FakeKokoro.Request(text: "Two jobs left.", voice: "af_heart", speed: 1),
+        ])
+    }
+
+    @Test func inVoiceModeAMessageIsSaidAgainThroughTheLoop() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        await model.setVoiceMode(true)
+        let message = try #require(model.currentMessages.first { $0.id == MessageID(11) })
+
+        model.readAloud(message)
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["Two jobs are queued."])
+    }
+
+    @Test func aPhotoIsSaidAgainAsAnnouncedAndAnEmptyMessageNotAtAll() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        harness.fake.receive(photoMessage(id: 12, chatID: 1, sizes: []))
+        harness.fake.receive(photoMessage(id: 13, chatID: 1, sizes: [photoSize(fileID: 5, width: 1280, height: 960)]))
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(13) })
+        let empty = try #require(model.currentMessages.first { $0.id == MessageID(12) })
+        let photo = try #require(model.currentMessages.last)
+
+        model.readAloud(empty)
+        #expect(harness.bed.audio.engines.isEmpty)
+        model.readAloud(photo)
+
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["Photo"])
+    }
+}
+
 /// Which of the bot's messages voice mode reads out.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))

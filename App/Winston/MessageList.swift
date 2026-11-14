@@ -89,6 +89,12 @@ struct MessageRow: View {
                     Task { await model.toggleThumbsUp(on: message) }
                 }
             }
+            // Says it again in the chosen voice and model, to compare them after changing settings.
+            if !message.spokenText.isEmpty {
+                Button("Speak", systemImage: "speaker.wave.2") {
+                    model.readAloud(message)
+                }
+            }
         }
     }
 
