@@ -52,7 +52,8 @@ public final class AppModel {
     @ObservationIgnored private var thumbsUpBeingAdded: (chat: ChatID, message: MessageID)?
     public private(set) var downloadedFiles: [Int32: URL] = [:]
     public private(set) var downloadingFiles: Set<Int32> = []
-    public private(set) var isSendingPhoto = false
+    /// True while a picked photo or file is being prepared and handed to TDLib.
+    public private(set) var isSendingAttachment = false
 
     public private(set) var isVoiceMode = false
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
@@ -511,8 +512,8 @@ public final class AppModel {
     /// returns nil when the photo can't be read. Returns false and sets `errorMessage` on failure.
     public func sendPhoto(caption: String, loadData: () async throws -> Data?) async -> Bool {
         guard let link, let chat = currentChat else { return false }
-        isSendingPhoto = true
-        defer { isSendingPhoto = false }
+        isSendingAttachment = true
+        defer { isSendingAttachment = false }
         do {
             guard let data = try await loadData() else {
                 throw PhotoFiles.Failure.unreadableImage
@@ -526,6 +527,27 @@ public final class AppModel {
             // Codes only: a picked photo's load error can name the file, and a TDLib upload error's
             // message can hold the local path.
             Self.log.error("sending photo failed", error.tdlibLogCodes(["chatID": chat.id.description]))
+            errorMessage = userMessage(for: error)
+            return false
+        }
+    }
+
+    /// Sends a picked file as a document, under its own name, with an optional caption. `fileURL` is
+    /// the file picker's URL for it. Returns false and sets `errorMessage` on failure.
+    public func sendDocument(caption: String, fileURL: URL) async -> Bool {
+        guard let link, let chat = currentChat else { return false }
+        isSendingAttachment = true
+        defer { isSendingAttachment = false }
+        do {
+            // TDLib uploads after sendDocument returns, and the sent message's document can keep pointing at
+            // this copy, so it stays in the temporary directory for the system to clean up.
+            let copy = try await DocumentFiles.copyForSending(from: fileURL)
+            try await link.sendDocument(fileURL: copy, caption: caption.isEmpty ? nil : caption, to: chat.id)
+            return true
+        } catch {
+            // Codes only: a file error's description names the file, and a TDLib upload error's
+            // message can hold the local path.
+            Self.log.error("sending document failed", error.tdlibLogCodes(["chatID": chat.id.description]))
             errorMessage = userMessage(for: error)
             return false
         }

@@ -1,14 +1,24 @@
+#if os(iOS)
 import PhotosUI
+#endif
 import SwiftUI
+import UniformTypeIdentifiers
 import VoiceLoop
 import WinstonCore
+import WinstonLogging
 
-/// The bar under the messages: a text field and photo button in text mode, or the live transcript in
-/// voice mode, with the 👍 button and the voice/text toggle to their left in both.
+/// The bar under the messages: a text field with a + button for files and photos in text mode, or the
+/// live transcript in voice mode, with the voice/text toggle to their left in both. (Double-tapping a
+/// message toggles 👍 on it.)
 struct BottomBar: View {
+    private static let log = Logger(label: "app.attach")
     @Environment(AppModel.self) private var model
     @Binding var draft: String
+    @State private var isPickingFile = false
+    #if os(iOS)
+    @State private var isPickingPhoto = false
     @State private var photoItem: PhotosPickerItem?
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -21,7 +31,6 @@ struct BottomBar: View {
                 .accessibilityHidden(!model.isBotTyping)
             HStack(spacing: 12) {
                 // On the left, so Send is the only button to the right of the text field.
-                thumbsUpButton
                 modeToggle
                 if model.isVoiceMode {
                     voiceControls
@@ -40,31 +49,23 @@ struct BottomBar: View {
 
     @ViewBuilder
     private var textControls: some View {
-        // PhotosPicker's label closure is Sendable, so it can't read the main-actor model.
-        let isSendingPhoto = model.isSendingPhoto
-        PhotosPicker(selection: $photoItem, matching: .images) {
-            if isSendingPhoto {
-                ProgressView()
-                    .controlSize(.small)
-            } else {
-                Image(systemName: "photo")
-            }
-        }
-        .accessibilityLabel("Send Photo")
-        .disabled(model.isSendingPhoto)
-        .onChange(of: photoItem) {
-            guard let item = photoItem else { return }
-            photoItem = nil
-            let caption = draft
-            Task {
-                let sent = await model.sendPhoto(caption: caption) {
-                    try await item.loadTransferable(type: Data.self)
-                }
-                if sent, draft == caption {
-                    draft = ""
+        attachButton
+            .accessibilityLabel("Attach")
+            .disabled(model.isSendingAttachment)
+            // Any file, but not a folder.
+            .fileImporter(isPresented: $isPickingFile, allowedContentTypes: [.data], onCompletion: sendFile)
+            #if os(iOS)
+            .photosPicker(isPresented: $isPickingPhoto, selection: $photoItem, matching: .images)
+            .onChange(of: photoItem) {
+                guard let item = photoItem else { return }
+                photoItem = nil
+                sendWithDraftAsCaption { caption in
+                    await model.sendPhoto(caption: caption) {
+                        try await item.loadTransferable(type: Data.self)
+                    }
                 }
             }
-        }
+            #endif
 
         TextField("Message", text: $draft, axis: .vertical)
             .lineLimit(1...5)
@@ -74,6 +75,59 @@ struct BottomBar: View {
         Button("Send", systemImage: "arrow.up.circle.fill", action: send)
             .labelStyle(.iconOnly)
             .disabled(!canSend)
+    }
+
+    /// The + button. The Mac opens the file picker straight away; iOS offers Files or Photos.
+    @ViewBuilder
+    private var attachButton: some View {
+        #if os(iOS)
+        Menu {
+            Button("Files", systemImage: "folder") { isPickingFile = true }
+            Button("Photos", systemImage: "photo.on.rectangle") { isPickingPhoto = true }
+        } label: {
+            attachLabel
+        }
+        #else
+        Button {
+            isPickingFile = true
+        } label: {
+            attachLabel
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var attachLabel: some View {
+        if model.isSendingAttachment {
+            ProgressView()
+                .controlSize(.small)
+        } else {
+            Image(systemName: "plus")
+        }
+    }
+
+    private func sendFile(_ result: Result<URL, any Error>) {
+        switch result {
+        case .success(let url):
+            sendWithDraftAsCaption { caption in
+                await model.sendDocument(caption: caption, fileURL: url)
+            }
+        case .failure(let error):
+            // Codes only: a file error's description can name the file.
+            Self.log.error("file picker failed", error.logCodes())
+            model.errorMessage = userMessage(for: error)
+        }
+    }
+
+    /// Sends an attachment with what's typed as its caption, and clears the text field once it's
+    /// sent, unless Adam has typed something else meanwhile.
+    private func sendWithDraftAsCaption(_ send: @escaping (String) async -> Bool) {
+        let caption = draft
+        Task {
+            if await send(caption), draft == caption {
+                draft = ""
+            }
+        }
     }
 
     private var canSend: Bool {
@@ -175,17 +229,6 @@ struct BottomBar: View {
     }
 
     // MARK: - Both modes
-
-    private var thumbsUpButton: some View {
-        let message = model.latestIncomingMessage
-        let isChosen = message?.hasMyThumbsUp ?? false
-        return Button("👍 Latest Message", systemImage: isChosen ? "hand.thumbsup.fill" : "hand.thumbsup") {
-            guard let message else { return }
-            Task { await model.toggleThumbsUp(on: message) }
-        }
-        .labelStyle(.iconOnly)
-        .disabled(message == nil)
-    }
 
     private var modeToggle: some View {
         Button(

@@ -26,6 +26,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case getMessage(chatID: Int64?, messageID: Int64?)
         case sendText(chatID: Int64?, text: String)
         case sendPhoto(chatID: Int64?, path: String, caption: String?, width: Int, height: Int)
+        case sendDocument(chatID: Int64?, path: String, caption: String?, disableContentTypeDetection: Bool)
         case addReaction(chatID: Int64?, messageID: Int64?, emoji: String)
         case removeReaction(chatID: Int64?, messageID: Int64?, emoji: String)
         case viewMessages(chatID: Int64?, messageIDs: [Int64]?, forceRead: Bool?)
@@ -499,8 +500,34 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
                 showCaptionAboveMedia: false,
                 video: nil
             ))
+        case .inputMessageDocument(let document):
+            var path = ""
+            if case .inputFileLocal(let local) = document.document.document {
+                path = local.path
+            }
+            try await begin(
+                .sendDocument(
+                    chatID: chatId,
+                    path: path,
+                    caption: document.caption?.text,
+                    disableContentTypeDetection: document.document.disableContentTypeDetection
+                ),
+                .sendMessage
+            )
+            // Like TDLib, named as the local file is. The fake doesn't read the file, so it has no
+            // size or MIME type.
+            content = .messageDocument(MessageDocument(
+                caption: document.caption ?? formatted(""),
+                document: Document(
+                    document: file(id: 1, downloadedPath: path),
+                    fileName: URL(filePath: path).lastPathComponent,
+                    mimeType: "",
+                    minithumbnail: nil,
+                    thumbnail: nil
+                )
+            ))
         default:
-            preconditionFailure("TelegramLink only sends text and photos")
+            preconditionFailure("TelegramLink only sends text, photos and documents")
         }
         let pending: Message = withState { state in
             state.nextTemporaryID += 1

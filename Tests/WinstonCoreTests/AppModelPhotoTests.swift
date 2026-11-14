@@ -34,10 +34,10 @@ struct SendPhotoTests {
         let send = Task { await model.sendPhoto(caption: "") { png } }
 
         #expect(await eventually { lastSentPhoto(of: harness) != nil })
-        #expect(model.isSendingPhoto)
+        #expect(model.isSendingAttachment)
         harness.fake.release(.sendMessage)
         #expect(await send.value)
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
 
         let sent = try #require(lastSentPhoto(of: harness))
         let jpeg = URL(filePath: sent.path)
@@ -80,7 +80,7 @@ struct SendPhotoTests {
         #expect(await model.sendPhoto(caption: "") { nil } == false)
 
         #expect(model.errorMessage == "Winston couldn't read that photo.")
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
         #expect(harness.fake.requests.count == requests)
     }
 
@@ -93,7 +93,7 @@ struct SendPhotoTests {
         #expect(await model.sendPhoto(caption: "") { Data("not an image".utf8) } == false)
 
         #expect(model.errorMessage == "Winston couldn't read that photo.")
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
         #expect(harness.fake.requests.count == requests)
     }
 
@@ -106,7 +106,7 @@ struct SendPhotoTests {
         #expect(await model.sendPhoto(caption: "") { throw PhotoLibraryUnavailable() } == false)
 
         #expect(model.errorMessage == "The photo library isn't available.")
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
         #expect(harness.fake.requests.count == requests)
     }
 
@@ -122,7 +122,7 @@ struct SendPhotoTests {
         let sent = try #require(lastSentPhoto(of: harness))
         try? FileManager.default.removeItem(at: URL(filePath: sent.path))
         #expect(model.errorMessage == "PHOTO_INVALID_DIMENSIONS")
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
     }
 
     @Test func withNoChatChosenThePhotoIsNotEvenLoaded() async throws {
@@ -139,7 +139,7 @@ struct SendPhotoTests {
 
         #expect(!sent)
         #expect(!loaded)
-        #expect(!model.isSendingPhoto)
+        #expect(!model.isSendingAttachment)
         #expect(model.errorMessage == nil)
         #expect(harness.fake.requests.count == requests)
     }

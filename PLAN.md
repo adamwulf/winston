@@ -143,6 +143,7 @@ public actor TelegramLink {
 
     public func sendText(_ text: String, to chat: ChatID) async throws
     public func sendPhoto(fileURL: URL, caption: String?, to chat: ChatID) async throws
+    public func sendDocument(fileURL: URL, caption: String?, to chat: ChatID) async throws
     public func toggleReaction(_ emoji: String, on message: MessageID, in chat: ChatID) async throws
     public func downloadFile(_ file: FileRef) async throws -> URL
     public func markRead(_ messages: [MessageID], in chat: ChatID) async throws
@@ -155,7 +156,7 @@ public struct ChatMessage {     // id, chatID, isOutgoing, date, text (plain Str
 
 The TDLib calls behind it are `setTdlibParameters`, the `setAuthentication*` /
 `checkAuthentication*` calls, `getChats`, `getChatHistory`, `sendMessage`
-(with `inputMessageText` or `inputMessagePhoto`), `addMessageReaction`,
+(with `inputMessageText`, `inputMessagePhoto` or `inputMessageDocument`), `addMessageReaction`,
 `removeMessageReaction`, `viewMessages` and `downloadFile`. The updates it
 handles are `updateAuthorizationState`, `updateNewMessage`,
 `updateMessageInteractionInfo` (reactions), `updateChatAction` (typing) and
@@ -216,7 +217,7 @@ Inside it:
   timeout.
 - Visible incoming messages are marked read, so Adam's other Telegram apps
   don't show stale unread badges.
-- The bottom bar has a text field, a photo button, a 👍 button and a
+- The bottom bar has a text field, a + button for files and photos, and a
   voice/text toggle. Typed messages are sent as-is, so slash commands like
   `/compact` still work in text mode.
 - There is no message editing, because the bots ignore edits.
@@ -268,11 +269,10 @@ Inside it:
 
 ### Reactions
 
-- **Outgoing:** the 👍 button toggles a 👍 on the bot's latest incoming message
-  with `addMessageReaction` / `removeMessageReaction`. Long-pressing any
-  message offers the same 👍 toggle, and double-tapping its bubble toggles
-  it directly. Once a 👍 Adam added shows, the message list scrolls just far
-  enough to show it above the bottom bar. The coordinator sees both adding and
+- **Outgoing:** double-tapping a message's bubble toggles a 👍 on it with
+  `addMessageReaction` / `removeMessageReaction`, and long-pressing it offers
+  the same toggle. Once a 👍 Adam added shows, the message list scrolls just
+  far enough to show it above the bottom bar. The coordinator sees both adding and
   removing a reaction, with a preview of the message text. No bot changes are
   needed.
 - **Incoming:** reactions the coordinator adds (`ib tgreact`) arrive as
@@ -280,13 +280,20 @@ Inside it:
   automatic 👀 "received" ack, so the app never waits for one. In voice mode,
   the coordinator's 👍 on a message in the current chat plays a short chime.
 
-### Photos
+### Photos and files
 
-- `PhotosPicker` lets Adam choose one photo per message, with an optional
-  caption. The image is exported to an upright temporary JPEG (at most
-  2560 px on the long side, well under Telegram's 10 MB photo limit) and sent
-  as an `inputMessagePhoto`. The coordinator receives
-  it as `[user sent photo: <path> (N KB)]` plus the caption.
+- The + button left of the text field attaches one file or photo per
+  message, with what's typed as its caption. On the Mac it opens the file
+  picker; on iOS it offers **Files** (the file picker) or **Photos** (the
+  photo picker).
+- A photo is exported to an upright temporary JPEG (at most 2560 px on the
+  long side, well under Telegram's 10 MB photo limit) and sent as an
+  `inputMessagePhoto`. The coordinator receives it as
+  `[user sent photo: <path> (N KB)]` plus the caption.
+- A file, an image file included, is copied under its own name into a
+  temporary folder (the picker's access to it ends before TDLib's upload
+  does) and sent as an `inputMessageDocument` with content type detection
+  off, so it always arrives as a document.
 - Photos from the bot download with `downloadFile` and show inline.
 
 ### Login and settings
@@ -430,8 +437,8 @@ Also needed before M1: an `api_id` and `api_hash` from my.telegram.org.
 - Push notifications while the app is closed. That needs a TDLib Notification
   Service Extension; the regular Telegram app stays installed for alerts.
 - Voice commands ("thumbs up" → 👍) and wake words.
-- Reaction emoji other than 👍, quote-replies, sending documents or voice
-  notes, and multi-photo albums.
+- Reaction emoji other than 👍, quote-replies, sending voice notes, and
+  multi-photo albums.
 - Any chats other than the two bot chats.
 - Special handling for the offline "(y/n)" prompt (Q9).
 - Any bot-side or itsybitsy changes.
