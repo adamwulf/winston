@@ -3,7 +3,7 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
@@ -118,7 +118,12 @@ struct SettingsView: View {
             }
             if voices.contains(where: { $0.engine == .kokoro }) {
                 Section {
-                    LabeledContent("Voice model") {
+                    Picker("Voice model", selection: $model.kokoroModelVariant) {
+                        ForEach(KokoroModelVariant.allCases, id: \.self) { variant in
+                            Text(variant.name).tag(variant)
+                        }
+                    }
+                    LabeledContent("Status") {
                         kokoroModelStatus
                     }
                     // Its own row, full width under the status, like the sliders under theirs.
@@ -131,8 +136,28 @@ struct SettingsView: View {
                 } header: {
                     Text("Kokoro Voices")
                 } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. The first time you pick one, their model downloads: about 335 MB. Until it's ready, the best system voice speaks. The model is removed after a day without a Kokoro voice.")
+                    Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
                 }
+            }
+            Section {
+                ForEach($model.pronunciations) { $pronunciation in
+                    PronunciationRow(pronunciation: $pronunciation) {
+                        // Read through the binding first: reading it while removeAll changes
+                        // the array it reads from is an exclusive access conflict.
+                        let id = pronunciation.id
+                        model.pronunciations.removeAll { $0.id == id }
+                    }
+                }
+                .onDelete { offsets in
+                    model.pronunciations.remove(atOffsets: offsets)
+                }
+                Button("Add Pronunciation") {
+                    model.pronunciations.append(Pronunciation())
+                }
+            } header: {
+                Text("Pronunciations")
+            } footer: {
+                Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
             }
             Section {
                 Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
@@ -223,14 +248,14 @@ struct SettingsView: View {
         }
     }
 
-    /// Where the Kokoro model is: its size before anything has asked for it, the download's
+    /// Where the chosen Kokoro model is: its size before anything has asked for it, the download's
     /// percentage (its progress bar is a row of its own), ready with a button that plays a
     /// sample, or failed with a retry.
     @ViewBuilder
     private var kokoroModelStatus: some View {
         switch model.voiceLoop.kokoroModelState {
         case .notLoaded:
-            Text("About 335 MB")
+            Text("About \(model.kokoroModelVariant.downloadMegabytes) MB")
         case .loading, .downloading(progress: 1...):
             HStack {
                 ProgressView()
@@ -267,5 +292,36 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// One pronunciation: the word, and what to say in its place. Both are typed exactly as written,
+/// since the word matches only with the same case. On iOS a row is removed by swiping it; on the
+/// Mac, with its remove button.
+private struct PronunciationRow: View {
+    @Binding var pronunciation: Pronunciation
+    let remove: () -> Void
+
+    var body: some View {
+        HStack {
+            TextField("Word", text: $pronunciation.word, prompt: Text("Word"))
+            Image(systemName: "arrow.right")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Say as", text: $pronunciation.replacement, prompt: Text("Say as"))
+            #if os(macOS)
+            Button(action: remove) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove")
+            .accessibilityLabel("Remove pronunciation")
+            #endif
+        }
+        .labelsHidden()
+        .autocorrectionDisabled()
+        #if os(iOS)
+        .textInputAutocapitalization(.never)
+        #endif
     }
 }

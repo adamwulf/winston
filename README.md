@@ -53,7 +53,7 @@ can't see them.
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
-| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, and keeps track of whether its model is stored |
+| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words the test gives it |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -125,22 +125,63 @@ child process (logging bootstrap, the real `Library` folder) only run on macOS.
 
 ## Kokoro voices
 
-All the Kokoro voices share one model, about 335 MB. `LiveKokoro` downloads it
-into `<Application Support>/Kokoro/` the first time a Kokoro voice is chosen:
-the `Kokoro-82M-CoreML` folder, then a `Kokoro-82M-CoreML.downloaded` marker
-once the download is complete.
+All the Kokoro voices share one model, chosen in settings
+(`KokoroModelVariant`):
+
+| Model | Graph | Tokens per pass | First audio (Mac) | Marker |
+|---|---|---|---|---|
+| Original 5 s (the default) | speech-swift's `kokoro_5s`, `aufklarer/Kokoro-82M-CoreML` | about 56 | 0.4 s | `Kokoro-82M-CoreML.downloaded` |
+| FluidAudio 5 s | `kokoro_21_5s` (7.3 s), `FluidInference/kokoro-82m-coreml` | about 90 | 0.5 s | `Kokoro-82M-15s.kokoro_21_5s.downloaded` |
+| FluidAudio 10 s | `kokoro_21_10s` | about 130 | 0.9 s | `Kokoro-82M-15s.kokoro_21_10s.downloaded` |
+| FluidAudio 15 s | `kokoro_21_15s` | about 200 | 1.3 s | `Kokoro-82M-15s.downloaded` |
+
+Each graph renders up to a fixed length of speech per pass, and a pass costs
+the same however short the sentence (the first-audio times are for a short
+sentence). A sentence longer than a pass is cut into pieces, and its tone of
+voice resets at each cut. FluidAudio's graphs have no speed input, so every
+speech rate speaks at speed 1 with them, and they use the voice matched to each
+piece's length, where Original uses an average of them.
+
+Original sounds best, and is the default. FluidAudio's graphs sound warbly:
+their exports run every LSTM over the padding as well as the text (soniqo's
+runs them packed, over the text only), so a short sentence, mostly padding,
+speaks about 1.5 times too fast with an unsteady pitch. Despite
+`.cpuAndNeuralEngine`, they run on the CPU.
+
+`LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
+the first time a Kokoro voice uses it, then writes its marker there once the
+download is complete. Original is stored in the `Kokoro-82M-CoreML` folder,
+about 335 MB. FluidAudio's models share the `Kokoro-82M-15s` folder (named when
+it held only the 15 s model) with their American and British English voices:
+about 410 MB for the first, 325 MB for each one after. Choosing another model
+while a Kokoro voice is chosen loads it in place of the first, which stays
+stored.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so
   `~/Library/Containers/com.milestonemade.winston/Data/Library/Application Support/Kokoro/`.
 
 Choosing a system voice frees the model's memory but keeps it stored. Once no
-Kokoro voice has been chosen for a day, the folder and the marker are deleted,
-and choosing a Kokoro voice again downloads the model again. `KokoroModel`
+Kokoro voice has been chosen for a day, every model's folder and marker are
+deleted, and choosing a Kokoro voice again downloads the chosen model again. `KokoroModel`
 records when the last Kokoro voice was unchosen in the standard user defaults,
 under `kokoroUnchosenSince`. `AppModel` checks it at launch and each time the
 app comes back to the foreground. A model with no record (downloaded before the
 record was kept) gets a day from the first check.
+
+KokoroTTS can't read digits, and reads an acronym its pronunciation dictionary
+doesn't have as if it were a word ("API" as "ay"), so the text Kokoro is given
+has numbers written as words (`KokoroNumbers`) and those acronyms spelled out a
+letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
+("NASA"), or a word in capitals for emphasis ("NOT"), stays as it is.
+`LiveKokoro` reads the dictionary's words from the loaded model's folder:
+`us_gold.json` and `us_silver.json`, the same files in both repositories.
+System voices get the text as written.
+
+Settings → Pronunciations lists words every voice says differently: each word,
+matched with its case and only as a whole word, is replaced before anything
+else, so "JSON" said as "Jason" isn't spelled out. `AppModel` saves them in the
+standard user defaults, under `pronunciations`.
 
 ## Logging
 

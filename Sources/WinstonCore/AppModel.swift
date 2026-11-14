@@ -15,9 +15,11 @@ private enum StorageKey {
     static let selectedChatID = "selectedChatID"
     static let pauseThreshold = "pauseThreshold"
     static let voiceIdentifier = "voiceIdentifier"
+    static let kokoroModelVariant = "kokoroModelVariant"
     static let speechRate = "speechRate"
     static let speechPitch = "speechPitch"
     static let pausesOtherAudio = "pausesOtherAudio"
+    static let pronunciations = "pronunciations"
 }
 
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
@@ -67,6 +69,13 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
+    /// Which Kokoro model speaks the Kokoro voices, as `VoiceLoop.kokoroModelVariant`. Persisted.
+    public var kokoroModelVariant: KokoroModelVariant {
+        didSet {
+            defaults.set(kokoroModelVariant.rawValue, forKey: StorageKey.kokoroModelVariant)
+            applyVoiceSettings()
+        }
+    }
     /// How fast replies are spoken, as a `VoiceLoop.speechRate`. Persisted.
     public var speechRate: Float {
         didSet {
@@ -85,6 +94,18 @@ public final class AppModel {
     public var pausesOtherAudio: Bool {
         didSet {
             defaults.set(pausesOtherAudio, forKey: StorageKey.pausesOtherAudio)
+            applyVoiceSettings()
+        }
+    }
+    /// Words every voice says differently, as `VoiceLoop.pronunciations`, in the order settings
+    /// lists them. Persisted.
+    public var pronunciations: [Pronunciation] {
+        didSet {
+            do {
+                defaults.set(try JSONEncoder().encode(pronunciations), forKey: StorageKey.pronunciations)
+            } catch {
+                Self.log.error("saving pronunciations failed", error.logCodes())
+            }
             applyVoiceSettings()
         }
     }
@@ -125,9 +146,12 @@ public final class AppModel {
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
+        kokoroModelVariant = defaults.string(forKey: StorageKey.kokoroModelVariant)
+            .flatMap(KokoroModelVariant.init(rawValue:)) ?? VoiceLoop.defaultKokoroModelVariant
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
+        pronunciations = Self.savedPronunciations(in: defaults)
         applyVoiceSettings()
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
@@ -159,10 +183,24 @@ public final class AppModel {
 
     private func applyVoiceSettings() {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
+        // Before the voice: choosing a Kokoro voice loads the model chosen by then.
+        voiceLoop.kokoroModelVariant = kokoroModelVariant
         voiceLoop.voiceIdentifier = voiceIdentifier
         voiceLoop.speechRate = speechRate
         voiceLoop.speechPitch = speechPitch
         voiceLoop.pausesOtherAudio = pausesOtherAudio
+        voiceLoop.pronunciations = pronunciations
+    }
+
+    /// The pronunciations saved in `defaults`, or none if there are none or they can't be read.
+    private static func savedPronunciations(in defaults: UserDefaults) -> [Pronunciation] {
+        guard let data = defaults.data(forKey: StorageKey.pronunciations) else { return [] }
+        do {
+            return try JSONDecoder().decode([Pronunciation].self, from: data)
+        } catch {
+            log.error("saved pronunciations unreadable; starting with none", error.logCodes())
+            return []
+        }
     }
 
     /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has
@@ -563,21 +601,36 @@ public final class AppModel {
     }
 
     private func speak(_ message: ChatMessage) {
-        let label: String? = switch message.attachment {
-        case nil: nil
-        case .photo: "Photo"
-        case .document(_, let fileName, _, _): "File: \(fileName)"
-        }
-        let text = [label, message.text]
-            .compactMap { $0 }
-            .filter { !$0.isEmpty }
-            .joined(separator: ". ")
+        let text = message.spokenText
         guard !text.isEmpty else { return }
         voiceLoop.speak(text)
+    }
+
+    /// Says `message` again, for the message list's Speak menu item: in the chosen voice, Kokoro model,
+    /// speed and pitch, cutting off whatever was being said, with voice mode on or off, as a voice preview
+    /// does. A Kokoro voice whose model isn't ready yet speaks with the system voice, as a reply would.
+    public func readAloud(_ message: ChatMessage) {
+        let text = message.spokenText
+        guard !text.isEmpty else { return }
+        voiceLoop.preview(text)
     }
 }
 
 extension ChatMessage {
+    /// What voice mode says for this message: its attachment, if any ("Photo", or "File: " and its
+    /// name), then its text. Empty for a message with neither.
+    public var spokenText: String {
+        let label: String? = switch attachment {
+        case nil: nil
+        case .photo: "Photo"
+        case .document(_, let fileName, _, _): "File: \(fileName)"
+        }
+        return [label, text]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: ". ")
+    }
+
     /// Whether Adam's own 👍 is on this message: what `AppModel.toggleThumbsUp(on:)` flips.
     public var hasMyThumbsUp: Bool {
         reactions.contains { $0.emoji == "👍" && $0.isChosen }

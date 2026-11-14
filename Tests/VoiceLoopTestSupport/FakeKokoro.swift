@@ -37,18 +37,21 @@ package final class FakeKokoro: KokoroEngine {
 
     private struct State {
         var loadBehavior = LoadBehavior.succeeds
-        var loads = 0
+        var loadedModels: [KokoroModelVariant] = []
         var unloads = 0
         var removals = 0
-        var isLoaded = false
+        var loadedModel: KokoroModelVariant?
+        /// Set by a `finishLoading(succeeding: true)` that came before any load reached the fake.
+        var nextLoadSucceeds = false
         var isStored = false
-        var waitingLoads: [CheckedContinuation<Void, any Error>] = []
+        var waitingLoads: [(variant: KokoroModelVariant, continuation: CheckedContinuation<Void, any Error>)] = []
         var downloadProgress: (@Sendable (Double) -> Void)?
         var requests: [Request] = []
         /// The `requests` index that fails, if any.
         var failingRequest: Int?
         var holdsSynthesis = false
         var heldSyntheses: [CheckedContinuation<Void, Never>] = []
+        var dictionary: Set<String> = []
     }
 
     private let state = Mutex(State())
@@ -60,19 +63,25 @@ package final class FakeKokoro: KokoroEngine {
         set { state.withLock { $0.loadBehavior = newValue } }
     }
 
-    /// How many times the loop has asked for the model.
-    package var loads: Int { state.withLock { $0.loads } }
+    /// How many times the loop has asked for a model.
+    package var loads: Int { state.withLock { $0.loadedModels.count } }
+
+    /// The model each load asked for, oldest first.
+    package var loadedModels: [KokoroModelVariant] { state.withLock { $0.loadedModels } }
 
     /// How many times the loop has freed the model.
     package var unloads: Int { state.withLock { $0.unloads } }
 
-    /// How many times the loop has deleted the stored model.
+    /// How many times the loop has deleted the stored models.
     package var removals: Int { state.withLock { $0.removals } }
 
-    /// Whether the model is in memory.
-    package var isLoaded: Bool { state.withLock { $0.isLoaded } }
+    /// The model in memory, if any.
+    package var loadedModel: KokoroModelVariant? { state.withLock { $0.loadedModel } }
 
-    /// Whether the model is downloaded. A load that succeeds stores it; a test can store it
+    /// Whether a model is in memory.
+    package var isLoaded: Bool { loadedModel != nil }
+
+    /// Whether a model is downloaded. A load that succeeds stores it; a test can store it
     /// beforehand, as an earlier launch would have.
     package var isStored: Bool {
         get { state.withLock { $0.isStored } }
@@ -94,6 +103,13 @@ package final class FakeKokoro: KokoroEngine {
         set { state.withLock { $0.holdsSynthesis = newValue } }
     }
 
+    /// What `dictionaryWords()` returns. Empty unless the test sets it, which leaves acronyms as
+    /// written.
+    package var dictionary: Set<String> {
+        get { state.withLock { $0.dictionary } }
+        set { state.withLock { $0.dictionary = newValue } }
+    }
+
     /// Sentences waiting in `holdsSynthesis`.
     package var heldSyntheses: Int { state.withLock { $0.heldSyntheses.count } }
 
@@ -111,42 +127,53 @@ package final class FakeKokoro: KokoroEngine {
         state.withLock { $0.downloadProgress }?(progress)
     }
 
-    /// Ends the loads waiting in `.waits`.
+    /// Ends the loads waiting in `.waits`. One that succeeds leaves its model loaded. Succeeding
+    /// before the loop's load has reached the fake makes that load succeed at once.
     package func finishLoading(succeeding: Bool) {
         let waiting = state.withLock { state in
             defer { state.waitingLoads = [] }
             if succeeding {
-                state.isLoaded = true
+                if let last = state.waitingLoads.last {
+                    state.loadedModel = last.variant
+                } else {
+                    state.nextLoadSucceeds = true
+                }
                 state.isStored = true
             }
             return state.waitingLoads
         }
         for load in waiting {
             if succeeding {
-                load.resume()
+                load.continuation.resume()
             } else {
-                load.resume(throwing: FakeKokoroError.loadFailed)
+                load.continuation.resume(throwing: FakeKokoroError.loadFailed)
             }
         }
     }
 
-    package func load(downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+    package func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
         let behavior = state.withLock { state in
-            state.loads += 1
+            state.loadedModels.append(variant)
             state.downloadProgress = downloadProgress
-            return state.isLoaded ? .succeeds : state.loadBehavior
+            if state.loadedModel == variant || state.nextLoadSucceeds {
+                state.nextLoadSucceeds = false
+                return LoadBehavior.succeeds
+            }
+            // As `KokoroEngine` promises: another model loaded is freed first.
+            state.loadedModel = nil
+            return state.loadBehavior
         }
         switch behavior {
         case .succeeds:
             state.withLock { state in
-                state.isLoaded = true
+                state.loadedModel = variant
                 state.isStored = true
             }
         case .fails:
             throw FakeKokoroError.loadFailed
         case .waits:
             try await withCheckedThrowingContinuation { continuation in
-                state.withLock { $0.waitingLoads.append(continuation) }
+                state.withLock { $0.waitingLoads.append((variant, continuation)) }
             }
         }
     }
@@ -154,14 +181,14 @@ package final class FakeKokoro: KokoroEngine {
     package func unload() async {
         state.withLock { state in
             state.unloads += 1
-            state.isLoaded = false
+            state.loadedModel = nil
         }
     }
 
     package func removeStoredModel() async -> Bool {
         state.withLock { state in
             defer {
-                state.isLoaded = false
+                state.loadedModel = nil
                 state.isStored = false
             }
             state.removals += 1
@@ -169,12 +196,16 @@ package final class FakeKokoro: KokoroEngine {
         }
     }
 
+    package func dictionaryWords() async -> Set<String> {
+        dictionary
+    }
+
     package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
         // As `KokoroEngine` promises: a cancelled request renders nothing.
         try Task.checkCancellation()
         let (index, holds, isLoaded) = state.withLock { state in
             state.requests.append(Request(text: text, voice: voice, speed: speed))
-            return (state.requests.count - 1, state.holdsSynthesis, state.isLoaded)
+            return (state.requests.count - 1, state.holdsSynthesis, state.loadedModel != nil)
         }
         guard isLoaded else { throw FakeKokoroError.notLoaded }
         if holds {

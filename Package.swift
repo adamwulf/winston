@@ -22,10 +22,12 @@ let package = Package(
         // Kokoro-82M neural voices (KokoroTTS, CoreML). speech-swift has no release tags, so it is
         // pinned to a commit. This is a fork commit: soniqo/speech-swift 31d676c6 plus a fix so
         // KokoroTTS compiles for x86_64 macOS (Swift's Float16 does not exist there), which the
-        // universal Mac archive needs, and a fix for the pauses inside long sentences: they are
-        // cut into even chunks at phrase starts, and the silence at those cuts is trimmed.
-        // Branch fix/kokoro-x86_64-float16 on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "a8d60fe03e603b8f091c9171ab6e18a0d5e82713"),
+        // universal Mac archive needs, a fix for the pauses inside long sentences: they are
+        // cut into even chunks at phrase starts, short clauses join the chunk beside them, and
+        // the silence at those cuts is trimmed, and loading other end-to-end bundles
+        // (FluidAudio's 15 s graph) with chunks sized from the loaded graph. Branch
+        // agent/kokoro-model-adjustments on the fork.
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "28f91ec131f092b27ea7f22116f26a1626c781e9"),
     ],
     targets: [
         .target(

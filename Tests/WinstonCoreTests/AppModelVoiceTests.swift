@@ -243,6 +243,72 @@ struct VoiceModeTests {
     }
 }
 
+/// The message list's Speak item: a message said again in the chosen voice and model.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct ReadAloudTests {
+    @Test func outsideVoiceModeAMessageIsSaidAgainInTheChosenKokoroVoiceWithoutItsMarkdown() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "**Done.** Two jobs left."))
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(12) })
+        let message = try #require(model.currentMessages.last)
+
+        model.readAloud(message)
+
+        // The preview player's own engine plays it, and stops once it has played.
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.audio.playedFrames > 0)
+        #expect(harness.bed.kokoro.requests == [
+            FakeKokoro.Request(text: "Done.", voice: "af_heart", speed: 1),
+            FakeKokoro.Request(text: "Two jobs left.", voice: "af_heart", speed: 1),
+        ])
+    }
+
+    @Test func inVoiceModeAMessageIsSaidAgainThroughTheLoop() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        await model.setVoiceMode(true)
+        let message = try #require(model.currentMessages.first { $0.id == MessageID(11) })
+
+        model.readAloud(message)
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["Two jobs are queued."])
+    }
+
+    @Test func aPhotoIsSaidAgainAsAnnouncedAndAnEmptyMessageNotAtAll() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        harness.fake.receive(photoMessage(id: 12, chatID: 1, sizes: []))
+        harness.fake.receive(photoMessage(id: 13, chatID: 1, sizes: [photoSize(fileID: 5, width: 1280, height: 960)]))
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(13) })
+        let empty = try #require(model.currentMessages.first { $0.id == MessageID(12) })
+        let photo = try #require(model.currentMessages.last)
+
+        model.readAloud(empty)
+        #expect(harness.bed.audio.engines.isEmpty)
+        model.readAloud(photo)
+
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["Photo"])
+    }
+}
+
 /// Which of the bot's messages voice mode reads out.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -531,6 +597,34 @@ struct VoiceSettingsTests {
         #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
     }
 
+    @Test func theKokoroModelIsSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        let model = harness.model
+        #expect(model.kokoroModelVariant == VoiceLoop.defaultKokoroModelVariant)
+        #expect(model.voiceLoop.kokoroModelVariant == VoiceLoop.defaultKokoroModelVariant)
+
+        model.kokoroModelVariant = .fluidAudio10s
+
+        #expect(harness.defaults.string(forKey: "kokoroModelVariant") == "fluid10s")
+        #expect(model.voiceLoop.kokoroModelVariant == .fluidAudio10s)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.kokoroModelVariant == .fluidAudio10s)
+        #expect(relaunched.voiceLoop.kokoroModelVariant == .fluidAudio10s)
+    }
+
+    @Test func aRelaunchWithAKokoroVoiceLoadsOnlyTheSavedModel() async throws {
+        let harness = Harness()
+        harness.model.kokoroModelVariant = .fluidAudio10s
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { harness.model.voiceLoop.kokoroModelState == .ready })
+
+        let bed = VoiceTestBed()
+        let relaunched = harness.relaunchedModel(on: bed)
+
+        #expect(await eventually { relaunched.voiceLoop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.fluidAudio10s])
+    }
+
     @Test func aKokoroVoiceChosenInAnotherLanguageIsKeptButNotUsedAfterARelaunch() async throws {
         let harness = Harness()
         harness.model.voiceIdentifier = "kokoro.af_heart"
@@ -657,6 +751,39 @@ struct VoiceSettingsTests {
         let relaunched = harness.relaunchedModel()
         #expect(relaunched.speechPitch == highest)
         #expect(relaunched.voiceLoop.speechPitch == highest)
+    }
+
+    @Test func thereAreNoPronunciationsByDefault() async throws {
+        let harness = Harness()
+
+        #expect(harness.model.pronunciations.isEmpty)
+        #expect(harness.model.voiceLoop.pronunciations.isEmpty)
+    }
+
+    @Test func pronunciationsAreSavedAppliedAndRestoredInOrder() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let pronunciations = [
+            Pronunciation(word: "JSON", replacement: "Jason"),
+            Pronunciation(word: "Kokoro", replacement: "Ko ko ro"),
+        ]
+
+        model.pronunciations = pronunciations
+
+        #expect(harness.defaults.data(forKey: "pronunciations") != nil)
+        #expect(model.voiceLoop.pronunciations == pronunciations)
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.pronunciations == pronunciations)
+        #expect(relaunched.voiceLoop.pronunciations == pronunciations)
+    }
+
+    @Test func unreadableSavedPronunciationsAreDropped() async throws {
+        let harness = Harness()
+        harness.defaults.set(Data("not json".utf8), forKey: "pronunciations")
+
+        let relaunched = harness.relaunchedModel()
+
+        #expect(relaunched.pronunciations.isEmpty)
     }
 
     @Test func turningPauseOtherAudioOffInVoiceModeRebuildsTheEngineAndKeepsListening() async throws {

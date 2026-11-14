@@ -64,6 +64,15 @@ public final class VoiceLoop {
     public var kokoroModelState: KokoroModelState {
         kokoroModel.state
     }
+    /// Which Kokoro model speaks the Kokoro voices. Choosing another while a Kokoro voice is
+    /// chosen loads it in place of the one loaded, downloading it the first time, and until it is
+    /// ready the best system voice speaks.
+    public var kokoroModelVariant: KokoroModelVariant {
+        get { kokoroModel.variant }
+        set { kokoroModel.variant = newValue }
+    }
+    /// The Kokoro model until another is chosen.
+    public static let defaultKokoroModelVariant = KokoroModelVariant.original
     /// `AVSpeechUtterance.rate` to speak at, within `speechRates`. The scale isn't linear:
     /// `defaultSpeechRate` (the middle) is normal speed. Applies from the next message spoken.
     public var speechRate: Float = VoiceLoop.defaultSpeechRate
@@ -79,6 +88,15 @@ public final class VoiceLoop {
     public static let speechPitches: ClosedRange<Float> = 0.5...2.0
     /// The voice's normal pitch.
     public static let defaultSpeechPitch: Float = 1.0
+    /// Words said differently, by every voice: each is replaced in a message as it is queued
+    /// (see `Pronunciation`), before Kokoro's numbers and acronyms are spelled out.
+    public var pronunciations: [Pronunciation] = [] {
+        didSet {
+            guard pronunciations != oldValue else { return }
+            pronunciationReplacer = PronunciationReplacer(pronunciations)
+        }
+    }
+    @ObservationIgnored private var pronunciationReplacer = PronunciationReplacer([])
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -395,7 +413,8 @@ public final class VoiceLoop {
         speakNextIfIdle()
     }
 
-    /// Queues `text` to be spoken after anything already queued. Strips markdown/code first.
+    /// Queues `text` to be spoken after anything already queued. Strips markdown/code first, then
+    /// applies `pronunciations`.
     ///
     /// Ignored while the loop is off, except that replies still queue while a resume after an
     /// interruption is pending (a failed foreground retry shows `.off`). Also queued while it is
@@ -403,7 +422,7 @@ public final class VoiceLoop {
     /// doesn't start over the user and get cut off by barge-in.
     public func speak(_ text: String) {
         guard state != .off || isStarting || resumeAfterInterruption else { return }
-        let spoken = SpokenText.speakable(text)
+        let spoken = pronunciationReplacer.replaced(in: SpokenText.speakable(text))
         guard !spoken.isEmpty else { return }
         speechQueue.append(spoken)
         speakNextIfIdle()
@@ -415,12 +434,13 @@ public final class VoiceLoop {
         silence(consumingEcho: true, reason: "stopped")
     }
 
-    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings, cutting off
-    /// an earlier preview. While the loop is running it also stops any reply being spoken and
-    /// drops queued ones, and it plays through the loop's engine, so echo cancellation (or
-    /// half-duplex) keeps it out of the transcript. Otherwise it plays straight to the speaker
-    /// on an engine of its own. Like a reply, it uses the system voice for a Kokoro voice whose
-    /// model isn't ready.
+    /// Says `text` right away in the current voice, speed and pitch, for trying them in settings or
+    /// hearing a message again, cutting off an earlier preview. Strips markdown/code first, then
+    /// applies `pronunciations`, as `speak(_:)` does. While the loop is running it also stops any
+    /// reply being spoken and drops queued ones, and it plays through the loop's engine, so echo
+    /// cancellation (or half-duplex) keeps it out of the transcript. Otherwise it plays straight
+    /// to the speaker on an engine of its own. Like a reply, it uses the system voice for a Kokoro
+    /// voice whose model isn't ready.
     public func preview(_ text: String) {
         stopPreviewPlayer()
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
@@ -430,6 +450,8 @@ public final class VoiceLoop {
             speak(text)
             return
         }
+        let text = pronunciationReplacer.replaced(in: SpokenText.speakable(text))
+        guard !text.isEmpty else { return }
         let playback: SpeechPlayback
         do {
             playback = try previewPlayer.play(pitch: speechPitch)
@@ -519,11 +541,12 @@ public final class VoiceLoop {
         loadKokoroModelIfChosen()
     }
 
-    /// Deletes the Kokoro voices' stored model, about 335 MB, if no Kokoro voice has been chosen
-    /// for a day. Choosing one again downloads it again. Without a record of when the last one
-    /// was unchosen (a model downloaded by an earlier version), the day starts now. Does nothing
-    /// while a Kokoro voice is chosen or the model is loading. For the app to call at launch,
-    /// once it has set the saved `voiceIdentifier`, and when it returns to the foreground.
+    /// Deletes the Kokoro voices' stored models (both, if both have been used) if no Kokoro voice
+    /// has been chosen for a day. Choosing one again downloads the chosen model again. Without a
+    /// record of when the last one was unchosen (a model downloaded by an earlier version), the
+    /// day starts now. Does nothing while a Kokoro voice is chosen or a model is loading. For the
+    /// app to call at launch, once it has set the saved `voiceIdentifier`, and when it returns to
+    /// the foreground.
     public func removeUnusedKokoroModel() {
         kokoroModel.removeIfUnused()
     }
@@ -992,9 +1015,10 @@ public final class VoiceLoop {
         let sentences = KokoroText.sentences(in: text)
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
+        let acronyms = KokoroAcronyms(dictionaryWords: kokoroModel.dictionaryWords)
         return Task {
-            // Kokoro can't pronounce digits. Only its text is changed: the system voice gets
-            // the sentences as written.
+            // Kokoro can't pronounce digits, or acronyms its dictionary doesn't have. Only its
+            // text is changed: the system voice gets the sentences as written.
             let numbers = KokoroNumbers()
             for (index, sentence) in sentences.enumerated() {
                 guard !Task.isCancelled else { return }
@@ -1005,7 +1029,9 @@ public final class VoiceLoop {
                 }
                 let samples: [Float]
                 do {
-                    samples = try await engine.synthesize(numbers.spelledOut(sentence), voice: voice, speed: speed)
+                    // Numbers first: their rules read the words around them as written.
+                    let spoken = acronyms.spelledOut(numbers.spelledOut(sentence))
+                    samples = try await engine.synthesize(spoken, voice: voice, speed: speed)
                 } catch {
                     guard !Task.isCancelled else { return }
                     // Codes only: KokoroTTS's messages can list voices and paths.

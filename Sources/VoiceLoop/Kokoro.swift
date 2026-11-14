@@ -5,24 +5,67 @@ import LogSupport
 import NaturalLanguage
 import Observation
 
-// Kokoro-82M neural voices, alongside the system's `AVSpeechSynthesizer` voices. The model is
-// downloaded the first time a Kokoro voice is used, and until it is ready, the best system voice
-// speaks instead. Once no Kokoro voice has been chosen for a day, the model is deleted. The real
-// engine is speech-swift's KokoroTTS; see `LiveKokoro.swift`.
+// Kokoro-82M neural voices, alongside the system's `AVSpeechSynthesizer` voices. The chosen model
+// (see `KokoroModelVariant`) is downloaded the first time a Kokoro voice is used with it, and
+// until it is ready, the best system voice speaks instead. Once no Kokoro voice has been chosen
+// for a day, the stored models are deleted. The real engine is speech-swift's KokoroTTS; see
+// `LiveKokoro.swift`.
 
-/// Text-to-speech with the Kokoro-82M model. In the app it is speech-swift's KokoroTTS, with the
-/// model stored under Application Support. Tests use a fake that needs no model or network.
+/// Which Kokoro model speaks the Kokoro voices: one of four end-to-end graphs, each rendering up to
+/// a fixed length of speech per pass. A longer sentence is cut into pieces, and the tone of voice
+/// resets at each cut; a pass costs the same however short the sentence. Each model downloads the
+/// first time it is used, and stays stored until the stored models are deleted, a day after the
+/// last Kokoro voice was unchosen.
+public enum KokoroModelVariant: String, CaseIterable, Sendable {
+    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass. The only one that speaks at
+    /// the speech rate (FluidAudio's graphs have no speed input, so they speak at normal speed),
+    /// and the only one whose voices are averaged rather than matched to each sentence's length.
+    case original = "5s"
+    /// FluidAudio's 5 s graph (7.3 s in fact): about 90 tokens per pass.
+    case fluidAudio5s = "fluid5s"
+    /// FluidAudio's 10 s graph: about 130 tokens per pass.
+    case fluidAudio10s = "fluid10s"
+    /// FluidAudio's 15 s graph: about 200 tokens per pass, a whole sentence. A pass takes about a
+    /// second on a Mac.
+    case fluidAudio15s = "15s"
+
+    /// Its name in settings.
+    public var name: String {
+        switch self {
+        case .original: "Original 5 s"
+        case .fluidAudio5s: "FluidAudio 5 s"
+        case .fluidAudio10s: "FluidAudio 10 s"
+        case .fluidAudio15s: "FluidAudio 15 s"
+        }
+    }
+
+    /// About how much it downloads when nothing is stored yet, in megabytes. FluidAudio's models
+    /// share their voices, so a second one adds about 325 MB.
+    public var downloadMegabytes: Int {
+        switch self {
+        case .original: 335
+        case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
+        }
+    }
+}
+
+/// Text-to-speech with the Kokoro-82M models. In the app it is speech-swift's KokoroTTS, with the
+/// models stored under Application Support. Tests use a fake that needs no model or network.
 package protocol KokoroEngine: Sendable {
-    /// Downloads the model if it isn't stored yet, then loads it. Does nothing once loaded.
-    /// `downloadProgress` gets the download's progress, from 0 to 1, and is not called when the
-    /// model is already stored. It may be called on any thread.
-    func load(downloadProgress: @escaping @Sendable (Double) -> Void) async throws
+    /// Downloads `variant` if it isn't stored yet, then loads it, freeing any other model loaded
+    /// first. Does nothing once it is loaded. `downloadProgress` gets the download's progress,
+    /// from 0 to 1, and is not called when the model is already stored. It may be called on any
+    /// thread.
+    func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
-    /// Deletes the stored model, freeing it first if it is loaded, so the next `load` downloads
-    /// it again. Returns whether any of it was stored.
+    /// Deletes every stored model, freeing the loaded one first, so the next `load` downloads
+    /// again. Returns whether any of them was stored.
     func removeStoredModel() async throws -> Bool
+    /// The words in the loaded model's English pronunciation dictionary, lowercased, for
+    /// `KokoroAcronyms`. Empty if no model is loaded or the dictionary can't be read.
+    func dictionaryWords() async -> Set<String>
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
@@ -55,6 +98,27 @@ final class KokoroModel {
     static let unusedLifetime: TimeInterval = 24 * 60 * 60
 
     private(set) var state: KokoroModelState = .notLoaded
+    /// The model to load. Changing it while a model is ready (or failed) loads the new one in
+    /// its place. A load under way isn't cancelled, so a download isn't lost: the new model loads
+    /// once it finishes.
+    var variant = VoiceLoop.defaultKokoroModelVariant {
+        didSet {
+            guard variant != oldValue else { return }
+            Self.log.notice("kokoro model chosen", ["model": variant.rawValue])
+            switch state {
+            case .ready, .failed:
+                // Only while a Kokoro voice is chosen: `release()` leaves neither.
+                state = .notLoaded
+                dictionaryWords = []
+                load()
+            case .notLoaded, .loading, .downloading:
+                break
+            }
+        }
+    }
+    /// The model's dictionary words (see `KokoroEngine.dictionaryWords()`) while it is ready, and
+    /// empty otherwise.
+    @ObservationIgnored private(set) var dictionaryWords: Set<String> = []
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
@@ -80,8 +144,8 @@ final class KokoroModel {
         set { writeUnchosenSince(newValue) }
     }
 
-    /// Downloads and loads the model, unless it is ready or already on its way. After a failure,
-    /// tries again. While a Kokoro voice is chosen the stored model is never removed.
+    /// Downloads and loads `variant`, unless it is ready or already on its way. After a failure,
+    /// tries again. While a Kokoro voice is chosen the stored models are never removed.
     func load() {
         isWanted = true
         unchosenSince = nil
@@ -93,20 +157,30 @@ final class KokoroModel {
         }
         state = .loading
         let started = ContinuousClock.now
+        let requested = variant
         callEngine { [engine] in
             do {
-                try await engine.load { progress in
+                try await engine.load(requested) { progress in
                     Task { @MainActor in
                         self.downloaded(progress)
                     }
                 }
             } catch {
-                // Settings offers a retry only while a Kokoro voice is chosen.
-                self.state = self.isWanted ? .failed : .notLoaded
                 // Codes only: the downloader's messages name the model's folder.
-                Self.log.error("kokoro model load failed", error.logCodes())
+                Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
+                if self.isWanted, self.variant != requested {
+                    // Another model was chosen while this one loaded; it may load.
+                    self.state = .notLoaded
+                    self.load()
+                } else {
+                    // Settings offers a retry only while a Kokoro voice is chosen.
+                    self.state = self.isWanted ? .failed : .notLoaded
+                }
                 return
             }
+            // Before the check below, so no wait comes between it and `.ready`: a `release()`
+            // during one would go unseen.
+            let words = await engine.dictionaryWords()
             guard self.isWanted else {
                 // A system voice was chosen while it loaded. The download is kept. The state
                 // changes first, so a `load()` from now on queues a new load after the unload.
@@ -117,8 +191,18 @@ final class KokoroModel {
                 }
                 return
             }
+            guard self.variant == requested else {
+                // Another model was chosen while this one loaded. Loading it frees this one.
+                self.state = .notLoaded
+                self.load()
+                return
+            }
+            self.dictionaryWords = words
             self.state = .ready
-            Self.log.notice("kokoro model ready", ["ms": Int(started.duration(to: .now) / .milliseconds(1))])
+            Self.log.notice("kokoro model ready", [
+                "model": requested.rawValue,
+                "ms": Int(started.duration(to: .now) / .milliseconds(1)),
+            ])
         }
     }
 
@@ -136,6 +220,7 @@ final class KokoroModel {
         switch state {
         case .ready:
             state = .notLoaded
+            dictionaryWords = []
             Self.log.notice("kokoro model released")
             callEngine { [engine] in
                 await engine.unload()
