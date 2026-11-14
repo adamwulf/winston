@@ -48,6 +48,14 @@ struct MessageList: View {
                     }
                 }
             }
+            .onChange(of: model.addedThumbsUp) { _, added in
+                guard let added else { return }
+                // Scrolls only as far as it takes to show the whole 👍 above the bottom bar, and not at
+                // all if it already shows. The reactions row, not the message: a long message can't fit.
+                withAnimation {
+                    proxy.scrollTo(ReactionsRow.ScrollID(messageID: added.messageID), anchor: nil)
+                }
+            }
             .onChange(of: isActive) {
                 // Private-chat read state is a watermark, so marking the newest message covers the earlier ones.
                 if isActive, let newest = model.latestIncomingMessage {
@@ -78,6 +86,7 @@ struct MessageRow: View {
                     })
                 if !message.reactions.isEmpty {
                     ReactionsRow(reactions: message.reactions)
+                        .id(ReactionsRow.ScrollID(messageID: message.id))
                 }
                 sendState
             }
@@ -138,6 +147,11 @@ struct MessageRow: View {
 }
 
 struct ReactionsRow: View {
+    /// The ID the message list scrolls to, to show a message's reactions.
+    struct ScrollID: Hashable {
+        let messageID: MessageID
+    }
+
     let reactions: [Reaction]
 
     var body: some View {
