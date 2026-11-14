@@ -27,7 +27,7 @@ let package = Package(
         // the silence at those cuts is trimmed, and loading other end-to-end bundles
         // (FluidAudio's 15 s graph) with chunks sized from the loaded graph. Branch
         // agent/kokoro-model-adjustments on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "28f91ec131f092b27ea7f22116f26a1626c781e9"),
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "b3b4a75a2ddcec47c7181c41a548c756ce08535d"),
     ],
     targets: [
         .target(
