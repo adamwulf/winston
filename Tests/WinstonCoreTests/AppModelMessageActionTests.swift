@@ -67,11 +67,14 @@ struct ReactionAndReadTests {
 
         #expect(await eventually { harness.fake.isWaiting(on: .addMessageReaction) })
         #expect(model.addedThumbsUp == nil)
-        harness.fake.release(.addMessageReaction)
-        await toggle.value
+        // TDLib's update can arrive before the request returns. An update showing Adam's 👍 while
+        // the request is still held stands in for it.
+        try harness.fake.adamReactsInAnotherApp("👍", to: 11, in: 1)
         #expect(await eventually { model.addedThumbsUp?.messageID == MessageID(11) })
         // Set with the 👍 itself, so the message list has the reaction to scroll to.
         #expect(model.latestIncomingMessage?.hasMyThumbsUp == true)
+        harness.fake.release(.addMessageReaction)
+        await toggle.value
     }
 
     @Test func eachThumbsUpAdamAddsIsScrolledToButRemovingOneIsNot() async throws {
