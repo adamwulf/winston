@@ -87,7 +87,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/adamwulf/speech-swift",
       "state" : {
-        "revision" : "b3b4a75a2ddcec47c7181c41a548c756ce08535d"
+        "revision" : "17576d6ae40c69ce035762af261bd9874f1cbd08"
       }
     },
     {
