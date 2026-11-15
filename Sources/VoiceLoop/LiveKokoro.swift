@@ -101,8 +101,8 @@ package actor LiveKokoro: KokoroEngine {
             && FileManager.default.fileExists(atPath: modelFolder(variant).appending(path: "voices/\(voice).json").path)
     }
 
-    /// One KokoroTTS load of `variant`, which logs each stage it reaches and how long it took, and
-    /// passes each stage to `stageChanged`.
+    /// One KokoroTTS load of `variant`, which logs each stage it reaches, every 30 s that it is
+    /// still loading, and how long it took, and passes each stage to `stageChanged`.
     private static func load(
         _ variant: KokoroModelVariant,
         voice: String,
@@ -112,6 +112,18 @@ package actor LiveKokoro: KokoroEngine {
         stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
     ) async throws -> KokoroTTSModel {
         let stages = LoadStages(variant: variant)
+        // Until the load returns or throws.
+        let heartbeat = Task.detached {
+            while true {
+                do {
+                    try await Task.sleep(for: .seconds(30))
+                } catch {
+                    return
+                }
+                stages.logHeartbeat()
+            }
+        }
+        defer { heartbeat.cancel() }
         do {
             let model = try await KokoroTTSModel.fromPretrained(
                 modelId: variant.modelId,
@@ -139,15 +151,15 @@ package actor LiveKokoro: KokoroEngine {
         }
     }
 
-    /// Logs one KokoroTTS load's stages, each once, as its progress handler reports them: it
-    /// names the stage with each call, download fractions included. The handler may run on any
-    /// thread.
+    /// Logs one KokoroTTS load's stages, each once, as its progress handler reports them (it
+    /// names the stage with each call, download fractions included), and the heartbeat while a
+    /// stage after the download runs. The handler may run on any thread.
     private final class LoadStages: Sendable {
         let variant: KokoroModelVariant
         /// When the load began.
         private let started = ContinuousClock.now
-        /// KokoroTTS's latest message.
-        private let message = Mutex<String?>(nil)
+        /// KokoroTTS's latest message, and when it first came.
+        private let message = Mutex<(text: String, since: ContinuousClock.Instant)?>(nil)
 
         init(variant: KokoroModelVariant) {
             self.variant = variant
@@ -162,14 +174,32 @@ package actor LiveKokoro: KokoroEngine {
         /// it names, if it is new and one of `KokoroLoadStage`'s.
         func report(_ message: String) -> KokoroLoadStage? {
             let isNew = self.message.withLock { current in
-                defer { current = message }
-                return current != message
+                guard current?.text != message else { return false }
+                current = (message, .now)
+                return true
             }
             guard isNew else { return nil }
             let stage = KokoroLoadStage(kokoroTTSMessage: message)
-            // A message KokoroTTS didn't send when this was written is logged as it is.
-            LiveKokoro.log.notice("kokoro load stage", metadata(["stage": stage?.rawValue ?? message, "ms": elapsedMilliseconds]))
+            LiveKokoro.log.notice("kokoro load stage", metadata(["stage": Self.name(of: message), "ms": elapsedMilliseconds]))
             return stage
+        }
+
+        /// Logs that the load is still under way, with how long it has been in its stage, once
+        /// it is past the download. Core ML reports no progress while it loads the model, so this
+        /// shows the load is alive, and on iOS how memory moves before any kill.
+        func logHeartbeat() {
+            guard let current = message.withLock({ $0 }),
+                  KokoroLoadStage(kokoroTTSMessage: current.text) != .downloading else { return }
+            LiveKokoro.log.notice("kokoro model still loading", metadata([
+                "stage": Self.name(of: current.text),
+                "ms": Int(current.since.duration(to: .now) / .milliseconds(1)),
+            ]))
+        }
+
+        /// The stage KokoroTTS names in `message`, as the logs name it. A message KokoroTTS
+        /// didn't send when this was written is logged as it is.
+        private static func name(of message: String) -> String {
+            KokoroLoadStage(kokoroTTSMessage: message)?.rawValue ?? message
         }
 
         /// `fields` with the model and, on iOS, the memory the app may still use.
