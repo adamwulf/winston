@@ -5,7 +5,7 @@ import Logging
 import LogSupport
 
 // The real Kokoro engine behind `KokoroEngine`: speech-swift's KokoroTTS. Like
-// `LiveVoiceEnvironment.swift`, the unit tests don't run this file: it downloads 325-410 MB a
+// `LiveVoiceEnvironment.swift`, the unit tests don't load its models: it downloads 245-335 MB a
 // model. `KokoroRealModelTests` runs it when the default model, soniqo's, has already been
 // downloaded.
 
@@ -46,8 +46,8 @@ package actor LiveKokoro: KokoroEngine {
         directory.appending(path: "\(variant.markerName).downloaded", directoryHint: .notDirectory)
     }
 
-    package func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
-        if loaded?.variant == variant { return }
+    package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+        if let loaded, loaded.variant == variant, loaded.model.availableVoices.contains(voice) { return }
         // Freed first, so the two models are never in memory together.
         loaded = nil
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -58,11 +58,11 @@ package actor LiveKokoro: KokoroEngine {
 
         let folder = modelFolder(variant)
         let marker = downloadedMarker(variant)
-        // A finished download loads without the network. Without the marker, KokoroTTS asks
-        // Hugging Face for the file list first, and while offline retries for about two minutes.
-        if FileManager.default.fileExists(atPath: marker.path) {
+        // A finished download loads without the network if the voice is stored too. Otherwise,
+        // KokoroTTS asks Hugging Face for the file list and downloads the missing files.
+        if canLoadOffline(variant, voice: voice) {
             do {
-                loaded = (variant, try await Self.load(variant, from: folder, offline: true, downloadProgress: nil))
+                loaded = (variant, try await Self.load(variant, voice: voice, from: folder, offline: true, downloadProgress: nil))
                 notePlacement(variant, in: folder)
                 return
             } catch {
@@ -75,7 +75,7 @@ package actor LiveKokoro: KokoroEngine {
             }
         }
         // Downloads only the files that are missing or incomplete.
-        let downloaded = try await Self.load(variant, from: folder, offline: false, downloadProgress: downloadProgress)
+        let downloaded = try await Self.load(variant, voice: voice, from: folder, offline: false, downloadProgress: downloadProgress)
         // Before the model counts as loaded: if the marker can't be written (the disk is full),
         // the load fails, and a retry downloads nothing more but writes the marker again.
         try Data().write(to: marker)
@@ -83,8 +83,15 @@ package actor LiveKokoro: KokoroEngine {
         notePlacement(variant, in: folder)
     }
 
+    /// A model marker records the model's download; an offline load also needs the chosen voice.
+    func canLoadOffline(_ variant: KokoroModelVariant, voice: String) -> Bool {
+        FileManager.default.fileExists(atPath: downloadedMarker(variant).path)
+            && FileManager.default.fileExists(atPath: modelFolder(variant).appending(path: "voices/\(voice).json").path)
+    }
+
     private static func load(
         _ variant: KokoroModelVariant,
+        voice: String,
         from folder: URL,
         offline: Bool,
         downloadProgress: (@Sendable (Double) -> Void)?
@@ -92,7 +99,7 @@ package actor LiveKokoro: KokoroEngine {
         try await KokoroTTSModel.fromPretrained(
             modelId: variant.modelId,
             modelFile: variant.modelFile,
-            voiceFilter: variant.voiceFilter,
+            voiceFilter: variant.voiceFilter(for: voice),
             cacheDir: folder,
             offlineMode: offline,
             computeUnits: variant.computeUnits
@@ -293,12 +300,11 @@ extension KokoroModelVariant {
     }
 
     /// The voices it downloads and loads. soniqo's repository's voices are small, so it
-    /// takes them all, as it always has; the others take only the American and British English
-    /// voices `KokoroCatalog` offers (FluidAudio's are 2.7 MB each).
-    fileprivate var voiceFilter: [String]? {
+    /// takes them all, as it always has; the others take only the chosen voice (2.7 MB).
+    fileprivate func voiceFilter(for voice: String) -> [String]? {
         switch self {
         case .soniqo5s: nil
-        case .masked5s, .masked10s, .masked15s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: ["a*", "b*"]
+        case .masked5s, .masked10s, .masked15s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: [voice]
         }
     }
 
