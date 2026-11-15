@@ -278,7 +278,8 @@ Inside it:
 - **Incoming:** reactions the coordinator adds (`ib tgreact`) arrive as
   `updateMessageInteractionInfo` and show under the bubble. There is no
   automatic 👀 "received" ack, so the app never waits for one. In voice mode,
-  the coordinator's 👍 on a message in the current chat plays a short chime.
+  the coordinator's reaction on a message in the current chat plays a short
+  chime: the same chime for every emoji.
 
 ### Photos and files
 

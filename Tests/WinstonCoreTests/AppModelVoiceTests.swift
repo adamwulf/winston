@@ -513,7 +513,7 @@ struct SpokenMessageTests {
     }
 }
 
-/// The chime when the bot puts a 👍 on a message, in voice mode. These harnesses turn the sound
+/// The chime when the bot reacts to a message with any emoji, in voice mode. These harnesses turn the sound
 /// cues on; a cue renders in a few milliseconds, so `settle()` lets one finish.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -613,7 +613,7 @@ struct ReactionChimeTests {
         #expect(await eventually { harness.bed.audio.playedFrames > played })
     }
 
-    @Test func aSecondEmojiFromTheBotBesideItsThumbsUpChimesAgain() async throws {
+    @Test func theBotSwappingItsThumbsUpForAnotherEmojiChimesAgain() async throws {
         let harness = try await twoBots()
         let model = harness.model
 
@@ -623,13 +623,11 @@ struct ReactionChimeTests {
         try await settle()
         let played = harness.bed.audio.playedFrames
 
-        try harness.fake.botReacts("👀", to: 11, in: 1)
+        // One reaction before and after: a new emoji chimes even though the total didn't go up.
+        try harness.fake.botChangesReaction(from: "👍", to: "🎉", on: 11, in: 1)
 
         #expect(await eventually {
-            model.latestIncomingMessage?.reactions == [
-                Reaction(emoji: "👍", count: 1, isChosen: false),
-                Reaction(emoji: "👀", count: 1, isChosen: false),
-            ]
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "🎉", count: 1, isChosen: false)]
         })
         #expect(await eventually { harness.bed.audio.playedFrames > played })
     }
