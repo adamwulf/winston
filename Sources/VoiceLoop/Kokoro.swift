@@ -166,6 +166,9 @@ final class KokoroModel {
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
+    /// The model and voice the latest load asked for, for the logs. It describes the load under
+    /// way while `state` is `.loading` or `.downloading`.
+    @ObservationIgnored private var latestLoad: (variant: KokoroModelVariant, voice: String)?
     /// The latest load, unload or removal. Each waits for the one before, so that an unload and
     /// the load after it reach the engine in order, and a removal never runs during a load.
     @ObservationIgnored private var lastEngineCall: Task<Void, Never>?
@@ -195,7 +198,8 @@ final class KokoroModel {
     }
 
     /// Loads a changed model or voice while a Kokoro voice is chosen, or frees the loaded model
-    /// once no model is chosen. A load under way picks up the change when it finishes.
+    /// once no model is chosen. A load under way picks up the change when it finishes; the log
+    /// says the choice waits for it.
     private func loadIfChoiceChanged() {
         switch state {
         case .ready, .failed:
@@ -216,7 +220,12 @@ final class KokoroModel {
                 load()
             }
         case .loading, .downloading:
-            break
+            Self.log.notice("kokoro choice waits for the load under way", [
+                "loadingModel": latestLoad?.variant.rawValue ?? "unknown",
+                "loadingVoice": latestLoad?.voice ?? "unknown",
+                "chosenModel": variant?.rawValue ?? "none",
+                "chosenVoice": voice,
+            ])
         }
     }
 
@@ -237,6 +246,8 @@ final class KokoroModel {
         let started = ContinuousClock.now
         let requested = variant
         let requestedVoice = voice
+        latestLoad = (requested, requestedVoice)
+        Self.log.notice("kokoro model load started", ["model": requested.rawValue, "voice": requestedVoice])
         callEngine { [engine] in
             do {
                 try await engine.load(requested, voice: requestedVoice) { progress in
@@ -249,6 +260,12 @@ final class KokoroModel {
                 Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
                 if self.isWanted, !self.serves(requested, voice: requestedVoice) {
                     // Another model or voice was chosen while this one loaded; it may load.
+                    Self.log.notice("kokoro model load failed after the choice changed; loading the chosen one", [
+                        "model": requested.rawValue,
+                        "voice": requestedVoice,
+                        "chosenModel": self.variant?.rawValue ?? "none",
+                        "chosenVoice": self.voice,
+                    ])
                     self.state = .notLoaded
                     self.load()
                 } else {
@@ -273,6 +290,12 @@ final class KokoroModel {
             }
             guard self.serves(requested, voice: requestedVoice) else {
                 // Another model or voice was chosen while this one loaded.
+                Self.log.notice("kokoro model loaded after the choice changed; loading the chosen one", [
+                    "model": requested.rawValue,
+                    "voice": requestedVoice,
+                    "chosenModel": self.variant?.rawValue ?? "none",
+                    "chosenVoice": self.voice,
+                ])
                 self.state = .notLoaded
                 self.load()
                 return
