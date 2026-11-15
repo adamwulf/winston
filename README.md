@@ -72,6 +72,8 @@ tap alerts with Winston running and after termination; verify the current-chat b
 is suppressed in the foreground; and verify a locked-screen voice session separately.
 With a photo/file picker or document preview open, tap another bot's alert: the
 presentation should close, and a pending picker selection must not send to the new chat.
+Repeat with a non-bot alert: its explanation should remain visible inline in the chat
+screen after the picker or preview closes, with a working Dismiss button.
 Regular APNs alerts are displayed by iOS. There is no notification service extension,
 silent-push processing, or new background mode in this implementation.
 

@@ -45,6 +45,8 @@ public final class AppModel {
     public private(set) var chatsError: String?
     /// Each notification tap dismisses the iOS settings sheet, even for the same chat.
     public private(set) var notificationOpenCount = 0
+    /// Shown inline, so a picker or preview closing cannot swallow a routing error alert.
+    public var notificationErrorMessage: String?
     /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
     public var selectedChatID: ChatID? {
         didSet { defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
@@ -405,6 +407,7 @@ public final class AppModel {
     private func clearSession() {
         sessionGeneration += 1
         pendingNotification = nil
+        notificationErrorMessage = nil
         if isVoiceMode {
             voiceLoop.stop()
             isVoiceMode = false
@@ -425,6 +428,7 @@ public final class AppModel {
     /// Keep it until the bot list is loaded; never start voice mode from a notification.
     public func openNotification(_ notification: TelegramNotification) {
         notificationOpenCount += 1
+        notificationErrorMessage = nil
         pendingNotification = notification
         start()
         if authState == .ready {
@@ -447,7 +451,7 @@ public final class AppModel {
                 guard generation == sessionGeneration, pendingNotification == notification else { return }
                 if accountID != currentAccount {
                     pendingNotification = nil
-                    errorMessage = "This notification belongs to a different Telegram account."
+                    notificationErrorMessage = "This notification belongs to a different Telegram account."
                     return
                 }
             }
@@ -457,12 +461,12 @@ public final class AppModel {
             if isBotChat(notification.chatID) {
                 selectedChatID = notification.chatID
             } else {
-                errorMessage = "This chat isn't available in Winston. Open it in Telegram."
+                notificationErrorMessage = "This chat isn't available in Winston. Open it in Telegram."
             }
         } catch {
             Self.log.error("opening notification failed", error.tdlibLogCodes())
             guard generation == sessionGeneration, pendingNotification == notification else { return }
-            errorMessage = "Couldn't open the notification. Please try again."
+            notificationErrorMessage = "Couldn't open the notification. Please try again."
         }
     }
 

@@ -47,7 +47,8 @@ struct AppModelNotificationTests {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
         harness.model.openNotification(try target(chat: "2", account: "1000"))
-        #expect(await eventually { harness.model.errorMessage != nil })
+        #expect(await eventually { harness.model.notificationErrorMessage != nil })
+        #expect(harness.model.errorMessage == nil)
         #expect(harness.model.selectedChatID == ChatID(1))
     }
 
@@ -56,14 +57,35 @@ struct AppModelNotificationTests {
         #expect(await harness.startAndLoadChats())
         harness.model.openNotification(try target(chat: "2", account: "999"))
         #expect(await eventually { harness.model.selectedChatID == ChatID(2) })
-        #expect(harness.model.errorMessage == nil)
+        #expect(harness.model.notificationErrorMessage == nil)
     }
 
     @Test func nonBotAlertKeepsCurrentChatAndExplains() async throws {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
         harness.model.openNotification(try target(chat: "99"))
-        #expect(await eventually { harness.model.errorMessage != nil })
+        #expect(await eventually { harness.model.notificationErrorMessage != nil })
+        #expect(harness.model.errorMessage == nil)
+        #expect(harness.model.selectedChatID == ChatID(1))
+    }
+
+    @Test func anotherTapClearsTheInlineRoutingError() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        harness.model.openNotification(try target(chat: "99"))
+        #expect(await eventually { harness.model.notificationErrorMessage != nil })
+        harness.model.openNotification(try target(chat: "2"))
+        #expect(await eventually { harness.model.selectedChatID == ChatID(2) })
+        #expect(harness.model.notificationErrorMessage == nil)
+    }
+
+    @Test func accountLookupFailureUsesInlineErrorInsteadOfModalAlert() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        harness.fake.fail(.getMe, code: 500, message: "network unavailable")
+        harness.model.openNotification(try target(chat: "2", account: "999"))
+        #expect(await eventually { harness.model.notificationErrorMessage != nil })
+        #expect(harness.model.errorMessage == nil)
         #expect(harness.model.selectedChatID == ChatID(1))
     }
 
