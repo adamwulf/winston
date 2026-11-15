@@ -38,13 +38,15 @@ package final class FakeKokoro: KokoroEngine {
     private struct State {
         var loadBehavior = LoadBehavior.succeeds
         var loadedModels: [KokoroModelVariant] = []
+        var loadedVoices: [String] = []
         var unloads = 0
         var removals = 0
         var loadedModel: KokoroModelVariant?
+        var loadedVoice: String?
         /// Set by a `finishLoading(succeeding: true)` that came before any load reached the fake.
         var nextLoadSucceeds = false
         var isStored = false
-        var waitingLoads: [(variant: KokoroModelVariant, continuation: CheckedContinuation<Void, any Error>)] = []
+        var waitingLoads: [(variant: KokoroModelVariant, voice: String, continuation: CheckedContinuation<Void, any Error>)] = []
         var downloadProgress: (@Sendable (Double) -> Void)?
         var requests: [Request] = []
         /// The `requests` index that fails, if any.
@@ -63,11 +65,14 @@ package final class FakeKokoro: KokoroEngine {
         set { state.withLock { $0.loadBehavior = newValue } }
     }
 
-    /// How many times the loop has asked for a model.
+    /// How many loads were needed for the requested model and voice.
     package var loads: Int { state.withLock { $0.loadedModels.count } }
 
     /// The model each load asked for, oldest first.
     package var loadedModels: [KokoroModelVariant] { state.withLock { $0.loadedModels } }
+
+    /// The voice each load asked for, oldest first.
+    package var loadedVoices: [String] { state.withLock { $0.loadedVoices } }
 
     /// How many times the loop has freed the model.
     package var unloads: Int { state.withLock { $0.unloads } }
@@ -135,6 +140,7 @@ package final class FakeKokoro: KokoroEngine {
             if succeeding {
                 if let last = state.waitingLoads.last {
                     state.loadedModel = last.variant
+                    state.loadedVoice = last.voice
                 } else {
                     state.nextLoadSucceeds = true
                 }
@@ -151,29 +157,37 @@ package final class FakeKokoro: KokoroEngine {
         }
     }
 
-    package func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
-        let behavior = state.withLock { state in
+    package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+        let behavior: LoadBehavior? = state.withLock { state in
+            // Soniqo loads all voices; the other models load only the requested one.
+            if state.loadedModel == variant, variant == .soniqo5s || state.loadedVoice == voice {
+                return nil
+            }
             state.loadedModels.append(variant)
+            state.loadedVoices.append(voice)
             state.downloadProgress = downloadProgress
-            if state.loadedModel == variant || state.nextLoadSucceeds {
+            if state.nextLoadSucceeds {
                 state.nextLoadSucceeds = false
                 return LoadBehavior.succeeds
             }
             // As `KokoroEngine` promises: another model loaded is freed first.
             state.loadedModel = nil
+            state.loadedVoice = nil
             return state.loadBehavior
         }
+        guard let behavior else { return }
         switch behavior {
         case .succeeds:
             state.withLock { state in
                 state.loadedModel = variant
+                state.loadedVoice = voice
                 state.isStored = true
             }
         case .fails:
             throw FakeKokoroError.loadFailed
         case .waits:
             try await withCheckedThrowingContinuation { continuation in
-                state.withLock { $0.waitingLoads.append((variant, continuation)) }
+                state.withLock { $0.waitingLoads.append((variant, voice, continuation)) }
             }
         }
     }
@@ -182,6 +196,7 @@ package final class FakeKokoro: KokoroEngine {
         state.withLock { state in
             state.unloads += 1
             state.loadedModel = nil
+            state.loadedVoice = nil
         }
     }
 
@@ -189,6 +204,7 @@ package final class FakeKokoro: KokoroEngine {
         state.withLock { state in
             defer {
                 state.loadedModel = nil
+                state.loadedVoice = nil
                 state.isStored = false
             }
             state.removals += 1

@@ -53,13 +53,14 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     }
 
     /// About how much it downloads when nothing is stored yet, in megabytes. The masked models
-    /// share their voices (28 at 2.7 MB each, with a style per sentence length) and dictionaries,
+    /// download only the chosen voice (2.7 MB, with a style per sentence length), and share
+    /// stored voices and dictionaries,
     /// so a second one adds about 235 MB; FluidAudio's do too, and a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
         case .soniqo5s: 335
-        case .masked5s, .masked10s, .masked15s: 320
-        case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
+        case .masked5s, .masked10s, .masked15s: 245
+        case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 335
         }
     }
 }
@@ -67,11 +68,11 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
 /// Text-to-speech with the Kokoro-82M models. In the app it is speech-swift's KokoroTTS, with the
 /// models stored under Application Support. Tests use a fake that needs no model or network.
 package protocol KokoroEngine: Sendable {
-    /// Downloads `variant` if it isn't stored yet, then loads it, freeing any other model loaded
-    /// first. Does nothing once it is loaded. `downloadProgress` gets the download's progress,
-    /// from 0 to 1, and is not called when the model is already stored. It may be called on any
-    /// thread.
-    func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws
+    /// Downloads `variant` and `voice` if they aren't stored yet, then loads the model with that
+    /// voice, freeing any other model loaded first. Does nothing once that model has the voice
+    /// loaded. `downloadProgress` gets the download's progress, from 0 to 1, and is not called
+    /// when the model and voice are already stored. It may be called on any thread.
+    func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
@@ -120,15 +121,15 @@ final class KokoroModel {
         didSet {
             guard variant != oldValue else { return }
             Self.log.notice("kokoro model chosen", ["model": variant.rawValue])
-            switch state {
-            case .ready, .failed:
-                // Only while a Kokoro voice is chosen: `release()` leaves neither.
-                state = .notLoaded
-                dictionaryWords = []
-                load()
-            case .notLoaded, .loading, .downloading:
-                break
-            }
+            loadIfChoiceChanged()
+        }
+    }
+    /// The Kokoro voice to load with the model. As with `variant`, a load under way finishes
+    /// before the newly chosen voice loads.
+    var voice = "af_heart" {
+        didSet {
+            guard voice != oldValue else { return }
+            loadIfChoiceChanged()
         }
     }
     /// The model's dictionary words (see `KokoroEngine.dictionaryWords()`) while it is ready, and
@@ -159,8 +160,22 @@ final class KokoroModel {
         set { writeUnchosenSince(newValue) }
     }
 
-    /// Downloads and loads `variant`, unless it is ready or already on its way. After a failure,
-    /// tries again. While a Kokoro voice is chosen the stored models are never removed.
+    /// Loads a changed model or voice while a Kokoro voice is chosen. A load under way picks up
+    /// the change when it finishes.
+    private func loadIfChoiceChanged() {
+        switch state {
+        case .ready, .failed:
+            // Only while a Kokoro voice is chosen: `release()` leaves neither.
+            state = .notLoaded
+            dictionaryWords = []
+            load()
+        case .notLoaded, .loading, .downloading:
+            break
+        }
+    }
+
+    /// Downloads and loads `variant` with `voice`, unless ready or already on its way. After a
+    /// failure, tries again. While a Kokoro voice is chosen the stored models are never removed.
     func load() {
         isWanted = true
         unchosenSince = nil
@@ -173,9 +188,10 @@ final class KokoroModel {
         state = .loading
         let started = ContinuousClock.now
         let requested = variant
+        let requestedVoice = voice
         callEngine { [engine] in
             do {
-                try await engine.load(requested) { progress in
+                try await engine.load(requested, voice: requestedVoice) { progress in
                     Task { @MainActor in
                         self.downloaded(progress)
                     }
@@ -183,8 +199,8 @@ final class KokoroModel {
             } catch {
                 // Codes only: the downloader's messages name the model's folder.
                 Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
-                if self.isWanted, self.variant != requested {
-                    // Another model was chosen while this one loaded; it may load.
+                if self.isWanted, self.variant != requested || self.voice != requestedVoice {
+                    // Another model or voice was chosen while this one loaded; it may load.
                     self.state = .notLoaded
                     self.load()
                 } else {
@@ -206,8 +222,8 @@ final class KokoroModel {
                 }
                 return
             }
-            guard self.variant == requested else {
-                // Another model was chosen while this one loaded. Loading it frees this one.
+            guard self.variant == requested, self.voice == requestedVoice else {
+                // Another model or voice was chosen while this one loaded.
                 self.state = .notLoaded
                 self.load()
                 return

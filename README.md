@@ -171,13 +171,20 @@ model loads in under a second and renders a 14-word sentence in 0.4 to 0.7 s.
 `LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
 the first time a Kokoro voice uses it, then writes its marker there once the
 download is complete. Soniqo 5 s is stored in the `Kokoro-82M-CoreML` folder,
-about 335 MB. The masked models share the `Kokoro-82M-Masked` folder with their
-American and British English voices (2.7 MB each, with a style for each
-sentence length): about 320 MB for the first, 235 MB for each one after. FluidAudio's models share the
-`Kokoro-82M-15s` folder (named when it held only the 15 s model) with their
-American and British English voices: about 410 MB for the first, 325 MB for
-each one after. Choosing another model while a Kokoro voice is chosen loads it
-in place of the first, which stays stored.
+about 335 MB, including all its small voice files. The masked models share the
+`Kokoro-82M-Masked` folder with their stored voices and dictionaries: about
+245 MB for the first with one voice, 235 MB for each model after. FluidAudio's
+models share the `Kokoro-82M-15s` folder (named when it held only the 15 s model):
+about 335 MB for the first with one voice, 325 MB for each model after.
+
+Masked and FluidAudio models download and load only the chosen voice (about
+2.7 MB, with a style for each sentence length). Choosing another voice reloads
+the model with it, downloading that voice if needed. A stored model loads
+offline only when `voices/<voice>.json` is stored too; the marker still means
+only that the model downloaded. Soniqo loads all its voices, so changing voices
+needs no reload. Choosing another model loads it in place of the first, which
+stays stored. A load under way finishes before a newly chosen model or voice
+loads; until the chosen voice is ready, the system voice speaks.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so

@@ -53,7 +53,7 @@ public final class VoiceLoop {
         didSet {
             guard voiceIdentifier != oldValue else { return }
             if isKokoroVoiceChosen {
-                kokoroModel.load()
+                loadKokoroModelIfChosen()
             } else {
                 kokoroModel.release()
             }
@@ -1063,7 +1063,9 @@ public final class VoiceLoop {
 
     /// Starts loading the Kokoro model if a Kokoro voice is chosen.
     private func loadKokoroModelIfChosen() {
-        guard isKokoroVoiceChosen else { return }
+        guard isKokoroVoiceChosen, let voiceIdentifier,
+              let voice = KokoroCatalog.kokoroVoice(forOptionID: voiceIdentifier) else { return }
+        kokoroModel.voice = voice
         kokoroModel.load()
     }
 

@@ -535,6 +535,100 @@ struct KokoroReleaseTests {
 @MainActor
 @Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
 struct KokoroModelChoiceTests {
+    @Test(arguments: [KokoroModelVariant.masked5s, .fluidAudio5s])
+    func choosingAnotherVoiceLoadsItAndUsesTheSystemVoiceUntilReady(variant: KokoroModelVariant) async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.kokoroModelVariant = variant
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        bed.kokoro.loadBehavior = .waits
+        loop.voiceIdentifier = "kokoro.af_bella"
+
+        #expect(loop.kokoroModelState == .loading)
+        #expect(await eventually { bed.kokoro.loads == 2 })
+        #expect(bed.kokoro.loadedModels == [variant, variant])
+        #expect(bed.kokoro.loadedVoices == ["af_heart", "af_bella"])
+        #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.requests.isEmpty)
+
+        bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
+        #expect(bed.kokoro.requests.map(\.voice) == ["af_bella"])
+    }
+
+    @Test func choosingAnotherSoniqoVoiceNeedsNoNewLoad() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        bed.kokoro.loadBehavior = .fails
+
+        loop.voiceIdentifier = "kokoro.af_bella"
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loads == 1)
+        _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
+        #expect(bed.kokoro.requests.map(\.voice) == ["af_bella"])
+    }
+
+    @Test(arguments: [true, false])
+    func aVoiceChosenWhileAnotherLoadsIsLoadedOnceThatOneFinishes(succeeding: Bool) async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.kokoroModelVariant = .masked5s
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.voiceIdentifier = "kokoro.af_nicole"
+        loop.voiceIdentifier = "kokoro.af_bella"
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .loading)
+        bed.kokoro.finishLoading(succeeding: succeeding)
+
+        #expect(await eventually { bed.kokoro.loads == 2 })
+        #expect(loop.kokoroModelState == .loading)
+        #expect(bed.kokoro.loadedVoices == ["af_heart", "af_bella"])
+        bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.masked5s, .masked5s])
+    }
+
+    @Test func choosingAnotherVoiceAfterAFailureTriesIt() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .fails
+        let loop = bed.makeLoop()
+        loop.kokoroModelVariant = .masked5s
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .failed })
+
+        bed.kokoro.loadBehavior = .succeeds
+        loop.voiceIdentifier = "kokoro.af_bella"
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedVoices == ["af_heart", "af_bella"])
+    }
+
+    @Test func choosingASystemVoiceThenAKokoroVoiceLoadsTheChosenVoice() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.kokoroModelVariant = .masked5s
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        loop.voiceIdentifier = try #require(loop.voices.first { $0.engine == .system }).id
+        loop.voiceIdentifier = "kokoro.af_bella"
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.masked5s, .masked5s])
+        #expect(bed.kokoro.loadedVoices == ["af_heart", "af_bella"])
+        #expect(bed.kokoro.unloads == 1)
+    }
+
     @Test func choosingTheOtherModelLoadsItInPlaceOfTheOneLoaded() async throws {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
@@ -1094,6 +1188,25 @@ struct KokoroLanguageTests {
 // MARK: - The real engine
 
 @Suite struct LiveKokoroTests {
+    @Test func aStoredMarkerNeedsTheChosenVoiceBeforeLoadingOffline() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let folder = directory.appending(path: "Kokoro-82M-Masked")
+        try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
+        let marker = directory.appending(path: "Kokoro-82M-Masked.kokoro_masked_5s_fp16.downloaded")
+        try Data().write(to: marker)
+        let engine = LiveKokoro(directory: directory)
+
+        #expect(await engine.canLoadOffline(.masked5s, voice: "af_bella") == false)
+        try Data().write(to: folder.appending(path: "voices/af_heart.json"))
+        #expect(await engine.canLoadOffline(.masked5s, voice: "af_bella") == false)
+        #expect(await engine.canLoadOffline(.masked5s, voice: "af_heart"))
+        try Data().write(to: folder.appending(path: "voices/af_bella.json"))
+        #expect(await engine.canLoadOffline(.masked5s, voice: "af_bella"))
+        try FileManager.default.removeItem(at: marker)
+        #expect(await engine.canLoadOffline(.masked5s, voice: "af_bella") == false)
+    }
+
     @Test func aRequestCancelledBeforeItsTurnNeverReachesTheModel() async throws {
         // Nothing is loaded or stored here: a request that reached the model would fail with
         // `notLoaded` instead.
@@ -1182,7 +1295,7 @@ private let realModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-CoreML.downloaded").path
 )
 
-/// Whether FluidAudio's 15 s model has been downloaded too (410 MB, with its voices).
+/// Whether FluidAudio's 15 s model has been downloaded too (335 MB, with one voice).
 private let realFifteenSecondModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-15s.downloaded").path
 )
@@ -1204,8 +1317,8 @@ private final class RecordingKokoro: KokoroEngine {
 
     var audibleSamples: Int { renderedSamples.withLock { $0 } }
 
-    func load(_ variant: KokoroModelVariant, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
-        try await engine.load(variant, downloadProgress: downloadProgress)
+    func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+        try await engine.load(variant, voice: voice, downloadProgress: downloadProgress)
     }
 
     func unload() async {
@@ -1352,7 +1465,7 @@ struct KokoroLoadTimingTests {
             let engine = LiveKokoro(directory: realModelDirectory)
 
             var start = clock.now
-            try await engine.load(variant) { _ in }
+            try await engine.load(variant, voice: "af_heart") { _ in }
             let firstLoad = milliseconds(since: start)
             start = clock.now
             let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
@@ -1361,7 +1474,7 @@ struct KokoroLoadTimingTests {
             // Loaded again, as at the next launch: anything compiled the first time is cached.
             await engine.unload()
             start = clock.now
-            try await engine.load(variant) { _ in }
+            try await engine.load(variant, voice: "af_heart") { _ in }
             let secondLoad = milliseconds(since: start)
             start = clock.now
             let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)

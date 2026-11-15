@@ -1,12 +1,13 @@
 # Kokoro voices: download only the voices in use
 
-Status: open, as of 2026-11-14 (speech-swift pinned at `bd6905c`). Not started;
-written down to come back to.
+Status: the "What to change" section is done, as of 2026-11-14 (speech-swift
+pinned at `bd6905c`). The cheaper alternatives and related versioned marker
+are not implemented.
 
-## The cost today
+## The cost before this change
 
-`LiveKokoro` asks KokoroTTS for every American and British English voice
-(`voiceFilter: ["a*", "b*"]`, 28 voices) whenever it downloads or loads a
+`LiveKokoro` asked KokoroTTS for every American and British English voice
+(`voiceFilter: ["a*", "b*"]`, 28 voices) whenever it downloaded or loaded a
 masked or FluidAudio model. Settings offers 27 of them (`KokoroCatalog`; `am_santa`
 is left out), but a reply only ever uses one.
 
@@ -29,7 +30,7 @@ averaged row), and it downloads all of them, as it always has.
 Pass `voiceFilter: [<the chosen voice>]` instead of `["a*", "b*"]`, so a model
 downloads and parses only the voice in use.
 
-- `KokoroEngine.load(_:downloadProgress:)` would take the voice too, and
+- `KokoroEngine.load(_:voice:downloadProgress:)` takes the voice too, and
   `LiveKokoro` would pass it to `fromPretrained`. Today a load depends only on
   the model; it would depend on the model and the voice.
 - `KokoroModel` would load again when the chosen Kokoro voice changes, not only
