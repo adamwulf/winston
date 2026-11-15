@@ -171,8 +171,9 @@ model loads in under a second and renders a 14-word sentence in 0.4 to 0.7 s.
 `LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
 the first time a Kokoro voice uses it, then writes its marker there once the
 download is complete. Soniqo 5 s is stored in the `Kokoro-82M-CoreML` folder,
-about 335 MB. The masked models share the `Kokoro-82M-Masked` folder: about
-245 MB for the first, 235 MB for each one after. FluidAudio's models share the
+about 335 MB. The masked models share the `Kokoro-82M-Masked` folder with their
+American and British English voices (2.7 MB each, with a style for each
+sentence length): about 320 MB for the first, 235 MB for each one after. FluidAudio's models share the
 `Kokoro-82M-15s` folder (named when it held only the 15 s model) with their
 American and British English voices: about 410 MB for the first, 325 MB for
 each one after. Choosing another model while a Kokoro voice is chosen loads it

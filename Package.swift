@@ -25,10 +25,12 @@ let package = Package(
         // universal Mac archive needs, a fix for the pauses inside long sentences: they are
         // cut into even chunks at phrase starts, short clauses join the chunk beside them, and
         // the silence at those cuts is trimmed, loading other end-to-end bundles (FluidAudio's,
-        // and our masked-LSTM exports) with chunks sized from the loaded graph, and clearing the
-        // noise burst the fp16 graphs emit at the start of each pass. Branch
+        // and our masked-LSTM exports) with chunks sized from the loaded graph, clearing the
+        // noise burst the fp16 graphs emit at the start of each pass, passing parentheses through
+        // to Kokoro as its own tokens, boundary token 0 and per-length voice rows for the masked
+        // models, and a 100 ms lead-in before the first word. Branch
         // agent/kokoro-model-adjustments on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "17576d6ae40c69ce035762af261bd9874f1cbd08"),
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "bd6905cb7c0552be3bf7960f63e1c5ff264779e1"),
     ],
     targets: [
         .target(

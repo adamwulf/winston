@@ -266,24 +266,29 @@ final class SpeechPlayback: Sendable {
     private let completion: AVAudioPlayerNodeCompletionCallbackType
     /// Frames of silence played after the last buffer, before the message counts as finished.
     private let trailingSilence: AVAudioFrameCount
+    /// Frames the message fades in over: see `fadeInDuration(speed:)`.
+    private let fadeInFrames: AVAudioFrameCount
     private let onFinished: @Sendable (SpeechPlayback) -> Void
 
     /// `format` is the player's connection format. `trailingSilence` frames of silence follow
     /// the last buffer, for an effect after the player whose sound runs on past its input (see
-    /// `SpeechOutput.pitchShiftTail`). `onFinished` is called, on an arbitrary thread, once
-    /// the last buffer and the silence after it have played.
+    /// `SpeechOutput.pitchShiftTail`). The message fades in as `fadeInDuration(speed:)` says for
+    /// `speed`, the speaking speed (1 is normal). `onFinished` is called, on an arbitrary thread,
+    /// once the last buffer and the silence after it have played.
     init(
         text: String,
         player: AVAudioPlayerNode,
         format: AVAudioFormat,
         completion: AVAudioPlayerNodeCompletionCallbackType,
         trailingSilence: AVAudioFrameCount,
+        speed: Float,
         onFinished: @escaping @Sendable (SpeechPlayback) -> Void
     ) {
         self.text = text
         state = Mutex(State(player: player, format: format))
         self.completion = completion
         self.trailingSilence = trailingSilence
+        fadeInFrames = AVAudioFrameCount(format.sampleRate * Self.fadeInDuration(speed: speed))
         self.onFinished = onFinished
     }
 
@@ -296,7 +301,7 @@ final class SpeechPlayback: Sendable {
                 state.converter?.primeMethod = .none
             }
             guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return }
-            Self.fadeIn(converted, at: state.framesConverted)
+            Self.fadeIn(converted, at: state.framesConverted, over: fadeInFrames)
             state.framesConverted += converted.frameLength
             if state.isSynthesized {
                 // Arrived after the synthesizer said it was done; this buffer now ends the message.
@@ -367,16 +372,24 @@ final class SpeechPlayback: Sendable {
         }
     }
 
-    /// How long each message fades in, in seconds. Echo cancellation needs about 200 ms of
-    /// playback to adapt, and until then the microphone hears the reply. Apple's advice is
-    /// to ramp the volume up over that time.
+    /// How long a message fades in at normal speed, in seconds. Echo cancellation needs about
+    /// 200 ms of playback to adapt, and until then the microphone hears the reply. Apple's advice
+    /// is to ramp the volume up over that time.
     static let fadeInDuration = 0.2
 
-    /// Scales the part of `buffer` inside the fade-in up from silence. `offset` is how many
-    /// frames of the message came before it. `buffer` is deinterleaved float, as the player's
-    /// format is.
-    static func fadeIn(_ buffer: AVAudioPCMBuffer, at offset: AVAudioFrameCount) {
-        let rampFrames = AVAudioFrameCount(buffer.format.sampleRate * fadeInDuration)
+    /// How long a message spoken at `speed` (1 is normal) fades in, in seconds: `fadeInDuration`
+    /// divided by the speed, so faster speech fades in faster, 100 ms at double speed and 400 ms
+    /// at half. Kokoro's lead-in silence shrinks with the speed too, so a fixed 200 ms fade cut
+    /// into the first syllable above about 1.25 times. The trade: at fast speeds echo
+    /// cancellation has less time to adapt before the reply is at full volume.
+    static func fadeInDuration(speed: Float) -> Double {
+        fadeInDuration / Double(max(speed, 0.1))
+    }
+
+    /// Scales the part of `buffer` inside a fade-in of `rampFrames` frames up from silence.
+    /// `offset` is how many frames of the message came before it. `buffer` is deinterleaved
+    /// float, as the player's format is.
+    static func fadeIn(_ buffer: AVAudioPCMBuffer, at offset: AVAudioFrameCount, over rampFrames: AVAudioFrameCount) {
         guard offset < rampFrames, let channels = buffer.floatChannelData else { return }
         let count = Int(min(buffer.frameLength, rampFrames - offset))
         for channel in 0..<Int(buffer.format.channelCount) {

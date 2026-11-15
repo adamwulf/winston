@@ -53,12 +53,12 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     }
 
     /// About how much it downloads when nothing is stored yet, in megabytes. The masked models
-    /// share their voices and dictionaries, so a second one adds about 235 MB; FluidAudio's do
-    /// too, and a second one adds about 325 MB.
+    /// share their voices (28 at 2.7 MB each, with a style per sentence length) and dictionaries,
+    /// so a second one adds about 235 MB; FluidAudio's do too, and a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
         case .soniqo5s: 335
-        case .masked5s, .masked10s, .masked15s: 245
+        case .masked5s, .masked10s, .masked15s: 320
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
         }
     }
@@ -267,6 +267,28 @@ final class KokoroModel {
         }
     }
 
+    /// Deletes every stored model now, for settings, freeing the loaded one first. It waits for a
+    /// load or unload under way. If a Kokoro voice is chosen, the chosen model then downloads
+    /// again, fresh: the way to pick up changed files on the Hub, since a stored model loads
+    /// offline. Until it is ready, the best system voice speaks.
+    func removeStoredModels() {
+        callEngine { [engine] in
+            do {
+                let removed = try await engine.removeStoredModel()
+                Self.log.notice("kokoro models deleted from settings", ["anyStored": removed])
+            } catch {
+                // Codes only: a file error's message names the model's folder.
+                Self.log.error("deleting the kokoro models failed", error.logCodes())
+            }
+            // The engine freed the loaded model either way.
+            self.dictionaryWords = []
+            self.state = .notLoaded
+            if self.isWanted {
+                self.load()
+            }
+        }
+    }
+
     /// Whether no Kokoro voice has been chosen for `unusedLifetime` and nothing is loading.
     /// Starts the count if there is no record of when the last one was unchosen.
     private func hasGoneUnused() -> Bool {
@@ -409,6 +431,20 @@ enum KokoroSpeed {
 /// Kokoro's audio as buffers for `SpeechPlayback`.
 enum KokoroAudio {
     static let sampleRate = 24_000.0
+    /// The silence KokoroTTS leaves before a reply's first word at speed 1: it trims each
+    /// rendering's lead-in to this, divided by the speed (speech-swift's
+    /// `KokoroChunkSeams.leadInSeconds`).
+    static let leadInSeconds = 0.1
+
+    /// Silence to play before a reply's first sentence spoken at `speed`, so the reply's fade-in
+    /// for echo cancellation (`SpeechPlayback.fadeInDuration(speed:)`) is over before the first
+    /// word: the fade's length less the lead-in KokoroTTS already leaves, 100 ms divided by the
+    /// speed. KokoroTTS keeps its audio tight; making room for echo cancellation is the voice
+    /// loop's job.
+    static func silenceBeforeReply(speed: Float) -> [Float] {
+        let seconds = SpeechPlayback.fadeInDuration(speed: speed) - leadInSeconds / Double(max(speed, 0.1))
+        return [Float](repeating: 0, count: max(0, Int((seconds * sampleRate).rounded())))
+    }
     /// Frames per buffer: 0.1 s. `SpeechPlayback` holds back a message's newest buffer until the
     /// next one arrives (so the last can carry the completion handler). With short buffers that
     /// is only the tail of a sentence's trailing silence, so a sentence plays as soon as it is

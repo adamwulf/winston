@@ -803,6 +803,54 @@ struct KokoroRemovalTests {
         #expect(bed.kokoro.removals == 0)
         #expect(bed.kokoro.isStored)
     }
+
+    @Test func deletingTheModelsWithAKokoroVoiceChosenDownloadsTheChosenOneAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.kokoroModelVariant = .masked5s
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        loop.deleteKokoroModels()
+
+        #expect(await eventually { bed.kokoro.removals == 1 && loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.masked5s, .masked5s])
+        #expect(bed.kokoro.isLoaded)
+        // Deleting isn't a day going unused: nothing about the record changes.
+        #expect(bed.kokoroUnchosenSince == nil)
+    }
+
+    @Test func deletingTheModelsWithASystemVoiceChosenDownloadsNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopAfterSwitchingToASystemVoice(on: bed)
+        #expect(bed.kokoro.isStored)
+
+        loop.deleteKokoroModels()
+
+        #expect(await eventually { bed.kokoro.removals == 1 })
+        try await settle()
+        #expect(!bed.kokoro.isStored)
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
+    }
+
+    @Test func deletingTheModelsWhileOneLoadsWaitsForItThenDownloadsAgain() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.deleteKokoroModels()
+        try await settle()
+        #expect(bed.kokoro.removals == 0)
+        bed.kokoro.finishLoading(succeeding: true)
+
+        // Deleted once the load finished, then loaded again.
+        #expect(await eventually { bed.kokoro.removals == 1 && bed.kokoro.loads == 2 })
+        bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+    }
 }
 
 // MARK: - Cancelling
@@ -924,6 +972,20 @@ struct KokoroCancellingTests {
 
     @Test func noSamplesMakeNoBuffers() {
         #expect(KokoroAudio.buffers([]).isEmpty)
+    }
+
+    @Test func aReplyStartsWithSilenceSoItsFadeInEndsBeforeTheFirstWordAtEverySpeed() {
+        for speed: Float in [0.5, 1, 2] {
+            let silence = KokoroAudio.silenceBeforeReply(speed: speed)
+            #expect(silence.allSatisfy { $0 == 0 })
+            // With KokoroTTS's own lead-in, the silence lasts exactly as long as the fade-in.
+            let seconds = Double(silence.count) / KokoroAudio.sampleRate + KokoroAudio.leadInSeconds / Double(speed)
+            #expect(abs(seconds - SpeechPlayback.fadeInDuration(speed: speed)) < 0.001)
+        }
+        // 100 ms at normal speed, 50 ms at double, 200 ms at half.
+        #expect(KokoroAudio.silenceBeforeReply(speed: 1).count == 2_400)
+        #expect(KokoroAudio.silenceBeforeReply(speed: 2).count == 1_200)
+        #expect(KokoroAudio.silenceBeforeReply(speed: 0.5).count == 4_800)
     }
 }
 
