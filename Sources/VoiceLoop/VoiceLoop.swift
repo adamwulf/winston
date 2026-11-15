@@ -551,6 +551,12 @@ public final class VoiceLoop {
         kokoroModel.removeIfUnused()
     }
 
+    /// Deletes every stored Kokoro model now, for settings. With a Kokoro voice chosen, the chosen
+    /// model then downloads again, fresh, and until it is ready the best system voice speaks.
+    public func deleteKokoroModels() {
+        kokoroModel.removeStoredModels()
+    }
+
     /// The system voices of `voices`, from `systemVoiceCache` if it holds `language`'s.
     private func cachedSystemVoices(language: String) -> [VoiceOption] {
         if let systemVoiceCache, systemVoiceCache.language == language {

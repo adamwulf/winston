@@ -267,6 +267,28 @@ final class KokoroModel {
         }
     }
 
+    /// Deletes every stored model now, for settings, freeing the loaded one first. It waits for a
+    /// load or unload under way. If a Kokoro voice is chosen, the chosen model then downloads
+    /// again, fresh: the way to pick up changed files on the Hub, since a stored model loads
+    /// offline. Until it is ready, the best system voice speaks.
+    func removeStoredModels() {
+        callEngine { [engine] in
+            do {
+                let removed = try await engine.removeStoredModel()
+                Self.log.notice("kokoro models deleted from settings", ["anyStored": removed])
+            } catch {
+                // Codes only: a file error's message names the model's folder.
+                Self.log.error("deleting the kokoro models failed", error.logCodes())
+            }
+            // The engine freed the loaded model either way.
+            self.dictionaryWords = []
+            self.state = .notLoaded
+            if self.isWanted {
+                self.load()
+            }
+        }
+    }
+
     /// Whether no Kokoro voice has been chosen for `unusedLifetime` and nothing is loading.
     /// Starts the count if there is no record of when the last one was unchosen.
     private func hasGoneUnused() -> Bool {

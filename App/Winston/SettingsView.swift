@@ -3,12 +3,13 @@ import VoiceLoop
 import WinstonCore
 import WinstonLogging
 
-/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, and Log out. AppModel persists the settings and applies them to the
+/// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, Log out, and deleting the downloaded voice models. AppModel persists the settings and applies them to the
 /// voice loop. A sheet on iOS; the standard Settings window on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var confirmingLogOut = false
+    @State private var confirmingModelDeletion = false
     #if os(iOS)
     private static let log = Logger(label: "app.settings")
     @State private var isExportingLogs = false
@@ -184,6 +185,19 @@ struct SettingsView: View {
                         confirmingLogOut = true
                     }
                 }
+            }
+            Section {
+                Button("Delete Downloaded Voice Models", role: .destructive) {
+                    confirmingModelDeletion = true
+                }
+                // On the button, not the form: the form already has the Log Out dialog.
+                .confirmationDialog("Delete downloaded voice models?", isPresented: $confirmingModelDeletion) {
+                    Button("Delete", role: .destructive) {
+                        model.voiceLoop.deleteKokoroModels()
+                    }
+                }
+            } footer: {
+                Text("Deletes every Kokoro model stored on this device. With a Kokoro voice chosen, its model downloads again right away, picking up any update.")
             }
         }
         .formStyle(.grouped)
