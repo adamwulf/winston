@@ -97,8 +97,8 @@ package protocol KokoroEngine: Sendable {
 
 /// Where the Kokoro model is, for the settings screen.
 public enum KokoroModelState: Sendable, Equatable {
-    /// Not loaded: nothing has asked for it yet in this run, or no Kokoro voice is chosen. It
-    /// may already be stored.
+    /// Not loaded: nothing has asked for it yet in this run, or no Kokoro voice or no model is
+    /// chosen. It may already be stored.
     case notLoaded
     /// Loading the stored model.
     case loading
@@ -121,13 +121,15 @@ final class KokoroModel {
     static let unusedLifetime: TimeInterval = 24 * 60 * 60
 
     private(set) var state: KokoroModelState = .notLoaded
-    /// The model to load. Changing it while a model is ready (or failed) loads the new one in
-    /// its place. A load under way isn't cancelled, so a download isn't lost: the new model loads
-    /// once it finishes.
-    var variant = VoiceLoop.defaultKokoroModelVariant {
+    /// The model to load, or nil for none: then nothing loads or downloads, and the system voice
+    /// speaks for the Kokoro voices. Changing it while a model is ready (or failed) loads the new
+    /// one in its place, or with none, frees the loaded one. A load under way isn't cancelled, so
+    /// a download isn't lost: the new model loads once it finishes, or with none, the model is
+    /// freed then.
+    var variant: KokoroModelVariant? = VoiceLoop.defaultKokoroModelVariant {
         didSet {
             guard variant != oldValue else { return }
-            Self.log.notice("kokoro model chosen", ["model": variant.rawValue])
+            Self.log.notice("kokoro model chosen", ["model": variant?.rawValue ?? "none"])
             loadIfChoiceChanged()
         }
     }
@@ -137,7 +139,7 @@ final class KokoroModel {
     var voice = "af_heart" {
         didSet {
             guard voice != oldValue else { return }
-            if state == .ready, variant.loadsEveryVoice { return }
+            if state == .ready, variant?.loadsEveryVoice == true { return }
             loadIfChoiceChanged()
         }
     }
@@ -175,25 +177,39 @@ final class KokoroModel {
         loaded == variant && (loadedVoice == voice || loaded.loadsEveryVoice)
     }
 
-    /// Loads a changed model or voice while a Kokoro voice is chosen. A load under way picks up
-    /// the change when it finishes.
+    /// Loads a changed model or voice while a Kokoro voice is chosen, or frees the loaded model
+    /// once no model is chosen. A load under way picks up the change when it finishes.
     private func loadIfChoiceChanged() {
         switch state {
         case .ready, .failed:
             // Only while a Kokoro voice is chosen: `release()` leaves neither.
+            let wasReady = state == .ready
             state = .notLoaded
             dictionaryWords = []
+            if variant == nil, wasReady {
+                Self.log.notice("kokoro model released; no model chosen")
+                callEngine { [engine] in
+                    await engine.unload()
+                }
+            }
             load()
-        case .notLoaded, .loading, .downloading:
+        case .notLoaded:
+            // With a Kokoro voice chosen, a model chosen after none loads now.
+            if isWanted {
+                load()
+            }
+        case .loading, .downloading:
             break
         }
     }
 
-    /// Downloads and loads `variant` with `voice`, unless ready or already on its way. After a
-    /// failure, tries again. While a Kokoro voice is chosen the stored models are never removed.
+    /// Downloads and loads `variant` with `voice`, unless ready or already on its way, or no
+    /// model is chosen. After a failure, tries again. While a Kokoro voice is chosen the stored
+    /// models are never removed.
     func load() {
         isWanted = true
         unchosenSince = nil
+        guard let variant else { return }
         switch state {
         case .loading, .downloading, .ready:
             return
@@ -227,11 +243,12 @@ final class KokoroModel {
             // Before the check below, so no wait comes between it and `.ready`: a `release()`
             // during one would go unseen.
             let words = await engine.dictionaryWords()
-            guard self.isWanted else {
-                // A system voice was chosen while it loaded. The download is kept. The state
-                // changes first, so a `load()` from now on queues a new load after the unload.
+            guard self.isWanted, self.variant != nil else {
+                // A system voice, or no model, was chosen while it loaded. The download is kept.
+                // The state changes first, so a `load()` from now on queues a new load after the
+                // unload.
                 self.state = .notLoaded
-                Self.log.notice("kokoro model loaded after its voice was unchosen; releasing it")
+                Self.log.notice("kokoro model loaded after its voice or model was unchosen; releasing it")
                 self.callEngine { [engine] in
                     await engine.unload()
                 }
@@ -299,9 +316,9 @@ final class KokoroModel {
     }
 
     /// Deletes every stored model now, for settings, freeing the loaded one first. It waits for a
-    /// load or unload under way. If a Kokoro voice is chosen, the chosen model then downloads
-    /// again, fresh: the way to pick up changed files on the Hub, since a stored model loads
-    /// offline. Until it is ready, the best system voice speaks.
+    /// load or unload under way. If a Kokoro voice and a model are chosen, that model then
+    /// downloads again, fresh: the way to pick up changed files on the Hub, since a stored model
+    /// loads offline. Until it is ready, the best system voice speaks.
     func removeStoredModels() {
         // The engine frees the loaded model as soon as the removal starts, so from now on replies
         // use the system voice rather than ask a model that is going away.

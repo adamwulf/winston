@@ -77,14 +77,22 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
-    /// Which Kokoro model speaks the Kokoro voices, as `VoiceLoop.kokoroModelVariant`. Persisted.
-    public var kokoroModelVariant: KokoroModelVariant {
+    /// Which Kokoro model speaks the Kokoro voices, or nil for none, as `VoiceLoop.kokoroModelVariant`.
+    /// Persisted, none as `noKokoroModel`.
+    public var kokoroModelVariant: KokoroModelVariant? {
         didSet {
-            defaults.set(kokoroModelVariant.rawValue, forKey: StorageKey.kokoroModelVariant)
-            logSettingChange(StorageKey.kokoroModelVariant, from: oldValue.rawValue, to: kokoroModelVariant.rawValue)
+            defaults.set(kokoroModelVariant?.rawValue ?? Self.noKokoroModel, forKey: StorageKey.kokoroModelVariant)
+            logSettingChange(
+                StorageKey.kokoroModelVariant,
+                from: oldValue?.rawValue ?? Self.noKokoroModel,
+                to: kokoroModelVariant?.rawValue ?? Self.noKokoroModel
+            )
             applyVoiceSettings()
         }
     }
+    /// How `kokoroModelVariant` is saved when no model is chosen. With nothing saved, the default
+    /// model is chosen.
+    private static let noKokoroModel = "none"
     /// How fast replies are spoken, as a `VoiceLoop.speechRate`. Persisted.
     public var speechRate: Float {
         didSet {
@@ -158,8 +166,7 @@ public final class AppModel {
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
-        kokoroModelVariant = defaults.string(forKey: StorageKey.kokoroModelVariant)
-            .flatMap(KokoroModelVariant.init(rawValue:)) ?? VoiceLoop.defaultKokoroModelVariant
+        kokoroModelVariant = Self.savedKokoroModelVariant(in: defaults)
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
@@ -211,6 +218,14 @@ public final class AppModel {
         voiceLoop.pronunciations = pronunciations
     }
 
+    /// The Kokoro model saved in `defaults`: nil if none was chosen, and the default model if
+    /// nothing is saved or it names no model.
+    private static func savedKokoroModelVariant(in defaults: UserDefaults) -> KokoroModelVariant? {
+        let saved = defaults.string(forKey: StorageKey.kokoroModelVariant)
+        if saved == noKokoroModel { return nil }
+        return saved.flatMap(KokoroModelVariant.init(rawValue:)) ?? VoiceLoop.defaultKokoroModelVariant
+    }
+
     /// The pronunciations saved in `defaults`, or none if there are none or they can't be read.
     private static func savedPronunciations(in defaults: UserDefaults) -> [Pronunciation] {
         guard let data = defaults.data(forKey: StorageKey.pronunciations) else { return [] }
@@ -252,6 +267,14 @@ public final class AppModel {
         }
         let name = voice?.name ?? "default"
         voiceLoop.preview("This is how I sound with the \(name) voice.")
+    }
+
+    /// Deletes every stored Kokoro model, for settings, and chooses no model, so none downloads
+    /// again until one is chosen. Until then the best system voice speaks for a Kokoro voice.
+    public func deleteKokoroModels() {
+        // First, so the deletion finds no model to download again.
+        kokoroModelVariant = nil
+        voiceLoop.deleteKokoroModels()
     }
 
     /// Where TDLib keeps its data, and how the app describes itself to Telegram.
