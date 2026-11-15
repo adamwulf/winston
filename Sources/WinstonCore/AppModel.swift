@@ -43,6 +43,8 @@ public final class AppModel {
     public private(set) var chats: [BotChat] = []
     public private(set) var chatsLoaded = false
     public private(set) var chatsError: String?
+    /// Each notification tap dismisses the iOS settings sheet, even for the same chat.
+    public private(set) var notificationOpenCount = 0
     /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
     public var selectedChatID: ChatID? {
         didSet { defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
@@ -256,6 +258,9 @@ public final class AppModel {
             for await _ in activations {
                 guard let self else { return }
                 self.voiceLoop.removeUnusedKokoroModel()
+                #if os(iOS)
+                await self.notificationAccess.refresh()
+                #endif
             }
         }
     }
@@ -418,6 +423,7 @@ public final class AppModel {
     /// A tap can arrive before SwiftUI appears or before Telegram has restored its session.
     /// Keep it until the bot list is loaded; never start voice mode from a notification.
     public func openNotification(_ notification: TelegramNotification) {
+        notificationOpenCount += 1
         pendingNotification = notification
         start()
         if authState == .ready {

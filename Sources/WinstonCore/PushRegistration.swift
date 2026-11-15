@@ -45,7 +45,13 @@ public final class PushRegistration {
         guard isAuthorized != authorized else { return }
         isAuthorized = authorized
         revision += 1
-        status = token == nil ? .notRegistered : .waitingForLogin
+        if token != nil {
+            status = .waitingForLogin
+        } else if status != .failed {
+            // An APNs failure can arrive before Telegram finishes login. Keep its Retry
+            // state until Apple supplies a token, rather than showing Connecting forever.
+            status = .notRegistered
+        }
         registerIfReady()
     }
 

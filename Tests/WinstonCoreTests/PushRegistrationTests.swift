@@ -33,7 +33,7 @@ struct PushRegistrationTests {
         ])
     }
 
-    @Test func tokenRotationWaitsForEarlierRegistration() async {
+    @Test func tokenRotationWaitsForEarlierRegistration() async throws {
         let harness = Harness()
         #expect(await harness.startAndLoadChats())
         harness.fake.hold(.registerDevice)
@@ -41,6 +41,7 @@ struct PushRegistrationTests {
         push.receivedDeviceToken(Data([1]), isSandbox: true)
         #expect(await eventually { harness.fake.isWaiting(on: .registerDevice) })
         push.receivedDeviceToken(Data([2]), isSandbox: true)
+        try await settle()
         #expect(registrations(harness.fake).count == 1)
         harness.fake.release(.registerDevice)
         #expect(await eventually { push.status == .registered })
@@ -73,6 +74,7 @@ struct PushRegistrationTests {
         await harness.model.logOut()
         #expect(await eventually { harness.model.authState == .needsPhoneNumber })
         harness.fake.release(.registerDevice)
+        try await settle()
         #expect(push.status == .waitingForLogin)
         try await harness.model.submitPhoneNumber("+15555550100")
         try await harness.model.submitCode("12345")
@@ -80,7 +82,7 @@ struct PushRegistrationTests {
         #expect(registrations(harness.fake).count == 2)
     }
 
-    @Test func appleFailureInvalidatesInFlightResult() async {
+    @Test func appleFailureInvalidatesInFlightResult() async throws {
         let harness = Harness()
         #expect(await harness.startAndLoadChats())
         let push = harness.model.pushRegistration
@@ -89,8 +91,19 @@ struct PushRegistrationTests {
         #expect(await eventually { harness.fake.isWaiting(on: .registerDevice) })
         push.registrationFailed()
         harness.fake.release(.registerDevice)
+        try await settle()
         #expect(push.status == .failed)
         push.receivedDeviceToken(Data([2]), isSandbox: true)
+        #expect(await eventually { push.status == .registered })
+    }
+
+    @Test func appleFailureBeforeLoginRemainsVisibleUntilAppleSuppliesAToken() async {
+        let harness = Harness()
+        let push = harness.model.pushRegistration
+        push.registrationFailed()
+        #expect(await harness.startAndLoadChats())
+        #expect(push.status == .failed)
+        push.receivedDeviceToken(Data([1]), isSandbox: true)
         #expect(await eventually { push.status == .registered })
     }
 

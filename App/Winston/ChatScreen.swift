@@ -8,6 +8,8 @@ struct ChatScreen: View {
     @State private var draft = ""
     #if os(iOS)
     @State private var showingSettings = false
+    /// Remains true through the dismissal animation, so errors appear after the sheet closes.
+    @State private var settingsIsPresented = false
     #else
     @State private var isDropTargeted = false
     #endif
@@ -23,6 +25,7 @@ struct ChatScreen: View {
                     // On the Mac, settings live in the standard Settings window (Cmd-,).
                     ToolbarItem(placement: .primaryAction) {
                         Button("Settings", systemImage: "gear") {
+                            settingsIsPresented = true
                             showingSettings = true
                         }
                     }
@@ -33,8 +36,11 @@ struct ChatScreen: View {
                 #endif
         }
         #if os(iOS)
-        .sheet(isPresented: $showingSettings) {
+        .sheet(isPresented: $showingSettings, onDismiss: { settingsIsPresented = false }) {
             SettingsView()
+        }
+        .onChange(of: model.notificationOpenCount) {
+            showingSettings = false
         }
         #endif
         .alert("Winston", isPresented: showingError) {
@@ -135,7 +141,11 @@ struct ChatScreen: View {
 
     private var showingError: Binding<Bool> {
         Binding {
+            #if os(iOS)
+            model.errorMessage != nil && !settingsIsPresented
+            #else
             model.errorMessage != nil
+            #endif
         } set: { isShowing in
             if !isShowing { model.errorMessage = nil }
         }

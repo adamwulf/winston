@@ -29,11 +29,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         return true
     }
 
-    func applicationDidBecomeActive(_ application: UIApplication) {
-        guard let model else { return }
-        Task { await model.notificationAccess.refresh() }
-    }
-
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         guard let environment = Bundle.main.object(forInfoDictionaryKey: "TelegramPushEnvironment") as? String,
               environment == "development" || environment == "production" else {

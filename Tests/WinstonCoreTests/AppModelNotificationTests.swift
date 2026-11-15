@@ -51,6 +51,14 @@ struct AppModelNotificationTests {
         #expect(harness.model.selectedChatID == ChatID(1))
     }
 
+    @Test func alertForTheCurrentAccountOpensTheChat() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        harness.model.openNotification(try target(chat: "2", account: "999"))
+        #expect(await eventually { harness.model.selectedChatID == ChatID(2) })
+        #expect(harness.model.errorMessage == nil)
+    }
+
     @Test func nonBotAlertKeepsCurrentChatAndExplains() async throws {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
@@ -68,6 +76,7 @@ struct AppModelNotificationTests {
         await harness.model.logOut()
         #expect(await eventually { harness.model.authState == .needsPhoneNumber })
         harness.fake.release(.getMe)
+        try await settle()
         #expect(harness.model.currentChat == nil)
         #expect(harness.model.selectedChatID == ChatID(1))
     }
