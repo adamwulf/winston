@@ -243,6 +243,76 @@ struct VoiceModeTests {
     }
 }
 
+/// A pronunciation's play button in settings: what it says, said in the chosen voice and model.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct PronunciationPreviewTests {
+    @Test func outsideVoiceModeTheReplacementIsSaidAsWrittenNotReplacedAgain() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        // A swap: said through the pronunciations, "dog" would come out as "cat" again.
+        model.pronunciations = [
+            Pronunciation(word: "cat", replacement: "dog"),
+            Pronunciation(word: "dog", replacement: "cat"),
+        ]
+
+        model.previewPronunciation(model.pronunciations[0])
+
+        // The preview player's own engine plays it, and stops once it has played.
+        #expect(model.voiceLoop.state == .off)
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.audio.playedFrames > 0)
+        #expect(harness.bed.kokoro.requests == [FakeKokoro.Request(text: "dog", voice: "af_heart", speed: 1)])
+    }
+
+    @Test func inVoiceModeTheReplacementIsSaidAsWrittenThroughTheLoop() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        await model.setVoiceMode(true)
+        model.pronunciations = [
+            Pronunciation(word: "cat", replacement: "dog"),
+            Pronunciation(word: "dog", replacement: "cat"),
+        ]
+
+        model.previewPronunciation(model.pronunciations[1])
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["cat"])
+    }
+
+    @Test func withTheReplacementBlankTheWordIsSaid() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        model.pronunciations = [Pronunciation(word: "Kokoro")]
+
+        model.previewPronunciation(model.pronunciations[0])
+
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["Kokoro"])
+    }
+
+    @Test func withBothBlankNothingIsSaidAndWhatIsBeingSaidCarriesOn() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setVoiceMode(true)
+        model.previewVoice()
+        #expect(model.voiceLoop.state == .speaking)
+
+        model.previewPronunciation(Pronunciation(word: " ", replacement: ""))
+
+        #expect(model.voiceLoop.state == .speaking)
+    }
+}
+
 /// The message list's Speak item: a message said again in the chosen voice and model.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))

@@ -720,6 +720,15 @@ public final class AppModel {
         guard !text.isEmpty else { return }
         voiceLoop.preview(text)
     }
+
+    /// Plays a pronunciation in settings: its replacement, or while that is blank its word, exactly as
+    /// written, as `readAloud(_:)` plays a message. Nothing when both are blank, so whatever is being
+    /// said carries on.
+    public func previewPronunciation(_ pronunciation: Pronunciation) {
+        let text = pronunciation.spokenForm
+        guard !text.isEmpty else { return }
+        voiceLoop.preview(asWritten: text)
+    }
 }
 
 /// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.

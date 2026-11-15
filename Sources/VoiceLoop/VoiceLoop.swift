@@ -424,7 +424,12 @@ public final class VoiceLoop {
     /// doesn't start over the user and get cut off by barge-in.
     public func speak(_ text: String) {
         guard state != .off || isStarting || resumeAfterInterruption else { return }
-        let spoken = pronunciationReplacer.replaced(in: SpokenText.speakable(text))
+        enqueue(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
+    }
+
+    /// Queues `spoken`, text ready to say as it is, after anything already queued. Nothing if it
+    /// is empty.
+    private func enqueue(_ spoken: String) {
         guard !spoken.isEmpty else { return }
         speechQueue.append(spoken)
         speakNextIfIdle()
@@ -444,16 +449,28 @@ public final class VoiceLoop {
     /// to the speaker on an engine of its own. Like a reply, it uses the system voice for a Kokoro
     /// voice whose model isn't ready.
     public func preview(_ text: String) {
+        preview(spoken: pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
+    }
+
+    /// Says `text` exactly as written, as `preview(_:)` otherwise does, for hearing a pronunciation
+    /// in settings: neither markdown stripping nor `pronunciations` change it, just as nothing
+    /// changes a replacement once it is in place. Otherwise a swap, such as "cat" said as "dog"
+    /// and "dog" as "cat", would play the wrong word.
+    public func preview(asWritten text: String) {
+        preview(spoken: text)
+    }
+
+    /// Says `text`, ready to say as it is, for `preview(_:)` and `preview(asWritten:)`.
+    private func preview(spoken text: String) {
         stopPreviewPlayer()
-        // Starting or rebuilding counts as running: speak() queues for the engine then, and
+        // Starting or rebuilding counts as running: speech queues for the engine then, and
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
             logPreviewStarted(throughLoop: true)
             stopSpeaking()
-            speak(text)
+            enqueue(text)
             return
         }
-        let text = pronunciationReplacer.replaced(in: SpokenText.speakable(text))
         guard !text.isEmpty else { return }
         let playback: SpeechPlayback
         do {

@@ -200,6 +200,8 @@ struct SettingsView: View {
         Section {
             ForEach($model.pronunciations) { $pronunciation in
                 PronunciationRow(pronunciation: $pronunciation) {
+                    model.previewPronunciation(pronunciation)
+                } remove: {
                     // Read through the binding first: reading it while removeAll changes
                     // the array it reads from is an exclusive access conflict.
                     let id = pronunciation.id
@@ -388,10 +390,12 @@ struct SettingsView: View {
 }
 
 /// One pronunciation: the word, and what to say in its place. Both are typed exactly as written,
-/// since the word matches only with the same case. On iOS a row is removed by swiping it; on the
-/// Mac, with its remove button.
+/// since the word matches only with the same case. Its play button says the replacement in the
+/// chosen voice, or the word while the replacement is blank; with both blank there's nothing to
+/// play. On iOS a row is removed by swiping it; on the Mac, with its remove button.
 private struct PronunciationRow: View {
     @Binding var pronunciation: Pronunciation
+    let play: () -> Void
     let remove: () -> Void
 
     var body: some View {
@@ -401,6 +405,14 @@ private struct PronunciationRow: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             TextField("Say as", text: $pronunciation.replacement, prompt: Text("Say as"))
+            // Borderless, so on iOS only the button plays, not a tap anywhere in the row.
+            Button(action: play) {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(pronunciation.spokenForm.isEmpty)
+            .help("Play")
+            .accessibilityLabel("Play pronunciation")
             #if os(macOS)
             Button(action: remove) {
                 Image(systemName: "minus.circle")
