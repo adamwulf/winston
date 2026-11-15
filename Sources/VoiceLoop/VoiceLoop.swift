@@ -72,7 +72,7 @@ public final class VoiceLoop {
         set { kokoroModel.variant = newValue }
     }
     /// The Kokoro model until another is chosen.
-    public static let defaultKokoroModelVariant = KokoroModelVariant.original
+    public static let defaultKokoroModelVariant = KokoroModelVariant.soniqo5s
     /// `AVSpeechUtterance.rate` to speak at, within `speechRates`. The scale isn't linear:
     /// `defaultSpeechRate` (the middle) is normal speed. Applies from the next message spoken.
     public var speechRate: Float = VoiceLoop.defaultSpeechRate

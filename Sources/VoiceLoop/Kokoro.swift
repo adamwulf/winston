@@ -17,12 +17,13 @@ import Observation
 /// until it finishes. Each model downloads the first time it is used, and stays stored until the
 /// stored models are deleted, a day after the last Kokoro voice was unchosen.
 public enum KokoroModelVariant: String, CaseIterable, Sendable {
-    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass.
-    case original = "5s"
+    /// soniqo's 5 s graph, the one speech-swift ships (`aufklarer/Kokoro-82M-CoreML`): about 56
+    /// phoneme tokens per pass.
+    case soniqo5s = "5s"
     /// Our own export at 5 s (`milestonemade/Kokoro-82M-CoreML-Masked`): about 56 tokens per pass,
     /// about 0.2 s a pass on a Mac's CPU. The masked exports run their LSTMs over the text only,
-    /// not the padding, as the original does, and in fp16; in blind tests they sound at least as
-    /// good as the original.
+    /// not the padding, as soniqo's does, and in fp16; in blind tests they sound at least as good
+    /// as soniqo's.
     case masked5s = "masked5s"
     /// Our own export at 10 s: about 125 tokens per pass, about 0.6 s a pass on a Mac.
     case masked10s = "masked10s"
@@ -41,7 +42,7 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     /// Its name in settings.
     public var name: String {
         switch self {
-        case .original: "Original 5 s"
+        case .soniqo5s: "Soniqo 5 s"
         case .masked5s: "Masked 5 s"
         case .masked10s: "Masked 10 s"
         case .masked15s: "Masked 15 s"
@@ -56,7 +57,7 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     /// too, and a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
-        case .original: 335
+        case .soniqo5s: 335
         case .masked5s, .masked10s, .masked15s: 245
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
         }

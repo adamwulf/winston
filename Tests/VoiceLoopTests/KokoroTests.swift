@@ -539,14 +539,14 @@ struct KokoroModelChoiceTests {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
         defer { loop.stop() }
-        #expect(loop.kokoroModelVariant == .original)
-        #expect(bed.kokoro.loadedModel == .original)
+        #expect(loop.kokoroModelVariant == .soniqo5s)
+        #expect(bed.kokoro.loadedModel == .soniqo5s)
 
         loop.kokoroModelVariant = .fluidAudio15s
 
         #expect(loop.kokoroModelState == .loading)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
         #expect(bed.kokoro.loadedModel == .fluidAudio15s)
         _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
         #expect(bed.kokoro.requests.map(\.text) == ["Hi."])
@@ -590,7 +590,7 @@ struct KokoroModelChoiceTests {
         #expect(loop.kokoroModelState == .loading)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
         #expect(bed.kokoro.loadedModel == .fluidAudio15s)
     }
 
@@ -623,7 +623,7 @@ struct KokoroModelChoiceTests {
         loop.kokoroModelVariant = .fluidAudio15s
 
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
     }
 
     @Test func withASystemVoiceChosenTheNextKokoroVoiceLoadsTheChosenModel() async throws {
@@ -1049,7 +1049,7 @@ struct KokoroLanguageTests {
     @Test func removingTheStoredModelsDeletesEachFolderAndMarkerAndNothingElse() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        // As finished downloads of every model leave them: the original model's folder, the
+        // As finished downloads of every model leave them: soniqo's model's folder, the
         // masked models' folder and FluidAudio's folder, each shared by three models, and each
         // model's marker. Plus a file of someone else's.
         for name in ["Kokoro-82M-CoreML", "Kokoro-82M-Masked", "Kokoro-82M-15s"] {
@@ -1115,7 +1115,7 @@ private let realModelDirectory: URL = {
     return package.appending(path: ".build/kokoro-model", directoryHint: .isDirectory)
 }()
 
-/// Whether the default model, the original 5 s one, has been downloaded (335 MB).
+/// Whether the default model, soniqo's 5 s one, has been downloaded (335 MB).
 private let realModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-CoreML.downloaded").path
 )

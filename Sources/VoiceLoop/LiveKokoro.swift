@@ -6,8 +6,8 @@ import LogSupport
 
 // The real Kokoro engine behind `KokoroEngine`: speech-swift's KokoroTTS. Like
 // `LiveVoiceEnvironment.swift`, the unit tests don't run this file: it downloads 325-410 MB a
-// model. `KokoroRealModelTests` runs it when the default model, the original one, has already
-// been downloaded.
+// model. `KokoroRealModelTests` runs it when the default model, soniqo's, has already been
+// downloaded.
 
 /// speech-swift's `KokoroTTSModel`, downloaded into `directory` and loaded there, one
 /// `KokoroModelVariant` at a time. The model isn't `Sendable`, so it stays inside this actor, which
@@ -35,7 +35,7 @@ package actor LiveKokoro: KokoroEngine {
     }
 
     /// `variant`'s files, as KokoroTTS lays them out. FluidAudio's models share a folder, so
-    /// their voices download once; the original model has a folder of its own, since KokoroTTS
+    /// their voices download once; soniqo's model has a folder of its own, since KokoroTTS
     /// loads every voice file it finds, and the two repositories' voices have different formats.
     private func modelFolder(_ variant: KokoroModelVariant) -> URL {
         directory.appending(path: variant.folderName, directoryHint: .isDirectory)
@@ -252,7 +252,7 @@ extension KokoroModelVariant {
     /// held only the 15 s model, so a download stored then is still found.
     fileprivate var folderName: String {
         switch self {
-        case .original: "Kokoro-82M-CoreML"
+        case .soniqo5s: "Kokoro-82M-CoreML"
         case .masked5s, .masked10s, .masked15s: "Kokoro-82M-Masked"
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: "Kokoro-82M-15s"
         }
@@ -262,7 +262,7 @@ extension KokoroModelVariant {
     /// models share folders.
     fileprivate var markerName: String {
         switch self {
-        case .original: "Kokoro-82M-CoreML"
+        case .soniqo5s: "Kokoro-82M-CoreML"
         case .masked5s, .masked10s, .masked15s: "Kokoro-82M-Masked.\(modelFile)"
         case .fluidAudio5s: "Kokoro-82M-15s.kokoro_21_5s"
         case .fluidAudio10s: "Kokoro-82M-15s.kokoro_21_10s"
@@ -273,7 +273,7 @@ extension KokoroModelVariant {
     /// Its Hugging Face repository.
     fileprivate var modelId: String {
         switch self {
-        case .original: KokoroTTSModel.defaultModelId
+        case .soniqo5s: KokoroTTSModel.defaultModelId
         case .masked5s, .masked10s, .masked15s: "milestonemade/Kokoro-82M-CoreML-Masked"
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: "FluidInference/kokoro-82m-coreml"
         }
@@ -282,7 +282,7 @@ extension KokoroModelVariant {
     /// Its end-to-end graph in the repository, without `.mlmodelc`.
     fileprivate var modelFile: String {
         switch self {
-        case .original: KokoroTTSModel.defaultModelFile
+        case .soniqo5s: KokoroTTSModel.defaultModelFile
         case .masked5s: "kokoro_masked_5s_fp16"
         case .masked10s: "kokoro_masked_10s_fp16"
         case .masked15s: "kokoro_masked_15s_fp16"
@@ -292,12 +292,12 @@ extension KokoroModelVariant {
         }
     }
 
-    /// The voices it downloads and loads. The original repository's voices are small, so it
+    /// The voices it downloads and loads. soniqo's repository's voices are small, so it
     /// takes them all, as it always has; the others take only the American and British English
     /// voices `KokoroCatalog` offers (FluidAudio's are 2.7 MB each).
     fileprivate var voiceFilter: [String]? {
         switch self {
-        case .original: nil
+        case .soniqo5s: nil
         case .masked5s, .masked10s, .masked15s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: ["a*", "b*"]
         }
     }
@@ -307,12 +307,12 @@ extension KokoroModelVariant {
     /// be caught. The masked fp16 models run on the CPU only: allowing the Neural Engine makes
     /// their first load compile for it for over an hour on a Mac, and each pass is then about 5
     /// times slower. The others may use the Neural Engine, though the placement log shows the
-    /// original runs entirely on the CPU anyway. Core ML picks each operation's device;
+    /// soniqo's runs entirely on the CPU anyway. Core ML picks each operation's device;
     /// `logPlacement` logs it.
     fileprivate var computeUnits: MLComputeUnits {
         switch self {
         case .masked5s, .masked10s, .masked15s: .cpuOnly
-        case .original, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: .cpuAndNeuralEngine
+        case .soniqo5s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: .cpuAndNeuralEngine
         }
     }
 }
