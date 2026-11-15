@@ -168,24 +168,28 @@ struct SettingsView: View {
         if voices.contains(where: { $0.engine == .kokoro }) {
             Section {
                 Picker("Voice model", selection: $model.kokoroModelVariant) {
+                    Text("No Model").tag(KokoroModelVariant?.none)
                     ForEach(KokoroModelVariant.allCases, id: \.self) { variant in
-                        Text(variant.name).tag(variant)
+                        Text(variant.name).tag(Optional(variant))
                     }
                 }
-                LabeledContent("Status") {
-                    kokoroModelStatus
-                }
-                // Its own row, full width under the status, like the sliders under theirs.
-                if case .downloading(let progress) = model.voiceLoop.kokoroModelState, progress < 1 {
-                    ProgressView(value: progress) {
-                        Text("Download progress")
+                // With no model there is nothing to download or load.
+                if let variant = model.kokoroModelVariant {
+                    LabeledContent("Status") {
+                        kokoroModelStatus(of: variant)
                     }
-                    .labelsHidden()
+                    // Its own row, full width under the status, like the sliders under theirs.
+                    if case .downloading(let progress) = model.voiceLoop.kokoroModelState, progress < 1 {
+                        ProgressView(value: progress) {
+                            Text("Download progress")
+                        }
+                        .labelsHidden()
+                    }
                 }
             } header: {
                 Text("Kokoro Voices")
             } footer: {
-                Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
+                Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. With No Model, no download starts and the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
             }
         }
     }
@@ -264,13 +268,22 @@ struct SettingsView: View {
             Button("Delete Downloaded Voice Models", role: .destructive) {
                 confirmingModelDeletion = true
             }
+            .disabled(isKokoroModelLoading)
             .confirmationDialog("Delete downloaded voice models?", isPresented: $confirmingModelDeletion) {
                 Button("Delete", role: .destructive) {
-                    model.voiceLoop.deleteKokoroModels()
+                    model.deleteKokoroModels()
                 }
             }
         } footer: {
-            Text("Deletes every Kokoro model stored on this device. With a Kokoro voice chosen, its model downloads again right away, picking up any update.")
+            Text("Deletes every Kokoro model stored on this device and sets the voice model to No Model, so nothing downloads until you choose a model again. Unavailable while a model downloads or loads.")
+        }
+    }
+
+    /// Whether the Kokoro model is downloading or loading.
+    private var isKokoroModelLoading: Bool {
+        switch model.voiceLoop.kokoroModelState {
+        case .loading, .downloading: true
+        case .notLoaded, .ready, .failed: false
         }
     }
 
@@ -317,24 +330,24 @@ struct SettingsView: View {
     }
 
     private func label(for voice: VoiceOption) -> String {
-        if voice.engine == .kokoro {
-            return "\(voice.name) (Kokoro)"
+        let suffix = switch (voice.engine, voice.quality) {
+        case (.kokoro, _): " (Kokoro)"
+        case (.system, .premium): " (Premium)"
+        case (.system, .enhanced): " (Enhanced)"
+        case (.system, .standard): ""
         }
-        return switch voice.quality {
-        case .premium: "\(voice.name) (Premium)"
-        case .enhanced: "\(voice.name) (Enhanced)"
-        case .standard: voice.name
-        }
+        // Some system voices already have it in their name, such as "Susan (Enhanced)" on iOS.
+        return voice.name.hasSuffix(suffix) ? voice.name : voice.name + suffix
     }
 
-    /// Where the chosen Kokoro model is: its size before anything has asked for it, the download's
-    /// percentage (its progress bar is a row of its own), ready with a button that plays a
-    /// sample, or failed with a retry.
+    /// Where the chosen Kokoro model, `variant`, is: its size before anything has asked for it,
+    /// the download's percentage (its progress bar is a row of its own), ready with a button that
+    /// plays a sample, or failed with a retry.
     @ViewBuilder
-    private var kokoroModelStatus: some View {
+    private func kokoroModelStatus(of variant: KokoroModelVariant) -> some View {
         switch model.voiceLoop.kokoroModelState {
         case .notLoaded:
-            Text("About \(model.kokoroModelVariant.downloadMegabytes) MB")
+            Text("About \(variant.downloadMegabytes) MB")
         case .loading, .downloading(progress: 1...):
             HStack {
                 ProgressView()

@@ -755,6 +755,73 @@ struct KokoroModelChoiceTests {
         #expect(await eventually { loop.kokoroModelState == .ready })
         #expect(bed.kokoro.loadedModels == [.fluidAudio10s])
     }
+
+    @Test func withNoModelChosenAKokoroVoiceLoadsNothingUntilAModelIsChosen() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.kokoroModelVariant = nil
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+        try await settle()
+        #expect(bed.kokoro.loadCalls == 0)
+        #expect(loop.kokoroModelState == .notLoaded)
+
+        loop.kokoroModelVariant = .masked5s
+        #expect(loop.kokoroModelState == .loading)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(bed.kokoro.loadedModels == [.masked5s])
+    }
+
+    @Test func choosingNoModelFreesTheLoadedOneAndTheSystemVoiceSpeaks() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        loop.kokoroModelVariant = nil
+
+        #expect(loop.kokoroModelState == .notLoaded)
+        #expect(await eventually { bed.kokoro.unloads == 1 && !bed.kokoro.isLoaded })
+        #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.requests.isEmpty)
+        // Freed, not deleted.
+        #expect(bed.kokoro.isStored)
+        #expect(bed.kokoro.removals == 0)
+    }
+
+    @Test func choosingNoModelWhileOneLoadsFreesItOnceItFinishes() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.kokoroModelVariant = nil
+        // The download carries on.
+        #expect(loop.kokoroModelState == .loading)
+        bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { loop.kokoroModelState == .notLoaded && bed.kokoro.unloads == 1 })
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(!bed.kokoro.isLoaded)
+        #expect(bed.kokoro.isStored)
+    }
+
+    @Test func choosingNoModelAfterAFailureLeavesNothingToRetry() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .fails
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .failed })
+
+        loop.kokoroModelVariant = nil
+
+        #expect(loop.kokoroModelState == .notLoaded)
+        loop.loadKokoroModel()
+        try await settle()
+        #expect(bed.kokoro.loadCalls == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
+    }
 }
 
 // MARK: - Deleting the model
@@ -981,6 +1048,22 @@ struct KokoroRemovalTests {
         #expect(await eventually { bed.kokoro.removals == 1 && bed.kokoro.loads == 2 })
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
+    }
+
+    @Test func deletingTheModelsWithNoModelChosenDownloadsNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        loop.kokoroModelVariant = nil
+        loop.deleteKokoroModels()
+
+        #expect(await eventually { bed.kokoro.removals == 1 })
+        try await settle()
+        #expect(!bed.kokoro.isStored)
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
     }
 }
 

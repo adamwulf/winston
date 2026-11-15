@@ -612,6 +612,46 @@ struct VoiceSettingsTests {
         #expect(relaunched.voiceLoop.kokoroModelVariant == .fluidAudio10s)
     }
 
+    @Test func noModelIsSavedAppliedAndRestored() async throws {
+        let harness = Harness()
+        harness.model.voiceIdentifier = "kokoro.af_heart"
+
+        harness.model.kokoroModelVariant = nil
+
+        #expect(harness.defaults.string(forKey: "kokoroModelVariant") == "none")
+        #expect(harness.model.voiceLoop.kokoroModelVariant == nil)
+        let bed = VoiceTestBed()
+        let relaunched = harness.relaunchedModel(on: bed)
+        #expect(relaunched.kokoroModelVariant == nil)
+        #expect(relaunched.voiceLoop.kokoroModelVariant == nil)
+        try await settle()
+        #expect(bed.kokoro.loadCalls == 0)
+        #expect(relaunched.voiceLoop.kokoroModelState == .notLoaded)
+    }
+
+    @Test func deletingTheModelsChoosesNoModelSoNoneDownloadsAgain() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+
+        model.deleteKokoroModels()
+
+        #expect(model.kokoroModelVariant == nil)
+        #expect(model.voiceLoop.kokoroModelVariant == nil)
+        #expect(harness.defaults.string(forKey: "kokoroModelVariant") == "none")
+        #expect(await eventually { harness.bed.kokoro.removals == 1 })
+        try await settle()
+        #expect(!harness.bed.kokoro.isStored)
+        #expect(harness.bed.kokoro.loads == 1)
+        #expect(model.voiceLoop.kokoroModelState == .notLoaded)
+
+        // Choosing a model downloads it again.
+        model.kokoroModelVariant = .masked5s
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        #expect(harness.bed.kokoro.loadedModels == [VoiceLoop.defaultKokoroModelVariant, .masked5s])
+    }
+
     @Test func aRelaunchWithAKokoroVoiceLoadsOnlyTheSavedModel() async throws {
         let harness = Harness()
         harness.model.kokoroModelVariant = .fluidAudio10s

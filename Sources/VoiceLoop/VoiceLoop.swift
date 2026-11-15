@@ -64,10 +64,12 @@ public final class VoiceLoop {
     public var kokoroModelState: KokoroModelState {
         kokoroModel.state
     }
-    /// Which Kokoro model speaks the Kokoro voices. Choosing another while a Kokoro voice is
+    /// Which Kokoro model speaks the Kokoro voices, or nil for none: then no download starts, and
+    /// the best system voice speaks for a Kokoro voice. Choosing another while a Kokoro voice is
     /// chosen loads it in place of the one loaded, downloading it the first time, and until it is
-    /// ready the best system voice speaks.
-    public var kokoroModelVariant: KokoroModelVariant {
+    /// ready the best system voice speaks. Choosing none frees the loaded one; a download under
+    /// way isn't cancelled, and its model is freed once it finishes.
+    public var kokoroModelVariant: KokoroModelVariant? {
         get { kokoroModel.variant }
         set { kokoroModel.variant = newValue }
     }
@@ -478,7 +480,7 @@ public final class VoiceLoop {
         Self.log.info("voice preview started", [
             "voice": voiceIdentifier ?? "default",
             "engine": kokoroVoice == nil ? "system" : "kokoro",
-            "kokoroModel": kokoroModelVariant.rawValue,
+            "kokoroModel": kokoroModelVariant?.rawValue ?? "none",
             "speechRate": speechRate,
             "kokoroSpeed": KokoroSpeed.speed(forRate: speechRate),
             "speechPitch": speechPitch,
@@ -569,8 +571,9 @@ public final class VoiceLoop {
         kokoroModel.removeIfUnused()
     }
 
-    /// Deletes every stored Kokoro model now, for settings. With a Kokoro voice chosen, the chosen
-    /// model then downloads again, fresh, and until it is ready the best system voice speaks.
+    /// Deletes every stored Kokoro model now, for settings. With a Kokoro voice and a model chosen,
+    /// that model then downloads again, fresh, and until it is ready the best system voice speaks.
+    /// Set `kokoroModelVariant` to nil first for nothing to download.
     public func deleteKokoroModels() {
         kokoroModel.removeStoredModels()
     }
