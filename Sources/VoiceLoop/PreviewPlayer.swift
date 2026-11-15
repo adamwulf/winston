@@ -33,16 +33,16 @@ final class PreviewPlayer {
     }
 
     /// Starts a preview at `pitch` times the voice's own pitch (a `VoiceLoop.speechPitch`),
-    /// cutting off the one playing, and returns the playback to feed its audio into. Throws
-    /// when the engine or, on iOS, the audio session can't start.
-    func play(pitch: Float) throws -> SpeechPlayback {
+    /// spoken at `speed` (1 is normal), cutting off the one playing, and returns the playback to
+    /// feed its audio into. Throws when the engine or, on iOS, the audio session can't start.
+    func play(pitch: Float, speed: Float) throws -> SpeechPlayback {
         stop()
         let engine = try environment.makeEngine()
         let output = try SpeechOutput(engine: engine)
         output.connect()
         output.setPitch(pitch)
         // A preview is never queued again, so it needs no text.
-        let playback = output.makePlayback(text: "") { [weak self] playback in
+        let playback = output.makePlayback(text: "", speed: speed) { [weak self] playback in
             Task { @MainActor in self?.finished(playback) }
         }
         // Watching from before the start, so a change while starting isn't missed.

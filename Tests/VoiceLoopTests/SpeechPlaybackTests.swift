@@ -59,7 +59,7 @@ private final class FinishCounter: Sendable {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct SpeechPlaybackTests {
     private func makePlayback(on pipeline: Pipeline, finished: FinishCounter) -> SpeechPlayback {
-        pipeline.speech.makePlayback(text: "Hello.") { _ in
+        pipeline.speech.makePlayback(text: "Hello.", speed: 1) { _ in
             finished.increment()
         }
     }
@@ -211,7 +211,7 @@ struct PitchShiftTests {
         defer { pipeline.tearDown() }
         let finished = FinishCounter()
         pipeline.speech.setPitch(pitch)
-        let playback = pipeline.speech.makePlayback(text: "Hello.") { _ in
+        let playback = pipeline.speech.makePlayback(text: "Hello.", speed: 1) { _ in
             finished.increment()
         }
 
