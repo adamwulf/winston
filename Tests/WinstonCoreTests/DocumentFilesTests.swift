@@ -59,6 +59,20 @@ struct CopyForSendingTests {
         #expect(try Data(contentsOf: report) == Data("Monday".utf8))
     }
 
+    @Test func aFolderIsNotCopied() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let reports = folder.appending(path: "reports-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: reports, withIntermediateDirectories: false)
+
+        await #expect(throws: DocumentFiles.Failure.folder) {
+            try await DocumentFiles.copyForSending(from: reports)
+        }
+        let copies = try FileManager.default.contentsOfDirectory(at: URL.temporaryDirectory, includingPropertiesForKeys: nil)
+            .filter { FileManager.default.fileExists(atPath: $0.appending(path: reports.lastPathComponent).path(percentEncoded: false)) }
+        #expect(copies.map(\.lastPathComponent) == [folder.lastPathComponent])
+    }
+
     @Test func aMissingFileThrows() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }

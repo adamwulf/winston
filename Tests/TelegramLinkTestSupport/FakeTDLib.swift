@@ -47,6 +47,8 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         var updateHandlers: [@Sendable (Data) -> Void] = []
         var requests: [Request] = []
         var failures: [Call: any Swift.Error] = [:]
+        /// How many more times each failing call succeeds before its failure starts.
+        var successesBeforeFailure: [Call: Int] = [:]
         /// Chats whose history can't be read, and the error `getChatHistory` gives for each.
         var historyFailures: [Int64: any Swift.Error] = [:]
         var isLoggedIn: Bool
@@ -103,11 +105,26 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
 
     /// Makes every later `call` fail with `error`, until `succeed(_:)`.
     package func fail(_ call: Call, with error: any Swift.Error) {
-        withState { $0.failures[call] = error }
+        withState {
+            $0.failures[call] = error
+            $0.successesBeforeFailure[call] = nil
+        }
+    }
+
+    /// Lets `count` more `call`s succeed, then makes every later one fail with a TDLib error, until
+    /// `succeed(_:)`. For a failure partway through several requests.
+    package func fail(_ call: Call, code: Int, message: String, afterSucceeding count: Int) {
+        withState {
+            $0.failures[call] = TDLibKit.Error(code: code, message: message)
+            $0.successesBeforeFailure[call] = count
+        }
     }
 
     package func succeed(_ call: Call) {
-        withState { $0.failures[call] = nil }
+        withState {
+            $0.failures[call] = nil
+            $0.successesBeforeFailure[call] = nil
+        }
     }
 
     /// Makes every later `getChatHistory` of one chat fail with a TDLib error, as when that
@@ -282,7 +299,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     private func record(_ request: Request, _ call: Call) throws {
         let failure = withState { state in
             state.requests.append(request)
-            return state.failures[call]
+            return Self.failure(of: call, in: &state)
         }
         if let failure {
             throw failure
@@ -294,9 +311,20 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     private func begin(_ request: Request, _ call: Call) async throws {
         withState { $0.requests.append(request) }
         await waitWhileHeld(call)
-        if let failure = withState({ $0.failures[call] }) {
+        if let failure = withState({ Self.failure(of: call, in: &$0) }) {
             throw failure
         }
+    }
+
+    /// The error this `call` fails with, if the tests made it fail and its successes before the
+    /// failure are used up. Uses one up otherwise.
+    private static func failure(of call: Call, in state: inout State) -> (any Swift.Error)? {
+        guard let failure = state.failures[call] else { return nil }
+        if let successes = state.successesBeforeFailure[call], successes > 0 {
+            state.successesBeforeFailure[call] = successes - 1
+            return nil
+        }
+        return failure
     }
 
     /// Returns at once, or after `release(call)` when the tests are holding `call`.

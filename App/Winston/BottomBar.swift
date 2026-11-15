@@ -59,7 +59,7 @@ struct BottomBar: View {
             .onChange(of: photoItem) {
                 guard let item = photoItem else { return }
                 photoItem = nil
-                sendWithDraftAsCaption { caption in
+                $draft.sendAsCaption { caption in
                     await model.sendPhoto(caption: caption) {
                         try await item.loadTransferable(type: Data.self)
                     }
@@ -109,24 +109,13 @@ struct BottomBar: View {
     private func sendFile(_ result: Result<URL, any Error>) {
         switch result {
         case .success(let url):
-            sendWithDraftAsCaption { caption in
-                await model.sendDocument(caption: caption, fileURL: url)
+            $draft.sendAsCaption { caption in
+                await model.sendDocuments(caption: caption, fileURLs: [url])
             }
         case .failure(let error):
             // Codes only: a file error's description can name the file.
             Self.log.error("file picker failed", error.logCodes())
             model.errorMessage = userMessage(for: error)
-        }
-    }
-
-    /// Sends an attachment with what's typed as its caption, and clears the text field once it's
-    /// sent, unless Adam has typed something else meanwhile.
-    private func sendWithDraftAsCaption(_ send: @escaping (String) async -> Bool) {
-        let caption = draft
-        Task {
-            if await send(caption), draft == caption {
-                draft = ""
-            }
         }
     }
 
@@ -238,5 +227,19 @@ struct BottomBar: View {
             Task { await model.setVoiceMode(!model.isVoiceMode) }
         }
         .labelStyle(.iconOnly)
+    }
+}
+
+extension Binding<String> {
+    /// Sends an attachment with this draft as its caption, and clears the draft once `send` says the
+    /// caption was sent, unless Adam has typed something else meanwhile. Used by the + button and by
+    /// files dropped on the chat.
+    func sendAsCaption(_ send: @escaping (String) async -> Bool) {
+        let caption = wrappedValue
+        Task {
+            if await send(caption), wrappedValue == caption {
+                wrappedValue = ""
+            }
+        }
     }
 }
