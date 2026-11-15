@@ -28,13 +28,13 @@ Copy `App/Config/Secrets.example.xcconfig` to `App/Config/Secrets.xcconfig`
 Settings → Notifications → Enable Notifications asks for permission. Winston requests
 a fresh APNs token at launch and on activation, then registers it with Telegram once
 logged in. Token changes and a new login register again; a failure offers Retry.
-No Winston server is needed: Telegram sends ordinary APNs alerts directly to Apple.\[^1]
+No Winston server is needed: Telegram sends ordinary APNs alerts directly to Apple.[^1]
 
 Alerts follow the account's Telegram notification settings, including non-bot chats.
 Winston does not change those cloud settings. Tapping a private bot alert selects its
 chat after login and chat loading; other alerts open the app without navigating to a
 group or secret chat. If Telegram includes the receiving account ID, Winston checks it
-before opening the chat. Single-account payloads can omit that ID.\[^2]
+before opening the chat. Single-account payloads can omit that ID.[^2]
 The current chat does not show a duplicate foreground banner. Push does not start
 voice mode; background speech still requires an already active voice session.
 
@@ -45,9 +45,9 @@ voice mode; background speech still requires an already active voice session.
    the `aps-environment` entitlement.
 2. Configure APNs certificates for the same Telegram application that owns
    `TG_API_ID` at [Telegram's application settings](https://my.telegram.org/apps).
-   TDLib requires the correct application platform and uploaded provider credentials.\[^1\]
+   TDLib requires the correct application platform and uploaded provider credentials.[^1]
    Telegram's certificate upload expects PEM containing both the certificate and its
-   private key.\[^3\] Keep those provider credentials out of the app and repository.
+   private key.[^3] Keep those provider credentials out of the app and repository.
 3. `PUSH_ENVIRONMENT` in `App/Config/Shared.xcconfig` defaults to `development` for
    Debug and `production` for Release. It supplies both the entitlement and the
    environment sent to Telegram. **It must match the final signed app.** For a
@@ -72,9 +72,9 @@ is suppressed in the foreground; and verify a locked-screen voice session separa
 Regular APNs alerts are displayed by iOS. There is no notification service extension,
 silent-push processing, or new background mode in this implementation.
 
-\[^1]: [Telegram push setup](https://core.telegram.org/api/push-updates) and [TDLib device-token requirements](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1_device_token.html).
-\[^2]: [TDLib maintainer guidance and ordinary APNs payload examples](https://github.com/tdlib/td/issues/2613).
-\[^3]: [TDLib maintainer's APNs certificate format requirements](https://github.com/tdlib/td/issues/421).
+[^1]: [Telegram push setup](https://core.telegram.org/api/push-updates) and [TDLib device-token requirements](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1_device_token.html).
+[^2]: [TDLib maintainer guidance and ordinary APNs payload examples](https://github.com/tdlib/td/issues/2613).
+[^3]: [TDLib maintainer's APNs certificate format requirements](https://github.com/tdlib/td/issues/421).
 
 ## Build and test
 
