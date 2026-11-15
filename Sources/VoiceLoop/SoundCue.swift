@@ -7,7 +7,7 @@ public enum SoundCue: Sendable, CaseIterable {
     case listeningStarted
     /// Listening has stopped: the same taps, falling in pitch.
     case listeningStopped
-    /// The bot put a 👍 on a message: a soft two-note chime.
+    /// The bot reacted to a message, with any emoji: a soft two-note chime.
     case reaction
 }
 

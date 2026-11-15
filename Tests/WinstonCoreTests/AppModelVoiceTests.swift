@@ -600,15 +600,49 @@ struct ReactionChimeTests {
         #expect(harness.bed.audio.playedFrames == played)
     }
 
-    @Test func anotherEmojiFromTheBotIsSilent() async throws {
+    @Test func anotherEmojiFromTheBotChimesToo() async throws {
         let harness = try await twoBots()
         let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.botReacts("🎉", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "🎉", count: 1, isChosen: false)]
+        })
+        #expect(await eventually { harness.bed.audio.playedFrames > played })
+    }
+
+    @Test func aSecondEmojiFromTheBotBesideItsThumbsUpChimesAgain() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+
+        let playedBefore = harness.bed.audio.playedFrames
+        try harness.fake.botReacts("👍", to: 11, in: 1)
+        #expect(await eventually { harness.bed.audio.playedFrames > playedBefore })
+        try await settle()
         let played = harness.bed.audio.playedFrames
 
         try harness.fake.botReacts("👀", to: 11, in: 1)
 
         #expect(await eventually {
-            model.latestIncomingMessage?.reactions == [Reaction(emoji: "👀", count: 1, isChosen: false)]
+            model.latestIncomingMessage?.reactions == [
+                Reaction(emoji: "👍", count: 1, isChosen: false),
+                Reaction(emoji: "👀", count: 1, isChosen: false),
+            ]
+        })
+        #expect(await eventually { harness.bed.audio.playedFrames > played })
+    }
+
+    @Test func adamsOwnEmojiFromAnotherAppIsSilent() async throws {
+        let harness = try await twoBots()
+        let model = harness.model
+        let played = harness.bed.audio.playedFrames
+
+        try harness.fake.adamReactsInAnotherApp("🎉", to: 11, in: 1)
+
+        #expect(await eventually {
+            model.latestIncomingMessage?.reactions == [Reaction(emoji: "🎉", count: 1, isChosen: true)]
         })
         try await settle()
         #expect(harness.bed.audio.playedFrames == played)

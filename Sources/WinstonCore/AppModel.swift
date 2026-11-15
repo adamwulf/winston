@@ -472,16 +472,17 @@ public final class AppModel {
                 }
             }
         case .reactionsChanged(let chat, let id, let reactions):
-            var botAddedThumbsUp = false
+            var botAddedReaction = false
             var showsMyThumbsUp = false
             updateMessage(id, in: chat) { message in
-                let before = message.othersThumbsUpCount
+                let before = message.othersReactionCounts
                 message.reactions = reactions
-                botAddedThumbsUp = message.othersThumbsUpCount > before
+                botAddedReaction = message.othersReactionCounts.contains { $0.value > before[$0.key, default: 0] }
                 showsMyThumbsUp = message.hasMyThumbsUp
             }
-            // In voice mode Adam may not be looking, so the bot's 👍 in the chat he's in chimes.
-            if botAddedThumbsUp, isVoiceMode, chat == currentChat?.id {
+            // In voice mode Adam may not be looking, so the bot's reaction in the chat he's in chimes. Every
+            // emoji plays the same chime.
+            if botAddedReaction, isVoiceMode, chat == currentChat?.id {
                 voiceLoop.play(.reaction)
             }
             if showsMyThumbsUp, let adding = thumbsUpBeingAdded, adding == (chat, id) {
@@ -759,10 +760,10 @@ extension ChatMessage {
         reactions.contains { $0.emoji == "👍" && $0.isChosen }
     }
 
-    /// How many 👍 on this message aren't Adam's: in a bot chat, the bot's.
-    package var othersThumbsUpCount: Int {
-        guard let thumbsUp = reactions.first(where: { $0.emoji == "👍" }) else { return 0 }
-        return thumbsUp.count - (thumbsUp.isChosen ? 1 : 0)
+    /// How many of each emoji on this message aren't Adam's: in a bot chat, the bot's. An emoji only
+    /// Adam chose counts 0.
+    package var othersReactionCounts: [String: Int] {
+        Dictionary(reactions.map { ($0.emoji, $0.count - ($0.isChosen ? 1 : 0)) }, uniquingKeysWith: +)
     }
 }
 
