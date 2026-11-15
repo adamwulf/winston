@@ -282,13 +282,21 @@ final class KokoroModel {
                 // Codes only: the downloader's messages name the model's folder.
                 Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
                 if self.isWanted, !self.serves(requested, voice: requestedVoice) {
-                    // Another model or voice was chosen while this one loaded; it may load.
-                    Self.log.notice("kokoro model load failed after the choice changed; loading the chosen one", [
-                        "model": requested.rawValue,
-                        "voice": requestedVoice,
-                        "chosenModel": self.variant?.rawValue ?? "none",
-                        "chosenVoice": self.voice,
-                    ])
+                    // Another model or voice was chosen while this one loaded; it may load. With
+                    // no model chosen, nothing loads, and no retry is offered.
+                    if let chosen = self.variant {
+                        Self.log.notice("kokoro model load failed after the choice changed; loading the chosen one", [
+                            "model": requested.rawValue,
+                            "voice": requestedVoice,
+                            "chosenModel": chosen.rawValue,
+                            "chosenVoice": self.voice,
+                        ])
+                    } else {
+                        Self.log.notice("kokoro model load failed after no model was chosen", [
+                            "model": requested.rawValue,
+                            "voice": requestedVoice,
+                        ])
+                    }
                     self.state = .notLoaded
                     self.load()
                 } else {

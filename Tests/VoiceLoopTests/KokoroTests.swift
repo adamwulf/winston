@@ -840,6 +840,22 @@ struct KokoroModelChoiceTests {
         #expect(bed.kokoro.isStored)
     }
 
+    @Test func choosingNoModelWhileOneLoadsLeavesNothingToRetryIfItFails() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.kokoroModelVariant = nil
+        bed.kokoro.finishLoading(succeeding: false)
+
+        #expect(await eventually { loop.kokoroModelState == .notLoaded })
+        try await settle()
+        #expect(bed.kokoro.loadCalls == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
+    }
+
     @Test func choosingNoModelAfterAFailureLeavesNothingToRetry() async throws {
         let bed = VoiceTestBed()
         bed.kokoro.loadBehavior = .fails
