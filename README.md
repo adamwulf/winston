@@ -131,7 +131,10 @@ All the Kokoro voices share one model, chosen in settings
 
 | Model | Graph | Tokens per pass | First audio (Mac) | Marker |
 |---|---|---|---|---|
-| Original 5 s (the default) | speech-swift's `kokoro_5s`, `aufklarer/Kokoro-82M-CoreML` | about 56 | 0.4 s | `Kokoro-82M-CoreML.downloaded` |
+| Soniqo 5 s (the default) | soniqo's `kokoro_5s`, as speech-swift ships it, `aufklarer/Kokoro-82M-CoreML` | about 56 | 0.4 s | `Kokoro-82M-CoreML.downloaded` |
+| Masked 5 s | `kokoro_masked_5s_fp16`, `milestonemade/Kokoro-82M-CoreML-Masked` | about 56 | 0.2 s | `Kokoro-82M-Masked.kokoro_masked_5s_fp16.downloaded` |
+| Masked 10 s | `kokoro_masked_10s_fp16` | about 125 | 0.4 s | `Kokoro-82M-Masked.kokoro_masked_10s_fp16.downloaded` |
+| Masked 15 s | `kokoro_masked_15s_fp16` | about 194 | about 1 s | `Kokoro-82M-Masked.kokoro_masked_15s_fp16.downloaded` |
 | FluidAudio 5 s | `kokoro_21_5s` (7.3 s), `FluidInference/kokoro-82m-coreml` | about 90 | 0.5 s | `Kokoro-82M-15s.kokoro_21_5s.downloaded` |
 | FluidAudio 10 s | `kokoro_21_10s` | about 130 | 0.9 s | `Kokoro-82M-15s.kokoro_21_10s.downloaded` |
 | FluidAudio 15 s | `kokoro_21_15s` | about 200 | 1.3 s | `Kokoro-82M-15s.downloaded` |
@@ -141,22 +144,39 @@ the same however short the sentence (the first-audio times are for a short
 sentence). A sentence longer than a pass is cut into pieces, and its tone of
 voice resets at each cut. FluidAudio's graphs have no speed input, so every
 speech rate speaks at speed 1 with them, and they use the voice matched to each
-piece's length, where Original uses an average of them.
+piece's length, where soniqo's uses an average of them.
 
-Original sounds best, and is the default. FluidAudio's graphs sound warbly:
-their exports run every LSTM over the padding as well as the text (soniqo's
-runs them packed, over the text only), so a short sentence, mostly padding,
-speaks about 1.5 times too fast with an unsteady pitch. Despite
-`.cpuAndNeuralEngine`, they run on the CPU.
+Soniqo 5 s is the default. FluidAudio's graphs sound warbly: their exports run
+every LSTM over the padding as well as the text (soniqo's runs them packed,
+over the text only), so a short sentence, mostly padding, speaks about 1.5 times
+too fast with an unsteady pitch. The masked models are our own exports, made
+with elizaOS's exporter: masked LSTMs like soniqo's, fp16, and a speed input. In
+blind tests they sound at least as good as soniqo's, and Masked 15 s speaks a
+long sentence in one pass.
+
+The masked models load with `.cpuOnly`: allowing the Neural Engine made their
+first load compile for it for over an hour on a Mac, and passes then ran about 5
+times slower. The others load with `.cpuAndNeuralEngine`, Core ML picks where
+each operation runs, and `LiveKokoro` logs it (`kokoro model placement`):
+soniqo's and FluidAudio's graphs run on the CPU anyway. Reading a model's compute
+plan for that log is slow (two to four and a half minutes for the masked
+graphs), and holds up other loads meanwhile, so it is skipped for CPU-only
+models.
+
+`KokoroLoadTimingTests` times loads and renders for the models named in
+`WINSTON_KOKORO_TIMING` or in `timing-models.txt` in the real-model folder (for
+example `masked5s,masked15s`). On a Mac, with Core ML's cache warm, each masked
+model loads in under a second and renders a 14-word sentence in 0.4 to 0.7 s.
 
 `LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
 the first time a Kokoro voice uses it, then writes its marker there once the
-download is complete. Original is stored in the `Kokoro-82M-CoreML` folder,
-about 335 MB. FluidAudio's models share the `Kokoro-82M-15s` folder (named when
-it held only the 15 s model) with their American and British English voices:
-about 410 MB for the first, 325 MB for each one after. Choosing another model
-while a Kokoro voice is chosen loads it in place of the first, which stays
-stored.
+download is complete. Soniqo 5 s is stored in the `Kokoro-82M-CoreML` folder,
+about 335 MB. The masked models share the `Kokoro-82M-Masked` folder: about
+245 MB for the first, 235 MB for each one after. FluidAudio's models share the
+`Kokoro-82M-15s` folder (named when it held only the 15 s model) with their
+American and British English voices: about 410 MB for the first, 325 MB for
+each one after. Choosing another model while a Kokoro voice is chosen loads it
+in place of the first, which stays stored.
 
 - iOS: the app container's `Library/Application Support/Kokoro/`.
 - macOS: the app is sandboxed, so

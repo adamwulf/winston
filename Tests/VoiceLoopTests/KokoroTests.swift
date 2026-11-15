@@ -539,14 +539,14 @@ struct KokoroModelChoiceTests {
         let bed = VoiceTestBed()
         let loop = try await loopSpeakingWithKokoro(on: bed)
         defer { loop.stop() }
-        #expect(loop.kokoroModelVariant == .original)
-        #expect(bed.kokoro.loadedModel == .original)
+        #expect(loop.kokoroModelVariant == .soniqo5s)
+        #expect(bed.kokoro.loadedModel == .soniqo5s)
 
         loop.kokoroModelVariant = .fluidAudio15s
 
         #expect(loop.kokoroModelState == .loading)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
         #expect(bed.kokoro.loadedModel == .fluidAudio15s)
         _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
         #expect(bed.kokoro.requests.map(\.text) == ["Hi."])
@@ -590,7 +590,7 @@ struct KokoroModelChoiceTests {
         #expect(loop.kokoroModelState == .loading)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
         #expect(bed.kokoro.loadedModel == .fluidAudio15s)
     }
 
@@ -623,7 +623,7 @@ struct KokoroModelChoiceTests {
         loop.kokoroModelVariant = .fluidAudio15s
 
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loadedModels == [.original, .fluidAudio15s])
+        #expect(bed.kokoro.loadedModels == [.soniqo5s, .fluidAudio15s])
     }
 
     @Test func withASystemVoiceChosenTheNextKokoroVoiceLoadsTheChosenModel() async throws {
@@ -1049,15 +1049,24 @@ struct KokoroLanguageTests {
     @Test func removingTheStoredModelsDeletesEachFolderAndMarkerAndNothingElse() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        // As finished downloads of every model leave them: the original model's folder, and
-        // FluidAudio's folder shared by its three models, each with its marker. Plus a file of
-        // someone else's.
-        for name in ["Kokoro-82M-CoreML", "Kokoro-82M-15s"] {
+        // As finished downloads of every model leave them: soniqo's model's folder, the
+        // masked models' folder and FluidAudio's folder, each shared by three models, and each
+        // model's marker. Plus a file of someone else's.
+        for name in ["Kokoro-82M-CoreML", "Kokoro-82M-Masked", "Kokoro-82M-15s"] {
             let folder = directory.appending(path: name, directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
             try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.json"))
         }
-        for marker in ["Kokoro-82M-CoreML", "Kokoro-82M-15s", "Kokoro-82M-15s.kokoro_21_10s", "Kokoro-82M-15s.kokoro_21_5s"] {
+        let markers = [
+            "Kokoro-82M-CoreML",
+            "Kokoro-82M-Masked.kokoro_masked_5s_fp16",
+            "Kokoro-82M-Masked.kokoro_masked_10s_fp16",
+            "Kokoro-82M-Masked.kokoro_masked_15s_fp16",
+            "Kokoro-82M-15s",
+            "Kokoro-82M-15s.kokoro_21_10s",
+            "Kokoro-82M-15s.kokoro_21_5s",
+        ]
+        for marker in markers {
             try Data().write(to: directory.appending(path: "\(marker).downloaded"))
         }
         try Data().write(to: directory.appending(path: "other"))
@@ -1106,7 +1115,7 @@ private let realModelDirectory: URL = {
     return package.appending(path: ".build/kokoro-model", directoryHint: .isDirectory)
 }()
 
-/// Whether the default model, the original 5 s one, has been downloaded (335 MB).
+/// Whether the default model, soniqo's 5 s one, has been downloaded (335 MB).
 private let realModelIsDownloaded = FileManager.default.fileExists(
     atPath: realModelDirectory.appending(path: "Kokoro-82M-CoreML.downloaded").path
 )
@@ -1240,6 +1249,70 @@ struct KokoroRealModelTests {
             loop.speak("Hello from \(variant.name).")
             #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
             #expect(kokoro.audibleSamples - before > 24_000)
+        }
+    }
+}
+
+// MARK: - Load and render times
+
+/// The models `KokoroLoadTimingTests` times: raw values separated by commas, such as
+/// `masked5s,masked15s`, from `WINSTON_KOKORO_TIMING`, or else from `timing-models.txt` in
+/// `realModelDirectory`.
+private let timedModels: [KokoroModelVariant] = {
+    let file = realModelDirectory.appending(path: "timing-models.txt", directoryHint: .notDirectory)
+    let list = ProcessInfo.processInfo.environment["WINSTON_KOKORO_TIMING"]
+        ?? (try? String(contentsOf: file, encoding: .utf8))
+        ?? ""
+    return list
+        .split { $0 == "," || $0.isWhitespace }
+        .compactMap { KokoroModelVariant(rawValue: String($0)) }
+}()
+
+/// How long the real models take to load and to render, for the models `timedModels` names, in
+/// `realModelDirectory` (each downloads first if it isn't stored). A first load can compile the
+/// model for the Neural Engine, which for the masked models (when they were allowed it) took over
+/// an hour on a Mac, hence the long limit. Prints one `KOKORO TIMING` line per model. Run it on
+/// its own: it is slow and uses a lot of memory.
+@Suite(
+    .serialized,
+    .enabled(if: !timedModels.isEmpty, "neither WINSTON_KOKORO_TIMING nor timing-models.txt names a model"),
+    .timeLimit(.minutes(180))
+)
+struct KokoroLoadTimingTests {
+    @Test func eachModelsFirstLoadSecondLoadAndRenderTimes() async throws {
+        let sentence = "I checked the build server this morning, and both jobs finished without errors."
+        let clock = ContinuousClock()
+        func milliseconds(since start: ContinuousClock.Instant) -> Int {
+            Int(start.duration(to: clock.now) / .milliseconds(1))
+        }
+
+        for variant in timedModels {
+            let engine = LiveKokoro(directory: realModelDirectory)
+
+            var start = clock.now
+            try await engine.load(variant) { _ in }
+            let firstLoad = milliseconds(since: start)
+            start = clock.now
+            let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let firstRender = milliseconds(since: start)
+
+            // Loaded again, as at the next launch: anything compiled the first time is cached.
+            await engine.unload()
+            start = clock.now
+            try await engine.load(variant) { _ in }
+            let secondLoad = milliseconds(since: start)
+            start = clock.now
+            let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let render = milliseconds(since: start)
+            let fast = try await engine.synthesize(sentence, voice: "af_heart", speed: 2)
+
+            print(
+                "KOKORO TIMING model=\(variant.rawValue) firstLoadMs=\(firstLoad) firstRenderMs=\(firstRender)",
+                "secondLoadMs=\(secondLoad) renderMs=\(render) samples=\(audio.count) fastSamples=\(fast.count)"
+            )
+            #expect(firstAudio.count > 24_000)
+            #expect(audio.count > 24_000)
+            await engine.unload()
         }
     }
 }

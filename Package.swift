@@ -24,10 +24,11 @@ let package = Package(
         // KokoroTTS compiles for x86_64 macOS (Swift's Float16 does not exist there), which the
         // universal Mac archive needs, a fix for the pauses inside long sentences: they are
         // cut into even chunks at phrase starts, short clauses join the chunk beside them, and
-        // the silence at those cuts is trimmed, and loading other end-to-end bundles
-        // (FluidAudio's 15 s graph) with chunks sized from the loaded graph. Branch
+        // the silence at those cuts is trimmed, loading other end-to-end bundles (FluidAudio's,
+        // and our masked-LSTM exports) with chunks sized from the loaded graph, and clearing the
+        // noise burst the fp16 graphs emit at the start of each pass. Branch
         // agent/kokoro-model-adjustments on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "28f91ec131f092b27ea7f22116f26a1626c781e9"),
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "17576d6ae40c69ce035762af261bd9874f1cbd08"),
     ],
     targets: [
         .target(
