@@ -103,9 +103,16 @@ package actor LiveKokoro: KokoroEngine {
     }
 
     /// Logs where Core ML runs `variant`, just loaded from `folder`, once per model per launch.
-    /// In the background, so speaking doesn't wait for it.
+    /// In the background, so speaking doesn't wait for it. A model limited to the CPU runs there
+    /// and needs no compute plan, which matters: reading the masked models' plans (38,000 to 55,000
+    /// operations) took two to four and a half minutes on a Mac, and held up loading another model
+    /// meanwhile.
     private func notePlacement(_ variant: KokoroModelVariant, in folder: URL) {
         guard placementLogged.insert(variant).inserted else { return }
+        guard variant.computeUnits != .cpuOnly else {
+            Self.log.notice("kokoro model placement", ["model": variant.rawValue, "computeUnits": "cpuOnly"])
+            return
+        }
         let model = folder.appending(path: "\(variant.modelFile).mlmodelc", directoryHint: .isDirectory)
         Task.detached(priority: .background) {
             await Self.logPlacement(of: model, variant: variant)
@@ -295,15 +302,17 @@ extension KokoroModelVariant {
         }
     }
 
-    /// What it may run on: the CPU and the Neural Engine, for every model. Never `.all`, the
-    /// default: on macOS 27 compiling these models for the GPU aborts the process in MPSGraph
-    /// ("invalid axis (122) for input of rank 2"), which can't be caught. Core ML picks each
-    /// operation's device; `logPlacement` logs it (the original runs entirely on the CPU).
-    ///
-    /// An experiment for the masked fp16 models: on a Mac, allowing the Neural Engine made their
-    /// first load compile for it for over 70 minutes, and each pass then about 5 times slower than
-    /// with `.cpuOnly`. `KokoroLoadTimingTests` measures it here; the iPhone may differ.
+    /// What it may run on. Never `.all`, the default: on macOS 27 compiling these models for the
+    /// GPU aborts the process in MPSGraph ("invalid axis (122) for input of rank 2"), which can't
+    /// be caught. The masked fp16 models run on the CPU only: allowing the Neural Engine makes
+    /// their first load compile for it for over an hour on a Mac, and each pass is then about 5
+    /// times slower. The others may use the Neural Engine, though the placement log shows the
+    /// original runs entirely on the CPU anyway. Core ML picks each operation's device;
+    /// `logPlacement` logs it.
     fileprivate var computeUnits: MLComputeUnits {
-        .cpuAndNeuralEngine
+        switch self {
+        case .masked5s, .masked10s, .masked15s: .cpuOnly
+        case .original, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: .cpuAndNeuralEngine
+        }
     }
 }

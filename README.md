@@ -154,13 +154,19 @@ with elizaOS's exporter: masked LSTMs like soniqo's, fp16, and a speed input. In
 blind tests they sound at least as good as Original, and Masked 15 s speaks a
 long sentence in one pass.
 
-Every model loads with `.cpuAndNeuralEngine`, and Core ML picks where each
-operation runs; `LiveKokoro` logs it (`kokoro model placement`). Original and
-FluidAudio's graphs run on the CPU. For the masked models, allowing the Neural
-Engine is an experiment: on a Mac their first load compiled for it for over an
-hour, and passes then ran about 5 times slower than on the CPU alone.
-`KokoroLoadTimingTests` times it (set `WINSTON_KOKORO_TIMING`, for example to
-`masked5s`). Masked 15 s's first load takes over a minute even on the CPU.
+The masked models load with `.cpuOnly`: allowing the Neural Engine made their
+first load compile for it for over an hour on a Mac, and passes then ran about 5
+times slower. The others load with `.cpuAndNeuralEngine`, Core ML picks where
+each operation runs, and `LiveKokoro` logs it (`kokoro model placement`):
+Original and FluidAudio's graphs run on the CPU anyway. Reading a model's compute
+plan for that log is slow (two to four and a half minutes for the masked
+graphs), and holds up other loads meanwhile, so it is skipped for CPU-only
+models.
+
+`KokoroLoadTimingTests` times loads and renders for the models named in
+`WINSTON_KOKORO_TIMING` or in `timing-models.txt` in the real-model folder (for
+example `masked5s,masked15s`). On a Mac, with Core ML's cache warm, each masked
+model loads in under a second and renders a 14-word sentence in 0.4 to 0.7 s.
 
 `LiveKokoro` downloads the chosen model into `<Application Support>/Kokoro/`
 the first time a Kokoro voice uses it, then writes its marker there once the

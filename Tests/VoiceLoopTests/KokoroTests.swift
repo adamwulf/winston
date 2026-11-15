@@ -1255,20 +1255,27 @@ struct KokoroRealModelTests {
 
 // MARK: - Load and render times
 
-/// The models `KokoroLoadTimingTests` times: `WINSTON_KOKORO_TIMING`, raw values separated by
-/// commas, such as `masked5s,masked15s`.
-private let timedModels: [KokoroModelVariant] = (ProcessInfo.processInfo.environment["WINSTON_KOKORO_TIMING"] ?? "")
-    .split(separator: ",")
-    .compactMap { KokoroModelVariant(rawValue: String($0)) }
+/// The models `KokoroLoadTimingTests` times: raw values separated by commas, such as
+/// `masked5s,masked15s`, from `WINSTON_KOKORO_TIMING`, or else from `timing-models.txt` in
+/// `realModelDirectory`.
+private let timedModels: [KokoroModelVariant] = {
+    let file = realModelDirectory.appending(path: "timing-models.txt", directoryHint: .notDirectory)
+    let list = ProcessInfo.processInfo.environment["WINSTON_KOKORO_TIMING"]
+        ?? (try? String(contentsOf: file, encoding: .utf8))
+        ?? ""
+    return list
+        .split { $0 == "," || $0.isWhitespace }
+        .compactMap { KokoroModelVariant(rawValue: String($0)) }
+}()
 
-/// How long the real models take to load and to render, for the models `WINSTON_KOKORO_TIMING`
-/// names, in `realModelDirectory` (each downloads first if it isn't stored). A first load can
-/// compile the model for the Neural Engine, which for the masked models has taken over an hour on
-/// a Mac, hence the long limit. Prints one `KOKORO TIMING` line per model. Run one at a time, on
+/// How long the real models take to load and to render, for the models `timedModels` names, in
+/// `realModelDirectory` (each downloads first if it isn't stored). A first load can compile the
+/// model for the Neural Engine, which for the masked models (when they were allowed it) took over
+/// an hour on a Mac, hence the long limit. Prints one `KOKORO TIMING` line per model. Run it on
 /// its own: it is slow and uses a lot of memory.
 @Suite(
     .serialized,
-    .enabled(if: !timedModels.isEmpty, "WINSTON_KOKORO_TIMING names no models"),
+    .enabled(if: !timedModels.isEmpty, "neither WINSTON_KOKORO_TIMING nor timing-models.txt names a model"),
     .timeLimit(.minutes(180))
 )
 struct KokoroLoadTimingTests {
