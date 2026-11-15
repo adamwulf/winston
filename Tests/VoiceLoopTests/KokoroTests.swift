@@ -568,10 +568,30 @@ struct KokoroModelChoiceTests {
 
         loop.voiceIdentifier = "kokoro.af_bella"
 
-        #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(bed.kokoro.loads == 1)
+        // Still ready at once, so a preview or reply right after the pick is spoken by Kokoro
+        // in the new voice, not by the system voice.
+        #expect(loop.kokoroModelState == .ready)
         _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
         #expect(bed.kokoro.requests.map(\.voice) == ["af_bella"])
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .ready)
+    }
+
+    @Test func aSoniqoVoiceChosenWhileTheModelLoadsNeedsNoSecondLoad() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.voiceIdentifier = "kokoro.af_bella"
+        bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        try await settle()
+        #expect(bed.kokoro.loads == 1)
+        #expect(loop.kokoroModelState == .ready)
     }
 
     @Test(arguments: [true, false])
@@ -912,6 +932,21 @@ struct KokoroRemovalTests {
         #expect(bed.kokoro.isLoaded)
         // Deleting isn't a day going unused: nothing about the record changes.
         #expect(bed.kokoroUnchosenSince == nil)
+    }
+
+    @Test func onceTheModelsAreBeingDeletedAReplyUsesTheSystemVoice() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        loop.deleteKokoroModels()
+
+        // The engine frees the model as the deletion starts, so it no longer counts as ready.
+        #expect(loop.kokoroModelState != .ready)
+        #expect(await framesPlayed(saying: "Hi.", by: loop, on: bed) > 0)
+        #expect(bed.kokoro.requests.isEmpty)
+        // Then the chosen model downloads again.
+        #expect(await eventually { bed.kokoro.removals == 1 && loop.kokoroModelState == .ready })
     }
 
     @Test func deletingTheModelsWithASystemVoiceChosenDownloadsNothing() async throws {
