@@ -64,6 +64,11 @@ public final class VoiceLoop {
     public var kokoroModelState: KokoroModelState {
         kokoroModel.state
     }
+    /// While the Kokoro model is `.loading` or `.downloading`, the stage its load has reached and
+    /// when it got there. Nil until the load reports a stage, and while no load is under way.
+    public var kokoroLoadStage: (stage: KokoroLoadStage, since: Date)? {
+        kokoroModel.loadStage
+    }
     /// Which Kokoro model speaks the Kokoro voices, or nil for none: then no download starts, and
     /// the best system voice speaks for a Kokoro voice. Choosing another while a Kokoro voice is
     /// chosen loads it in place of the one loaded, downloading it the first time, and until it is

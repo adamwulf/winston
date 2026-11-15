@@ -78,8 +78,14 @@ package protocol KokoroEngine: Sendable {
     /// Downloads `variant` and `voice` if they aren't stored yet, then loads the model with that
     /// voice, freeing any other model loaded first. Does nothing once that model has the voice
     /// loaded. `downloadProgress` gets the download's progress, from 0 to 1, and is not called
-    /// when the model and voice are already stored. It may be called on any thread.
-    func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws
+    /// when the model and voice are already stored. `stageChanged` gets each stage the load
+    /// reaches, once, whether or not it downloads. Both may be called on any thread.
+    func load(
+        _ variant: KokoroModelVariant,
+        voice: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
+    ) async throws
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
@@ -111,6 +117,23 @@ public enum KokoroModelState: Sendable, Equatable {
     case failed
 }
 
+/// What a Kokoro load is doing, in KokoroTTS's order. The logs name each by its raw value.
+public enum KokoroLoadStage: String, Sendable {
+    /// Downloading the files that aren't stored yet. A stored model passes through it at once.
+    case downloading
+    /// Loading the phoneme vocabulary and the pronunciation dictionaries.
+    case vocabulary
+    /// Loading the Core ML models that guess the phonemes of words the dictionaries lack.
+    case g2p
+    /// Loading the voices.
+    case voices
+    /// Core ML loading the model. Core ML reports no progress here, and a model's first load can
+    /// take several minutes.
+    case coreML
+    /// Rendering one short sentence, so the first reply doesn't pay Core ML's one-time setup.
+    case warmingUp
+}
+
 /// The model's state, and loading it while a Kokoro voice is chosen. One per voice loop. Once no
 /// Kokoro voice has been chosen for `unusedLifetime`, it also deletes the stored model.
 @MainActor
@@ -120,7 +143,20 @@ final class KokoroModel {
     /// How long the model stays stored after the last Kokoro voice is unchosen: a day.
     static let unusedLifetime: TimeInterval = 24 * 60 * 60
 
-    private(set) var state: KokoroModelState = .notLoaded
+    private(set) var state: KokoroModelState = .notLoaded {
+        didSet {
+            // A stage belongs to the load under way.
+            switch state {
+            case .loading, .downloading:
+                break
+            case .notLoaded, .ready, .failed:
+                loadStage = nil
+            }
+        }
+    }
+    /// The stage the load under way has reached, and when it got there by the environment's
+    /// clock, for settings. Nil until the engine reports a stage, and while no load is under way.
+    private(set) var loadStage: (stage: KokoroLoadStage, since: Date)?
     /// The model to load, or nil for none: then nothing loads or downloads, and the system voice
     /// speaks for the Kokoro voices. Changing it while a model is ready (or failed) loads the new
     /// one in its place, or with none, frees the loaded one. A load under way isn't cancelled, so
@@ -149,6 +185,9 @@ final class KokoroModel {
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
+    /// The model and voice the latest load asked for, for the logs. It describes the load under
+    /// way while `state` is `.loading` or `.downloading`.
+    @ObservationIgnored private var latestLoad: (variant: KokoroModelVariant, voice: String)?
     /// The latest load, unload or removal. Each waits for the one before, so that an unload and
     /// the load after it reach the engine in order, and a removal never runs during a load.
     @ObservationIgnored private var lastEngineCall: Task<Void, Never>?
@@ -178,7 +217,8 @@ final class KokoroModel {
     }
 
     /// Loads a changed model or voice while a Kokoro voice is chosen, or frees the loaded model
-    /// once no model is chosen. A load under way picks up the change when it finishes.
+    /// once no model is chosen. A load under way picks up the change when it finishes; the log
+    /// says the choice waits for it.
     private func loadIfChoiceChanged() {
         switch state {
         case .ready, .failed:
@@ -199,7 +239,12 @@ final class KokoroModel {
                 load()
             }
         case .loading, .downloading:
-            break
+            Self.log.notice("kokoro choice waits for the load under way", [
+                "loadingModel": latestLoad?.variant.rawValue ?? "unknown",
+                "loadingVoice": latestLoad?.voice ?? "unknown",
+                "chosenModel": variant?.rawValue ?? "none",
+                "chosenVoice": voice,
+            ])
         }
     }
 
@@ -220,18 +265,38 @@ final class KokoroModel {
         let started = ContinuousClock.now
         let requested = variant
         let requestedVoice = voice
+        latestLoad = (requested, requestedVoice)
+        Self.log.notice("kokoro model load started", ["model": requested.rawValue, "voice": requestedVoice])
         callEngine { [engine] in
             do {
                 try await engine.load(requested, voice: requestedVoice) { progress in
                     Task { @MainActor in
                         self.downloaded(progress)
                     }
+                } stageChanged: { stage in
+                    Task { @MainActor in
+                        self.reached(stage)
+                    }
                 }
             } catch {
                 // Codes only: the downloader's messages name the model's folder.
                 Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
                 if self.isWanted, !self.serves(requested, voice: requestedVoice) {
-                    // Another model or voice was chosen while this one loaded; it may load.
+                    // Another model or voice was chosen while this one loaded; it may load. With
+                    // no model chosen, nothing loads, and no retry is offered.
+                    if let chosen = self.variant {
+                        Self.log.notice("kokoro model load failed after the choice changed; loading the chosen one", [
+                            "model": requested.rawValue,
+                            "voice": requestedVoice,
+                            "chosenModel": chosen.rawValue,
+                            "chosenVoice": self.voice,
+                        ])
+                    } else {
+                        Self.log.notice("kokoro model load failed after no model was chosen", [
+                            "model": requested.rawValue,
+                            "voice": requestedVoice,
+                        ])
+                    }
                     self.state = .notLoaded
                     self.load()
                 } else {
@@ -256,6 +321,12 @@ final class KokoroModel {
             }
             guard self.serves(requested, voice: requestedVoice) else {
                 // Another model or voice was chosen while this one loaded.
+                Self.log.notice("kokoro model loaded after the choice changed; loading the chosen one", [
+                    "model": requested.rawValue,
+                    "voice": requestedVoice,
+                    "chosenModel": self.variant?.rawValue ?? "none",
+                    "chosenVoice": self.voice,
+                ])
                 self.state = .notLoaded
                 self.load()
                 return
@@ -373,6 +444,16 @@ final class KokoroModel {
         switch state {
         case .loading, .downloading:
             state = .downloading(progress: min(max(progress, 0), 1))
+        case .notLoaded, .ready, .failed:
+            break
+        }
+    }
+
+    /// Like progress, a stage can arrive after the load has finished; it only counts while loading.
+    private func reached(_ stage: KokoroLoadStage) {
+        switch state {
+        case .loading, .downloading:
+            loadStage = (stage, now())
         case .notLoaded, .ready, .failed:
             break
         }

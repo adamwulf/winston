@@ -49,7 +49,7 @@ let package = Package(
             ]
         ),
         // The call style shared by the app and the libraries: Logger overloads that take a plain
-        // dictionary, and the Error log context helpers. swift-log only.
+        // dictionary, the Error log context helpers, and the available memory field. swift-log only.
         .target(
             name: "LogSupport",
             dependencies: [

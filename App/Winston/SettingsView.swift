@@ -185,6 +185,12 @@ struct SettingsView: View {
                         }
                         .labelsHidden()
                     }
+                    // Core ML reports no progress while it builds the model, so this says why it waits.
+                    if model.voiceLoop.kokoroLoadStage?.stage == .coreML {
+                        Text("A model's first load can take several minutes. Later loads are quick.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } header: {
                 Text("Kokoro Voices")
@@ -343,8 +349,8 @@ struct SettingsView: View {
     }
 
     /// Where the chosen Kokoro model, `variant`, is: its size before anything has asked for it,
-    /// the download's percentage (its progress bar is a row of its own), ready with a button that
-    /// plays a sample, or failed with a retry.
+    /// the download's percentage (its progress bar is a row of its own), the load's stage, ready
+    /// with a button that plays a sample, or failed with a retry.
     @ViewBuilder
     private func kokoroModelStatus(of variant: KokoroModelVariant) -> some View {
         switch model.voiceLoop.kokoroModelState {
@@ -354,7 +360,7 @@ struct SettingsView: View {
             HStack {
                 ProgressView()
                     .controlSize(.small)
-                Text("Loading…")
+                kokoroLoadStatus
             }
         case .downloading(let progress):
             // The progress bar is a row of its own, below.
@@ -385,6 +391,31 @@ struct SettingsView: View {
                     model.voiceLoop.loadKokoroModel()
                 }
             }
+        }
+    }
+
+    /// Once the load is past the download, its stage and the time spent in it, such as "Building
+    /// model… 2:41", counting each second. "Loading…" until then.
+    @ViewBuilder
+    private var kokoroLoadStatus: some View {
+        if let loadStage = model.voiceLoop.kokoroLoadStage, let name = Self.name(of: loadStage.stage) {
+            TimelineView(.periodic(from: loadStage.since, by: 1)) { context in
+                let elapsed = Duration.seconds(max(0, context.date.timeIntervalSince(loadStage.since)))
+                Text("\(name) \(elapsed.formatted(.time(pattern: .minuteSecond)))")
+                    .monospacedDigit()
+            }
+        } else {
+            Text("Loading…")
+        }
+    }
+
+    /// `stage` as the status names it, or nil for the download, which has a status of its own.
+    private static func name(of stage: KokoroLoadStage) -> String? {
+        switch stage {
+        case .downloading: nil
+        case .vocabulary, .g2p, .voices: "Preparing…"
+        case .coreML: "Building model…"
+        case .warmingUp: "Warming up…"
         }
     }
 }

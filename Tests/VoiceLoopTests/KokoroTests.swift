@@ -229,6 +229,39 @@ struct KokoroSpeakingTests {
         #expect(abs(played - fakeSentenceFrames) <= fakeSentenceFrames / 20)
     }
 
+    @Test func theLoadStageShowsWhileTheModelLoadsUntilItIsReadyOrFails() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+        #expect(loop.kokoroLoadStage == nil)
+        bed.kokoro.reportStage(.coreML)
+        #expect(await eventually { loop.kokoroLoadStage?.stage == .coreML })
+        #expect(loop.kokoroLoadStage?.since == bed.now)
+        bed.now += 90
+        bed.kokoro.reportStage(.warmingUp)
+        #expect(await eventually { loop.kokoroLoadStage?.stage == .warmingUp })
+        #expect(loop.kokoroLoadStage?.since == bed.now)
+        bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroLoadStage == nil)
+
+        // A stage that arrives once the load is over is ignored.
+        bed.kokoro.reportStage(.warmingUp)
+        try await settle()
+        #expect(loop.kokoroLoadStage == nil)
+
+        loop.kokoroModelVariant = .masked5s
+        #expect(await eventually { bed.kokoro.loads == 2 })
+        bed.kokoro.reportStage(.vocabulary)
+        #expect(await eventually { loop.kokoroLoadStage?.stage == .vocabulary })
+        bed.kokoro.finishLoading(succeeding: false)
+        #expect(await eventually { loop.kokoroModelState == .failed })
+        #expect(loop.kokoroLoadStage == nil)
+    }
+
     @Test func whenTheModelFailsTheSystemVoiceSpeaksAndVoiceModeOrARetryTriesAgain() async throws {
         let bed = VoiceTestBed()
         bed.kokoro.loadBehavior = .fails
@@ -805,6 +838,22 @@ struct KokoroModelChoiceTests {
         #expect(bed.kokoro.loads == 1)
         #expect(!bed.kokoro.isLoaded)
         #expect(bed.kokoro.isStored)
+    }
+
+    @Test func choosingNoModelWhileOneLoadsLeavesNothingToRetryIfItFails() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+
+        loop.kokoroModelVariant = nil
+        bed.kokoro.finishLoading(succeeding: false)
+
+        #expect(await eventually { loop.kokoroModelState == .notLoaded })
+        try await settle()
+        #expect(bed.kokoro.loadCalls == 1)
+        #expect(loop.kokoroModelState == .notLoaded)
     }
 
     @Test func choosingNoModelAfterAFailureLeavesNothingToRetry() async throws {
@@ -1423,8 +1472,13 @@ private final class RecordingKokoro: KokoroEngine {
 
     var audibleSamples: Int { renderedSamples.withLock { $0 } }
 
-    func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
-        try await engine.load(variant, voice: voice, downloadProgress: downloadProgress)
+    func load(
+        _ variant: KokoroModelVariant,
+        voice: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
+    ) async throws {
+        try await engine.load(variant, voice: voice, downloadProgress: downloadProgress, stageChanged: stageChanged)
     }
 
     func unload() async {
@@ -1570,7 +1624,7 @@ struct KokoroLoadTimingTests {
             let engine = LiveKokoro(directory: realModelDirectory)
 
             var start = clock.now
-            try await engine.load(variant, voice: "af_heart") { _ in }
+            try await engine.load(variant, voice: "af_heart") { _ in } stageChanged: { _ in }
             let firstLoad = milliseconds(since: start)
             start = clock.now
             let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
@@ -1579,7 +1633,7 @@ struct KokoroLoadTimingTests {
             // Loaded again, as at the next launch: anything compiled the first time is cached.
             await engine.unload()
             start = clock.now
-            try await engine.load(variant, voice: "af_heart") { _ in }
+            try await engine.load(variant, voice: "af_heart") { _ in } stageChanged: { _ in }
             let secondLoad = milliseconds(since: start)
             start = clock.now
             let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)

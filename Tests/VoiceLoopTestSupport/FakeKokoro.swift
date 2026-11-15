@@ -49,6 +49,7 @@ package final class FakeKokoro: KokoroEngine {
         var isStored = false
         var waitingLoads: [(variant: KokoroModelVariant, voice: String, continuation: CheckedContinuation<Void, any Error>)] = []
         var downloadProgress: (@Sendable (Double) -> Void)?
+        var stageChanged: (@Sendable (KokoroLoadStage) -> Void)?
         var requests: [Request] = []
         /// The `requests` index that fails, if any.
         var failingRequest: Int?
@@ -137,6 +138,11 @@ package final class FakeKokoro: KokoroEngine {
         state.withLock { $0.downloadProgress }?(progress)
     }
 
+    /// Reports a stage to a waiting load.
+    package func reportStage(_ stage: KokoroLoadStage) {
+        state.withLock { $0.stageChanged }?(stage)
+    }
+
     /// Ends the loads waiting in `.waits`. One that succeeds leaves its model loaded. Succeeding
     /// before the loop's load has reached the fake makes that load succeed at once.
     package func finishLoading(succeeding: Bool) {
@@ -162,7 +168,12 @@ package final class FakeKokoro: KokoroEngine {
         }
     }
 
-    package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+    package func load(
+        _ variant: KokoroModelVariant,
+        voice: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
+    ) async throws {
         enum Outcome { case done, fails, waits }
         let outcome: Outcome = state.withLock { state in
             state.loadCalls += 1
@@ -171,6 +182,7 @@ package final class FakeKokoro: KokoroEngine {
                 return .done
             }
             state.downloadProgress = downloadProgress
+            state.stageChanged = stageChanged
             // As `KokoroEngine` promises: another model loaded is freed first.
             state.loadedModel = nil
             state.loadedVoice = nil
