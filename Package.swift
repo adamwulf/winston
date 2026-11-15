@@ -26,9 +26,11 @@ let package = Package(
         // cut into even chunks at phrase starts, short clauses join the chunk beside them, and
         // the silence at those cuts is trimmed, loading other end-to-end bundles (FluidAudio's,
         // and our masked-LSTM exports) with chunks sized from the loaded graph, clearing the
-        // noise burst the fp16 graphs emit at the start of each pass, and passing parentheses
-        // through to Kokoro as its own tokens. Branch agent/kokoro-model-adjustments on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "abddf0c7fbf99bc8e52c6ca311938293c2316347"),
+        // noise burst the fp16 graphs emit at the start of each pass, passing parentheses through
+        // to Kokoro as its own tokens, boundary token 0 and per-length voice rows for the masked
+        // models, and a 100 ms lead-in before the first word. Branch
+        // agent/kokoro-model-adjustments on the fork.
+        .package(url: "https://github.com/adamwulf/speech-swift", revision: "bd6905cb7c0552be3bf7960f63e1c5ff264779e1"),
     ],
     targets: [
         .target(
