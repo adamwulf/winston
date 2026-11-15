@@ -147,6 +147,7 @@ public final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isLoadingChats = false
+    @ObservationIgnored private var reloadChatsForNotification = false
     @ObservationIgnored private var pendingNotification: TelegramNotification?
     @ObservationIgnored private var sessionGeneration = 0
 
@@ -407,6 +408,7 @@ public final class AppModel {
     private func clearSession() {
         sessionGeneration += 1
         pendingNotification = nil
+        reloadChatsForNotification = false
         notificationErrorMessage = nil
         if isVoiceMode {
             voiceLoop.stop()
@@ -489,12 +491,20 @@ public final class AppModel {
 
     /// Loads the bot chats and their recent history.
     public func loadChats() async {
-        guard let link, !isLoadingChats else { return }
+        guard let link else { return }
+        guard !isLoadingChats else {
+            // A tap may name a new bot that wasn't in this load's chat-list snapshot.
+            // Coalesce those requests into one fresh load after the history work finishes.
+            if pendingNotification != nil { reloadChatsForNotification = true }
+            return
+        }
         let generation = sessionGeneration
         isLoadingChats = true
         defer {
             isLoadingChats = false
-            if generation != sessionGeneration, authState == .ready {
+            let needsReload = reloadChatsForNotification || generation != sessionGeneration
+            reloadChatsForNotification = false
+            if needsReload, authState == .ready {
                 Task { await loadChats() }
             }
         }
@@ -510,7 +520,9 @@ public final class AppModel {
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
-            await openPendingNotification()
+            if !reloadChatsForNotification {
+                await openPendingNotification()
+            }
         } catch {
             Self.log.error("loading bot chats failed", error.logContext())
             guard generation == sessionGeneration else { return }

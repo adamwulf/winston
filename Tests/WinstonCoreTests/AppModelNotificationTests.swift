@@ -43,6 +43,33 @@ struct AppModelNotificationTests {
         harness.fake.release(.getChatHistory)
     }
 
+    @Test func nonBotTapDuringHistoryLoadGetsItsExplanation() async throws {
+        let harness = Harness.withTwoBots()
+        harness.fake.hold(.getChatHistory)
+        harness.model.start()
+        #expect(await eventually { harness.fake.isWaiting(on: .getChatHistory) })
+        harness.model.openNotification(try target(chat: "99"))
+        // Let the notification's load request reach the already-running load.
+        try await settle()
+        harness.fake.release(.getChatHistory)
+        #expect(await eventually { harness.model.notificationErrorMessage != nil })
+        #expect(harness.model.selectedChatID == ChatID(1))
+        #expect(harness.model.errorMessage == nil)
+    }
+
+    @Test func newBotTapDuringHistoryLoadRefreshesTheChatList() async throws {
+        let harness = Harness.withTwoBots()
+        harness.fake.hold(.getChatHistory)
+        harness.model.start()
+        #expect(await eventually { harness.fake.isWaiting(on: .getChatHistory) })
+        harness.fake.addBotChat(id: 3, title: "New Bot", username: "new_bot")
+        harness.model.openNotification(try target(chat: "3"))
+        try await settle()
+        harness.fake.release(.getChatHistory)
+        #expect(await eventually { harness.model.selectedChatID == ChatID(3) })
+        #expect(harness.model.notificationErrorMessage == nil)
+    }
+
     @Test func alertForAnotherAccountDoesNotChangeChat() async throws {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
