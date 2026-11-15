@@ -88,7 +88,7 @@
       "location" : "https://github.com/adamwulf/speech-swift",
       "state" : {
         "branch" : "fix/kokoro-x86_64-float16",
-        "revision" : "4af61640d553e07c8245af2375400ab4a464c9ce"
+        "revision" : "f1562a3e51ea39393ba21512cbecbe3ab1c9ced0"
       }
     },
     {
