@@ -78,8 +78,14 @@ package protocol KokoroEngine: Sendable {
     /// Downloads `variant` and `voice` if they aren't stored yet, then loads the model with that
     /// voice, freeing any other model loaded first. Does nothing once that model has the voice
     /// loaded. `downloadProgress` gets the download's progress, from 0 to 1, and is not called
-    /// when the model and voice are already stored. It may be called on any thread.
-    func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws
+    /// when the model and voice are already stored. `stageChanged` gets each stage the load
+    /// reaches, once, whether or not it downloads. Both may be called on any thread.
+    func load(
+        _ variant: KokoroModelVariant,
+        voice: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
+    ) async throws
     /// Frees the loaded model's memory. The model stays stored, so the next `load` loads it
     /// again without downloading.
     func unload() async
@@ -137,7 +143,20 @@ final class KokoroModel {
     /// How long the model stays stored after the last Kokoro voice is unchosen: a day.
     static let unusedLifetime: TimeInterval = 24 * 60 * 60
 
-    private(set) var state: KokoroModelState = .notLoaded
+    private(set) var state: KokoroModelState = .notLoaded {
+        didSet {
+            // A stage belongs to the load under way.
+            switch state {
+            case .loading, .downloading:
+                break
+            case .notLoaded, .ready, .failed:
+                loadStage = nil
+            }
+        }
+    }
+    /// The stage the load under way has reached, and when it got there by the environment's
+    /// clock, for settings. Nil until the engine reports a stage, and while no load is under way.
+    private(set) var loadStage: (stage: KokoroLoadStage, since: Date)?
     /// The model to load, or nil for none: then nothing loads or downloads, and the system voice
     /// speaks for the Kokoro voices. Changing it while a model is ready (or failed) loads the new
     /// one in its place, or with none, frees the loaded one. A load under way isn't cancelled, so
@@ -253,6 +272,10 @@ final class KokoroModel {
                 try await engine.load(requested, voice: requestedVoice) { progress in
                     Task { @MainActor in
                         self.downloaded(progress)
+                    }
+                } stageChanged: { stage in
+                    Task { @MainActor in
+                        self.reached(stage)
                     }
                 }
             } catch {
@@ -413,6 +436,16 @@ final class KokoroModel {
         switch state {
         case .loading, .downloading:
             state = .downloading(progress: min(max(progress, 0), 1))
+        case .notLoaded, .ready, .failed:
+            break
+        }
+    }
+
+    /// Like progress, a stage can arrive after the load has finished; it only counts while loading.
+    private func reached(_ stage: KokoroLoadStage) {
+        switch state {
+        case .loading, .downloading:
+            loadStage = (stage, now())
         case .notLoaded, .ready, .failed:
             break
         }

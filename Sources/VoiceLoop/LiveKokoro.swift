@@ -47,7 +47,12 @@ package actor LiveKokoro: KokoroEngine {
         directory.appending(path: "\(variant.markerName).downloaded", directoryHint: .notDirectory)
     }
 
-    package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
+    package func load(
+        _ variant: KokoroModelVariant,
+        voice: String,
+        downloadProgress: @escaping @Sendable (Double) -> Void,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
+    ) async throws {
         if let loaded, loaded.variant == variant, loaded.model.availableVoices.contains(voice) { return }
         // Freed first, so the two models are never in memory together.
         loaded = nil
@@ -64,7 +69,9 @@ package actor LiveKokoro: KokoroEngine {
         if canLoadOffline(variant, voice: voice) {
             Self.log.notice("loading stored kokoro model", ["model": variant.rawValue, "voice": voice])
             do {
-                loaded = (variant, try await Self.load(variant, voice: voice, from: folder, offline: true, downloadProgress: nil))
+                loaded = (variant, try await Self.load(
+                    variant, voice: voice, from: folder, offline: true, downloadProgress: nil, stageChanged: stageChanged
+                ))
                 notePlacement(variant, in: folder)
                 return
             } catch {
@@ -78,7 +85,9 @@ package actor LiveKokoro: KokoroEngine {
         }
         // Downloads only the files that are missing or incomplete.
         Self.log.notice("downloading kokoro model", ["model": variant.rawValue, "voice": voice])
-        let downloaded = try await Self.load(variant, voice: voice, from: folder, offline: false, downloadProgress: downloadProgress)
+        let downloaded = try await Self.load(
+            variant, voice: voice, from: folder, offline: false, downloadProgress: downloadProgress, stageChanged: stageChanged
+        )
         // Before the model counts as loaded: if the marker can't be written (the disk is full),
         // the load fails, and a retry downloads nothing more but writes the marker again.
         try Data().write(to: marker)
@@ -92,13 +101,15 @@ package actor LiveKokoro: KokoroEngine {
             && FileManager.default.fileExists(atPath: modelFolder(variant).appending(path: "voices/\(voice).json").path)
     }
 
-    /// One KokoroTTS load of `variant`, which logs each stage it reaches and how long it took.
+    /// One KokoroTTS load of `variant`, which logs each stage it reaches and how long it took, and
+    /// passes each stage to `stageChanged`.
     private static func load(
         _ variant: KokoroModelVariant,
         voice: String,
         from folder: URL,
         offline: Bool,
-        downloadProgress: (@Sendable (Double) -> Void)?
+        downloadProgress: (@Sendable (Double) -> Void)?,
+        stageChanged: @escaping @Sendable (KokoroLoadStage) -> Void
     ) async throws -> KokoroTTSModel {
         let stages = LoadStages(variant: variant)
         do {
@@ -110,7 +121,9 @@ package actor LiveKokoro: KokoroEngine {
                 offlineMode: offline,
                 computeUnits: variant.computeUnits
             ) { fraction, message in
-                stages.report(message)
+                if let stage = stages.report(message) {
+                    stageChanged(stage)
+                }
                 // KokoroTTS reports the download as 0...0.7 of its progress, then loading.
                 downloadProgress?(min(fraction / 0.7, 1))
             }
@@ -145,16 +158,18 @@ package actor LiveKokoro: KokoroEngine {
             Int(started.duration(to: .now) / .milliseconds(1))
         }
 
-        /// Logs `message`, the progress handler's, unless it is the one before.
-        func report(_ message: String) {
+        /// Logs `message`, the progress handler's, unless it is the one before. Returns the stage
+        /// it names, if it is new and one of `KokoroLoadStage`'s.
+        func report(_ message: String) -> KokoroLoadStage? {
             let isNew = self.message.withLock { current in
                 defer { current = message }
                 return current != message
             }
-            guard isNew else { return }
+            guard isNew else { return nil }
+            let stage = KokoroLoadStage(kokoroTTSMessage: message)
             // A message KokoroTTS didn't send when this was written is logged as it is.
-            let stage = KokoroLoadStage(kokoroTTSMessage: message)?.rawValue ?? message
-            LiveKokoro.log.notice("kokoro load stage", metadata(["stage": stage, "ms": elapsedMilliseconds]))
+            LiveKokoro.log.notice("kokoro load stage", metadata(["stage": stage?.rawValue ?? message, "ms": elapsedMilliseconds]))
+            return stage
         }
 
         /// `fields` with the model and, on iOS, the memory the app may still use.
