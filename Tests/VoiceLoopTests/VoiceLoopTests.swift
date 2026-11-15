@@ -171,64 +171,6 @@ import Testing
     }
 }
 
-@Suite struct SpeechFadeInTests {
-    /// The fade-in at normal speed, in frames at 48 kHz.
-    private let normalRamp: AVAudioFrameCount = 9_600
-
-    /// A 48 kHz mono buffer of `frames` full-scale samples.
-    private func fullScale(frames: AVAudioFrameCount) throws -> AVAudioPCMBuffer {
-        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
-        buffer.frameLength = frames
-        let samples = try #require(buffer.floatChannelData)[0]
-        for index in 0..<Int(frames) { samples[index] = 1 }
-        return buffer
-    }
-
-    private func samples(_ buffer: AVAudioPCMBuffer) -> [Float] {
-        Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: Int(buffer.frameLength)))
-    }
-
-    @Test func rampsUpFromSilenceOverTheFirstBuffers() throws {
-        let first = try fullScale(frames: 4_800)
-        SpeechPlayback.fadeIn(first, at: 0, over: normalRamp)
-        #expect(samples(first)[0] == 0)
-        #expect(samples(first)[2_400] == 0.25)
-        // The next buffer carries on from where the first left off.
-        let second = try fullScale(frames: 4_800)
-        SpeechPlayback.fadeIn(second, at: 4_800, over: normalRamp)
-        #expect(samples(second)[0] == 0.5)
-        #expect(samples(second)[4_799] < 1)
-    }
-
-    @Test func aBufferStraddlingTheEndIsOnlyScaledUpToIt() throws {
-        let buffer = try fullScale(frames: 4_800)
-        SpeechPlayback.fadeIn(buffer, at: 7_200, over: normalRamp)
-        #expect(samples(buffer)[0] == 0.75)
-        #expect(samples(buffer)[2_399] < 1)
-        #expect(samples(buffer)[2_400...].allSatisfy { $0 == 1 })
-    }
-
-    @Test func laterBuffersAreUntouched() throws {
-        let buffer = try fullScale(frames: 4_800)
-        SpeechPlayback.fadeIn(buffer, at: 9_600, over: normalRamp)
-        #expect(samples(buffer).allSatisfy { $0 == 1 })
-    }
-
-    @Test func fasterSpeechFadesInFasterAndSlowerSpeechSlower() {
-        #expect(SpeechPlayback.fadeInDuration(speed: 1) == 0.2)
-        #expect(SpeechPlayback.fadeInDuration(speed: 2) == 0.1)
-        #expect(SpeechPlayback.fadeInDuration(speed: 0.5) == 0.4)
-    }
-
-    @Test func atDoubleSpeedTheBufferIsAtFullVolumeHalfwayThroughTheNormalFade() throws {
-        let buffer = try fullScale(frames: 9_600)
-        SpeechPlayback.fadeIn(buffer, at: 0, over: AVAudioFrameCount(48_000 * SpeechPlayback.fadeInDuration(speed: 2)))
-        #expect(samples(buffer)[2_400] == 0.5)
-        #expect(samples(buffer)[4_800...].allSatisfy { $0 == 1 })
-    }
-}
-
 @Suite struct SoundCueSynthesisTests {
     private let sampleRate = 48_000.0
 

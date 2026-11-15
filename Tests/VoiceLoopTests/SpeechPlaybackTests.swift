@@ -58,8 +58,42 @@ private final class FinishCounter: Sendable {
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct SpeechPlaybackTests {
+    @Test func shortSpeechPlaysAtFullVolumeFromStartToEnd() throws {
+        let engine = AVAudioEngine()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        let output = try SpeechOutput(engine: engine)
+        output.connect()
+        try engine.start()
+        defer { engine.stop() }
+        let playback = output.makePlayback(text: "Hi.") { _ in }
+
+        // 75 ms, shorter than even the former fade-in at maximum speed. Multiple buffers
+        // exercise both ordinary scheduling and the final buffer held until synthesis ends.
+        for _ in 0..<3 {
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1200))
+            buffer.frameLength = 1200
+            let samples = try #require(buffer.floatChannelData?[0])
+            samples.update(repeating: 0.5, count: 1200)
+            playback.receive(buffer)
+        }
+        playback.synthesisFinished()
+        output.player.play()
+
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
+        var audible: [Float] = []
+        for _ in 0..<12 {
+            let status = try engine.renderOffline(1024, to: rendered)
+            #expect(status == .success)
+            let samples = try #require(rendered.floatChannelData?[0])
+            audible += (0..<Int(rendered.frameLength)).map { samples[$0] }.filter { abs($0) > 0.0001 }
+        }
+        #expect(audible.count == 3600)
+        #expect(audible.allSatisfy { abs($0 - 0.5) < 0.0001 })
+    }
+
     private func makePlayback(on pipeline: Pipeline, finished: FinishCounter) -> SpeechPlayback {
-        pipeline.speech.makePlayback(text: "Hello.", speed: 1) { _ in
+        pipeline.speech.makePlayback(text: "Hello.") { _ in
             finished.increment()
         }
     }
@@ -211,7 +245,7 @@ struct PitchShiftTests {
         defer { pipeline.tearDown() }
         let finished = FinishCounter()
         pipeline.speech.setPitch(pitch)
-        let playback = pipeline.speech.makePlayback(text: "Hello.", speed: 1) { _ in
+        let playback = pipeline.speech.makePlayback(text: "Hello.") { _ in
             finished.increment()
         }
 

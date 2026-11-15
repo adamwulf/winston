@@ -6,6 +6,10 @@ been measured on an iPhone or with a real voice.
 
 Since then, `.fastResults` has been turned on (half of step 2; not
 `prepareToAnalyze`) and the timeline logging of step 1 has been added.
+The reply fade-in and its extra leading silence were removed in commit
+`1b0a6f5` so fast speech and echo cancellation can be evaluated without the
+fade. References below to that fade describe the earlier implementation;
+the recommendations to reuse or keep it are historical.
 Sections 1 and 2 describe the app as it was before; section 5 describes the
 logging as built.
 
@@ -92,8 +96,9 @@ That accounts for up to about 3.8 s on clean audio. The rest of Adam's 4 to
 - **Echo gating.** With `bargeInMinimumWords` at 1 the first word
   interrupts[^1]. `consumeEcho()` runs when a reply finishes or is stopped for
   another reason, never on a barge-in[^14][^9].
-- **The fade-in.** Each reply fades in over 200 ms so echo cancellation can
-  adapt[^15]. That changes what the microphone hears, not when words arrive.
+- **The former fade-in.** At the time of this research, each reply faded in
+  over 200 ms so echo cancellation could adapt[^15]. That changed what the
+  microphone heard, not when words arrived.
 - **Loading the model.** `analyzer.start` returned at once and
   `prepareToAnalyze` took 0.05 s in the experiment, with the model already
   warm. A cold start was not measured.
@@ -279,14 +284,17 @@ that, not the choice of detector.
   below. `pause()` keeps what is scheduled ("The player's sample time does not
   advance while the node is paused"), where `stop()` clears it[^26].
 - **Confirmed stage: stop**, as today.
-- **Resume: fade in.** Reuse the existing 200 ms fade-in[^15].
+- **Resume: fade in (historical proposal).** This proposed reusing the former
+  200 ms fade-in[^15], which has since been removed. Revisit this proposal
+  after evaluating speech clarity and echo cancellation without fading.
 
 ### Keeping the bot's own voice from triggering it
 
 In order of importance:
 
-1. **Keep what exists:** voice processing on the input node, and the 200 ms
-   fade-in at the start of each reply[^15].
+1. **Keep voice processing on the input node.** The original recommendation
+   also kept the 200 ms reply fade-in[^15]; that part is historical now that
+   the fade has been removed for evaluation.
 2. **Raise the bar while speaking.** While a reply plays, require the
    microphone level to exceed the echo that normally gets through, plus a
    margin, and a longer run of voiced frames than when idle. The app already
@@ -988,7 +996,7 @@ out("done wall=\(f3(box.elapsed()))")
 [^12]: [AVAudioNode.h in the macOS 27.2 SDK, installTapOnBus:bufferSize:format:block:, "Supported range is [100, 400] ms."](/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.2.sdk/System/Library/Frameworks/AVFAudio.framework/Headers/AVAudioNode.h:81-86)
 [^13]: [PauseDetector](../../Sources/VoiceLoop/PauseDetector.swift:PauseDetector.isComplete)
 [^14]: [VoiceLoop.consumeEcho](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.consumeEcho)
-[^15]: [SpeechPlayback.fadeIn](../../Sources/VoiceLoop/AudioPipeline.swift:SpeechPlayback.fadeIn)
+[^15]: [SpeechPlayback, now without a fade-in](../../Sources/VoiceLoop/AudioPipeline.swift:SpeechPlayback). The historical `fadeIn` implementation cited here was removed in commit `1b0a6f5`; inspect its parent with `git show 1b0a6f5^:Sources/VoiceLoop/AudioPipeline.swift`.
 [^16]: [VoiceLoop.speak, doc comment](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.speak)
 [^17]: [Appendix A of this document: raw output of the measurement script, 2026-11-13](#appendix-a-raw-measurement-output)
 [^18]: [Apple, SpeechTranscriber.ReportingOption.fastResults](https://developer.apple.com/documentation/speech/speechtranscriber/reportingoption/fastresults)

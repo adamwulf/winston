@@ -43,7 +43,7 @@ final class SpeechOutput {
     }
 
     /// Plays the next message at `multiplier` times the voice's own pitch, as
-    /// `VoiceLoop.speechPitch`: 1 is normal. Call it before `makePlayback(text:speed:onFinished:)`.
+    /// `VoiceLoop.speechPitch`: 1 is normal. Call it before `makePlayback(text:onFinished:)`.
     func setPitch(_ multiplier: Float) {
         let range = VoiceLoop.speechPitches
         let cents = 1200 * log2(min(max(multiplier, range.lowerBound), range.upperBound))
@@ -52,17 +52,15 @@ final class SpeechOutput {
         pitchShift.bypass = abs(cents) < 1
     }
 
-    /// A playback for one message on this player, at the pitch set last, spoken at `speed`
-    /// (1 is normal), which sets how fast it fades in. `onFinished` is called, on an arbitrary
-    /// thread, once the message has played.
-    func makePlayback(text: String, speed: Float, onFinished: @escaping @Sendable (SpeechPlayback) -> Void) -> SpeechPlayback {
+    /// A playback for one message on this player, at the pitch set last.
+    /// `onFinished` is called, on an arbitrary thread, once the message has played.
+    func makePlayback(text: String, onFinished: @escaping @Sendable (SpeechPlayback) -> Void) -> SpeechPlayback {
         SpeechPlayback(
             text: text,
             player: player,
             format: format,
             completion: completion,
             trailingSilence: pitchShift.bypass ? 0 : AVAudioFrameCount(format.sampleRate * Self.pitchShiftTail),
-            speed: speed,
             onFinished: onFinished
         )
     }

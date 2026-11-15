@@ -7,3 +7,4 @@ xcuserdata/
 
 # Telegram API credentials (see App/Config/Secrets.example.xcconfig)
 App/Config/Secrets.xcconfig
+.codex/
