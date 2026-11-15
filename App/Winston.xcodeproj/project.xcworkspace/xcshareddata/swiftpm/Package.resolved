@@ -1,5 +1,5 @@
 {
-  "originHash" : "bc2614fffad8c3f79961f9677a79c19789f2761fc5fd4b9a4ac782eeea94c414",
+  "originHash" : "37c18dcea79d59a14b2e7c985ec9f6d01b5dcc58bd9b40cd92770796d82d17e5",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -87,7 +87,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/adamwulf/speech-swift",
       "state" : {
-        "revision" : "bd6905cb7c0552be3bf7960f63e1c5ff264779e1"
+        "branch" : "fix/kokoro-x86_64-float16",
+        "revision" : "4af61640d553e07c8245af2375400ab4a464c9ce"
       }
     },
     {
