@@ -243,7 +243,8 @@ struct VoiceModeTests {
     }
 }
 
-/// A pronunciation's play button in settings: what it says, said in the chosen voice and model.
+/// A pronunciation's play buttons in settings, one for its word and one for its replacement: what
+/// each says, said in the chosen voice and model.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct PronunciationPreviewTests {
@@ -258,7 +259,7 @@ struct PronunciationPreviewTests {
             Pronunciation(word: "dog", replacement: "cat"),
         ]
 
-        model.previewPronunciation(model.pronunciations[0])
+        model.previewPronunciation(model.pronunciations[0].replacement)
 
         // The preview player's own engine plays it, and stops once it has played.
         #expect(model.voiceLoop.state == .off)
@@ -279,7 +280,7 @@ struct PronunciationPreviewTests {
             Pronunciation(word: "dog", replacement: "cat"),
         ]
 
-        model.previewPronunciation(model.pronunciations[1])
+        model.previewPronunciation(model.pronunciations[1].replacement)
 
         #expect(model.voiceLoop.state == .speaking)
         #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
@@ -294,39 +295,41 @@ struct PronunciationPreviewTests {
         // Made speakable as a message is, the asterisks would go: they read as emphasis.
         model.pronunciations = [Pronunciation(word: "Kokoro", replacement: "*Ko*-ko-ro")]
 
-        model.previewPronunciation(model.pronunciations[0])
+        model.previewPronunciation(model.pronunciations[0].replacement)
         let engine = try #require(harness.bed.audio.engines.last)
         #expect(await eventually { !engine.isRunning })
         await model.setVoiceMode(true)
-        model.previewPronunciation(model.pronunciations[0])
+        model.previewPronunciation(model.pronunciations[0].replacement)
 
         #expect(model.voiceLoop.state == .speaking)
         #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
         #expect(harness.bed.kokoro.requests.map(\.text) == ["*Ko*-ko-ro", "*Ko*-ko-ro"])
     }
 
-    @Test func withTheReplacementBlankTheWordIsSaid() async throws {
+    @Test func theWordIsSaidTrimmedAndAsWrittenNotReplacedByItsOwnPronunciation() async throws {
         let harness = Harness()
         let model = harness.model
         model.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
-        model.pronunciations = [Pronunciation(word: "Kokoro")]
+        // Said through the pronunciations, the word would come out as its replacement, and the
+        // two buttons would sound the same.
+        model.pronunciations = [Pronunciation(word: " cat ", replacement: "dog")]
 
-        model.previewPronunciation(model.pronunciations[0])
+        model.previewPronunciation(model.pronunciations[0].word)
 
         let engine = try #require(harness.bed.audio.engines.last)
         #expect(await eventually { !engine.isRunning })
-        #expect(harness.bed.kokoro.requests.map(\.text) == ["Kokoro"])
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["cat"])
     }
 
-    @Test func withBothBlankNothingIsSaidAndWhatIsBeingSaidCarriesOn() async throws {
+    @Test func blankTextSaysNothingAndWhatIsBeingSaidCarriesOn() async throws {
         let harness = Harness()
         let model = harness.model
         await model.setVoiceMode(true)
         model.previewVoice()
         #expect(model.voiceLoop.state == .speaking)
 
-        model.previewPronunciation(Pronunciation(word: " ", replacement: ""))
+        model.previewPronunciation("  ")
 
         #expect(model.voiceLoop.state == .speaking)
     }

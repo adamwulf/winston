@@ -16,13 +16,6 @@ public struct Pronunciation: Codable, Hashable, Identifiable, Sendable {
         self.word = word
         self.replacement = replacement
     }
-
-    /// What settings plays to let this be heard: the replacement, or while it is blank, the word.
-    /// Trimmed, and empty when both are blank.
-    public var spokenForm: String {
-        let replacement = replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-        return replacement.isEmpty ? word.trimmingCharacters(in: .whitespacesAndNewlines) : replacement
-    }
 }
 
 /// Puts each pronunciation's replacement in place of its word.

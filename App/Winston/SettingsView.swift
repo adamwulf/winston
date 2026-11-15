@@ -205,8 +205,8 @@ struct SettingsView: View {
         @Bindable var model = model
         Section {
             ForEach($model.pronunciations) { $pronunciation in
-                PronunciationRow(pronunciation: $pronunciation) {
-                    model.previewPronunciation(pronunciation)
+                PronunciationRow(pronunciation: $pronunciation) { text in
+                    model.previewPronunciation(text)
                 } remove: {
                     // Read through the binding first: reading it while removeAll changes
                     // the array it reads from is an exclusive access conflict.
@@ -421,34 +421,29 @@ struct SettingsView: View {
 }
 
 /// One pronunciation: the word, and what to say in its place. Both are typed exactly as written,
-/// since the word matches only with the same case. Its play button says the replacement in the
-/// chosen voice, or the word while the replacement is blank; with both blank there's nothing to
-/// play. On iOS a row is removed by swiping it; on the Mac, with its remove button.
+/// since the word matches only with the same case. Each has a play button that says it as written
+/// in the chosen voice, so the word as the voice would say it can be compared with its replacement.
+/// On iOS a row is removed by swiping it; on the Mac, with its remove button.
 private struct PronunciationRow: View {
     @Binding var pronunciation: Pronunciation
-    let play: () -> Void
+    /// Says the text it's given: the word or the replacement.
+    let play: (String) -> Void
     let remove: () -> Void
 
     var body: some View {
         HStack {
             TextField("Word", text: $pronunciation.word, prompt: Text("Word"))
+            PlayButton(text: pronunciation.word, help: "Play Word", accessibilityLabel: "Play word", play: play)
             Image(systemName: "arrow.right")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             TextField("Say as", text: $pronunciation.replacement, prompt: Text("Say as"))
-            // Borderless, so on iOS only the button plays, not a tap anywhere in the row.
-            Button(action: play) {
-                Image(systemName: "play.circle")
-                    #if os(iOS)
-                    // Borderless, only the symbol itself would take a tap: too small a target.
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-                    #endif
-            }
-            .buttonStyle(.borderless)
-            .disabled(pronunciation.spokenForm.isEmpty)
-            .help("Play")
-            .accessibilityLabel("Play pronunciation")
+            PlayButton(
+                text: pronunciation.replacement,
+                help: "Play Say As",
+                accessibilityLabel: "Play replacement",
+                play: play
+            )
             #if os(macOS)
             Button(action: remove) {
                 Image(systemName: "minus.circle")
@@ -463,5 +458,31 @@ private struct PronunciationRow: View {
         #if os(iOS)
         .textInputAutocapitalization(.never)
         #endif
+    }
+}
+
+/// A pronunciation row's button for playing one of its fields, disabled while that field is blank.
+private struct PlayButton: View {
+    let text: String
+    let help: LocalizedStringKey
+    let accessibilityLabel: LocalizedStringKey
+    let play: (String) -> Void
+
+    var body: some View {
+        // Borderless, so on iOS only the button plays, not a tap anywhere in the row.
+        Button {
+            play(text)
+        } label: {
+            Image(systemName: "play.circle")
+                #if os(iOS)
+                // Borderless, only the symbol itself would take a tap: too small a target.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
+        }
+        .buttonStyle(.borderless)
+        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .help(help)
+        .accessibilityLabel(accessibilityLabel)
     }
 }

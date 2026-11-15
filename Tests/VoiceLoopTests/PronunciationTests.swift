@@ -36,11 +36,4 @@ import Testing
     @Test func withoutPronunciationsTheTextIsUnchanged() {
         #expect(say("Nothing to do here.", with: []) == "Nothing to do here.")
     }
-
-    @Test func whatIsPlayedIsTheReplacementOrWhileItIsBlankTheWord() {
-        #expect(Pronunciation(word: " JSON ", replacement: " Jason ").spokenForm == "Jason")
-        #expect(Pronunciation(word: " Kokoro ", replacement: "  ").spokenForm == "Kokoro")
-        #expect(Pronunciation(word: "", replacement: "Jason").spokenForm == "Jason")
-        #expect(Pronunciation(word: " ", replacement: "").spokenForm.isEmpty)
-    }
 }

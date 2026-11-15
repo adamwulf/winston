@@ -721,11 +721,12 @@ public final class AppModel {
         voiceLoop.preview(text)
     }
 
-    /// Plays a pronunciation in settings: its replacement, or while that is blank its word, exactly as
-    /// written, as `readAloud(_:)` plays a message. Nothing when both are blank, so whatever is being
-    /// said carries on.
-    public func previewPronunciation(_ pronunciation: Pronunciation) {
-        let text = pronunciation.spokenForm
+    /// Plays one side of a pronunciation in settings, its word or its replacement, trimmed but otherwise
+    /// exactly as written, as `readAloud(_:)` plays a message. Played as written, the word comes out as
+    /// the voice would say it with no pronunciation, so it can be compared with its replacement. Nothing
+    /// when `text` is blank, so whatever is being said carries on.
+    public func previewPronunciation(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         voiceLoop.preview(asWritten: text)
     }
