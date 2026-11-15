@@ -29,7 +29,10 @@ public final class PushRegistration {
     /// Called on every successful APNs registration, including token rotation and relaunch.
     public func receivedDeviceToken(_ data: Data, isSandbox: Bool) {
         guard !data.isEmpty else { return }
-        token = data.map { String(format: "%02x", $0) }.joined()
+        let receivedToken = data.map { String(format: "%02x", $0) }.joined()
+        if token == receivedToken, self.isSandbox == isSandbox,
+           status == .registered || status == .registering { return }
+        token = receivedToken
         self.isSandbox = isSandbox
         revision += 1
         registerIfReady()

@@ -246,8 +246,9 @@ public final class AppModel {
         }
     }
 
-    /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has
-    /// gone unused for a day, as launching does.
+    /// Each activation removes unused Kokoro models and, on iOS, refreshes notification
+    /// permission and requests the current APNs token. Scene-based apps post this notification
+    /// even though they don't call UIApplicationDelegate.applicationDidBecomeActive.
     private func observeAppActivation() {
         #if os(iOS)
         let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)

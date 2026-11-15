@@ -64,6 +64,26 @@ struct PushRegistrationTests {
         #expect(registrations(harness.fake).count == 2)
     }
 
+    @Test func unchangedTokenDoesNotRestartPendingOrCompletedRegistration() async throws {
+        let harness = Harness()
+        #expect(await harness.startAndLoadChats())
+        let push = harness.model.pushRegistration
+        harness.fake.hold(.registerDevice)
+        push.receivedDeviceToken(Data([1]), isSandbox: true)
+        #expect(await eventually { harness.fake.isWaiting(on: .registerDevice) })
+        push.receivedDeviceToken(Data([1]), isSandbox: true)
+        harness.fake.release(.registerDevice)
+        #expect(await eventually { push.status == .registered })
+        push.receivedDeviceToken(Data([1]), isSandbox: true)
+        try await settle()
+        #expect(push.status == .registered)
+        #expect(registrations(harness.fake).count == 1)
+        // The environment is part of the subscription, even when Apple's bytes match.
+        push.receivedDeviceToken(Data([1]), isSandbox: false)
+        #expect(await eventually { registrations(harness.fake).count == 2 && push.status == .registered })
+        #expect(registrations(harness.fake).last == .registerDevice(token: "01", isSandbox: false, otherUserIDs: []))
+    }
+
     @Test func logoutDuringRegistrationDoesNotPublishStaleSuccessAndNextLoginRegistersAgain() async throws {
         let harness = Harness()
         #expect(await harness.startAndLoadChats())

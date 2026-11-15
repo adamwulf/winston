@@ -26,8 +26,9 @@ Copy `App/Config/Secrets.example.xcconfig` to `App/Config/Secrets.xcconfig`
 ## iOS push notifications
 
 Settings → Notifications → Enable Notifications asks for permission. Winston requests
-a fresh APNs token at launch and on activation, then registers it with Telegram once
-logged in. Token changes and a new login register again; a failure offers Retry.
+the current APNs token at launch and on activation, then registers it with Telegram once
+logged in. Each launch, token or environment change, and new login registers again;
+an unchanged token already registered or being registered is left alone. A failure offers Retry.
 No Winston server is needed: Telegram sends ordinary APNs alerts directly to Apple.[^1]
 
 Alerts follow the account's Telegram notification settings, including non-bot chats.
@@ -69,6 +70,8 @@ navigation, account checks, and private/group payload parsing.
 For a device check, test permission denial and later enabling it in iOS Settings;
 tap alerts with Winston running and after termination; verify the current-chat banner
 is suppressed in the foreground; and verify a locked-screen voice session separately.
+With a photo/file picker or document preview open, tap another bot's alert: the
+presentation should close, and a pending picker selection must not send to the new chat.
 Regular APNs alerts are displayed by iOS. There is no notification service extension,
 silent-push processing, or new background mode in this implementation.
 

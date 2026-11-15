@@ -15,6 +15,7 @@ struct BottomBar: View {
     @Environment(AppModel.self) private var model
     @Binding var draft: String
     @State private var isPickingFile = false
+    @State private var pickerNotificationCount = 0
     #if os(iOS)
     @State private var isPickingPhoto = false
     @State private var photoItem: PhotosPickerItem?
@@ -43,6 +44,13 @@ struct BottomBar: View {
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.bar)
+        .onChange(of: model.notificationOpenCount) {
+            isPickingFile = false
+            #if os(iOS)
+            isPickingPhoto = false
+            photoItem = nil
+            #endif
+        }
     }
 
     // MARK: - Text mode
@@ -59,8 +67,12 @@ struct BottomBar: View {
             .onChange(of: photoItem) {
                 guard let item = photoItem else { return }
                 photoItem = nil
+                let notificationCount = pickerNotificationCount
+                guard notificationCount == model.notificationOpenCount else { return }
                 $draft.sendAsCaption { caption in
-                    await model.sendPhoto(caption: caption) {
+                    // A notification can arrive after selection but before this task starts.
+                    guard notificationCount == model.notificationOpenCount else { return false }
+                    return await model.sendPhoto(caption: caption) {
                         try await item.loadTransferable(type: Data.self)
                     }
                 }
@@ -82,13 +94,20 @@ struct BottomBar: View {
     private var attachButton: some View {
         #if os(iOS)
         Menu {
-            Button("Files", systemImage: "folder") { isPickingFile = true }
-            Button("Photos", systemImage: "photo.on.rectangle") { isPickingPhoto = true }
+            Button("Files", systemImage: "folder") {
+                pickerNotificationCount = model.notificationOpenCount
+                isPickingFile = true
+            }
+            Button("Photos", systemImage: "photo.on.rectangle") {
+                pickerNotificationCount = model.notificationOpenCount
+                isPickingPhoto = true
+            }
         } label: {
             attachLabel
         }
         #else
         Button {
+            pickerNotificationCount = model.notificationOpenCount
             isPickingFile = true
         } label: {
             attachLabel
@@ -107,10 +126,13 @@ struct BottomBar: View {
     }
 
     private func sendFile(_ result: Result<URL, any Error>) {
+        let notificationCount = pickerNotificationCount
+        guard notificationCount == model.notificationOpenCount else { return }
         switch result {
         case .success(let url):
             $draft.sendAsCaption { caption in
-                await model.sendDocuments(caption: caption, fileURLs: [url])
+                guard notificationCount == model.notificationOpenCount else { return false }
+                return await model.sendDocuments(caption: caption, fileURLs: [url])
             }
         case .failure(let error):
             // Codes only: a file error's description can name the file.
