@@ -8,6 +8,9 @@ struct WinstonApp: App {
 
     /// Lives as long as the app, which keeps its TelegramLink alive.
     @State private var model: AppModel
+    /// The app's scenes taken together: logged as it changes, so the log shows when the app went
+    /// to the background, where iOS may suspend or kill it.
+    @Environment(\.scenePhase) private var scenePhase
     #if os(macOS)
     @NSApplicationDelegateAdaptor private var appDelegate: AppDelegate
     #else
@@ -35,11 +38,24 @@ struct WinstonApp: App {
         ])
     }
 
+    private static func logScenePhase(_ phase: ScenePhase) {
+        let name = switch phase {
+        case .active: "active"
+        case .inactive: "inactive"
+        case .background: "background"
+        @unknown default: "unknown"
+        }
+        log.notice("scene phase changed", ["phase": name])
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(model)
                 .onAppear { appDelegate.model = model }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            Self.logScenePhase(phase)
         }
         .commands {
             // One window: a second one would share the same model and Telegram session.
@@ -90,7 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// iOS only calls this when the app is running at termination, for example when it's swiped
 /// away while voice mode keeps it alive in the background. A suspended app is killed without it.
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    private static let log = Logger(label: "app.lifecycle")
+
     var model: AppModel?
+
+    /// UIKit's delegate form of `didReceiveMemoryWarningNotification`. Logged with the memory left,
+    /// since iOS may kill the app next, as it can while a Kokoro model loads.
+    func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
+        var metadata: [String: CustomStringConvertible] = [:]
+        if let megabytes = AvailableMemory.megabytes {
+            metadata["availableMB"] = megabytes
+        }
+        Self.log.warning("memory warning", metadata)
+    }
 
     func applicationWillTerminate(_ application: UIApplication) {
         guard let model else { return }
