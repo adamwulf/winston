@@ -3,6 +3,7 @@ import Foundation
 @preconcurrency import KokoroTTS
 import Logging
 import LogSupport
+import Synchronization
 
 // The real Kokoro engine behind `KokoroEngine`: speech-swift's KokoroTTS. Like
 // `LiveVoiceEnvironment.swift`, the unit tests don't load its models: it downloads 245-335 MB a
@@ -61,6 +62,7 @@ package actor LiveKokoro: KokoroEngine {
         // A finished download loads without the network if the voice is stored too. Otherwise,
         // KokoroTTS asks Hugging Face for the file list and downloads the missing files.
         if canLoadOffline(variant, voice: voice) {
+            Self.log.notice("loading stored kokoro model", ["model": variant.rawValue, "voice": voice])
             do {
                 loaded = (variant, try await Self.load(variant, voice: voice, from: folder, offline: true, downloadProgress: nil))
                 notePlacement(variant, in: folder)
@@ -75,6 +77,7 @@ package actor LiveKokoro: KokoroEngine {
             }
         }
         // Downloads only the files that are missing or incomplete.
+        Self.log.notice("downloading kokoro model", ["model": variant.rawValue, "voice": voice])
         let downloaded = try await Self.load(variant, voice: voice, from: folder, offline: false, downloadProgress: downloadProgress)
         // Before the model counts as loaded: if the marker can't be written (the disk is full),
         // the load fails, and a retry downloads nothing more but writes the marker again.
@@ -89,6 +92,7 @@ package actor LiveKokoro: KokoroEngine {
             && FileManager.default.fileExists(atPath: modelFolder(variant).appending(path: "voices/\(voice).json").path)
     }
 
+    /// One KokoroTTS load of `variant`, which logs each stage it reaches and how long it took.
     private static func load(
         _ variant: KokoroModelVariant,
         voice: String,
@@ -96,16 +100,71 @@ package actor LiveKokoro: KokoroEngine {
         offline: Bool,
         downloadProgress: (@Sendable (Double) -> Void)?
     ) async throws -> KokoroTTSModel {
-        try await KokoroTTSModel.fromPretrained(
-            modelId: variant.modelId,
-            modelFile: variant.modelFile,
-            voiceFilter: variant.voiceFilter(for: voice),
-            cacheDir: folder,
-            offlineMode: offline,
-            computeUnits: variant.computeUnits
-        ) { fraction, _ in
-            // KokoroTTS reports the download as 0...0.7 of its progress, then loading.
-            downloadProgress?(min(fraction / 0.7, 1))
+        let stages = LoadStages(variant: variant)
+        do {
+            let model = try await KokoroTTSModel.fromPretrained(
+                modelId: variant.modelId,
+                modelFile: variant.modelFile,
+                voiceFilter: variant.voiceFilter(for: voice),
+                cacheDir: folder,
+                offlineMode: offline,
+                computeUnits: variant.computeUnits
+            ) { fraction, message in
+                stages.report(message)
+                // KokoroTTS reports the download as 0...0.7 of its progress, then loading.
+                downloadProgress?(min(fraction / 0.7, 1))
+            }
+            log.notice("kokoro tts load finished", stages.metadata(["offline": offline, "ms": stages.elapsedMilliseconds]))
+            return model
+        } catch {
+            // Codes only: KokoroTTS's messages name the folder.
+            log.warning(
+                "kokoro tts load failed",
+                error.logCodes(["model": variant.rawValue, "offline": String(offline), "ms": String(stages.elapsedMilliseconds)])
+            )
+            throw error
+        }
+    }
+
+    /// Logs one KokoroTTS load's stages, each once, as its progress handler reports them: it
+    /// names the stage with each call, download fractions included. The handler may run on any
+    /// thread.
+    private final class LoadStages: Sendable {
+        let variant: KokoroModelVariant
+        /// When the load began.
+        private let started = ContinuousClock.now
+        /// KokoroTTS's latest message.
+        private let message = Mutex<String?>(nil)
+
+        init(variant: KokoroModelVariant) {
+            self.variant = variant
+        }
+
+        /// Since the load began.
+        var elapsedMilliseconds: Int {
+            Int(started.duration(to: .now) / .milliseconds(1))
+        }
+
+        /// Logs `message`, the progress handler's, unless it is the one before.
+        func report(_ message: String) {
+            let isNew = self.message.withLock { current in
+                defer { current = message }
+                return current != message
+            }
+            guard isNew else { return }
+            // A message KokoroTTS didn't send when this was written is logged as it is.
+            let stage = KokoroLoadStage(kokoroTTSMessage: message)?.rawValue ?? message
+            LiveKokoro.log.notice("kokoro load stage", metadata(["stage": stage, "ms": elapsedMilliseconds]))
+        }
+
+        /// `fields` with the model and, on iOS, the memory the app may still use.
+        func metadata(_ fields: [String: CustomStringConvertible]) -> [String: CustomStringConvertible] {
+            var metadata = fields
+            metadata["model"] = variant.rawValue
+            if let megabytes = AvailableMemory.megabytes {
+                metadata["availableMB"] = megabytes
+            }
+            return metadata
         }
     }
 
@@ -317,6 +376,23 @@ extension KokoroModelVariant {
         switch self {
         case .masked5s, .masked10s, .masked15s: .cpuOnly
         case .soniqo5s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: .cpuAndNeuralEngine
+        }
+    }
+}
+
+extension KokoroLoadStage {
+    /// The stage KokoroTTS's `fromPretrained` names in `message`, the second argument of its
+    /// progress handler. Nil for "Model loaded", which ends the load, and for any message it
+    /// didn't send when this was written.
+    fileprivate init?(kokoroTTSMessage message: String) {
+        switch message {
+        case "Downloading model...": self = .downloading
+        case "Loading vocabulary...": self = .vocabulary
+        case "Loading G2P models...": self = .g2p
+        case "Loading voice embeddings...": self = .voices
+        case "Loading CoreML model...": self = .coreML
+        case "Warming up...": self = .warmingUp
+        default: return nil
         }
     }
 }

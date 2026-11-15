@@ -111,6 +111,23 @@ public enum KokoroModelState: Sendable, Equatable {
     case failed
 }
 
+/// What a Kokoro load is doing, in KokoroTTS's order. The logs name each by its raw value.
+public enum KokoroLoadStage: String, Sendable {
+    /// Downloading the files that aren't stored yet. A stored model passes through it at once.
+    case downloading
+    /// Loading the phoneme vocabulary and the pronunciation dictionaries.
+    case vocabulary
+    /// Loading the Core ML models that guess the phonemes of words the dictionaries lack.
+    case g2p
+    /// Loading the voices.
+    case voices
+    /// Core ML loading the model. Core ML reports no progress here, and a model's first load can
+    /// take several minutes.
+    case coreML
+    /// Rendering one short sentence, so the first reply doesn't pay Core ML's one-time setup.
+    case warmingUp
+}
+
 /// The model's state, and loading it while a Kokoro voice is chosen. One per voice loop. Once no
 /// Kokoro voice has been chosen for `unusedLifetime`, it also deletes the stored model.
 @MainActor
