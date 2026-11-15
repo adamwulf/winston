@@ -15,14 +15,25 @@ struct AppModelNotificationTests {
         #expect(!harness.model.isVoiceMode)
     }
 
-    @Test func tapDuringChatLoadIsNotLost() async throws {
+    @Test func tapDuringChatLoadOpensBeforeHistoryFinishes() async throws {
         let harness = Harness.withTwoBots()
         harness.fake.hold(.getChats)
+        harness.fake.hold(.getChatHistory)
+        defer { harness.fake.release(.getChatHistory) }
         harness.model.start()
         #expect(await eventually { harness.fake.isWaiting(on: .getChats) })
         harness.model.openNotification(try target(chat: "2"))
+        try await settle()
         harness.fake.release(.getChats)
+        #expect(await eventually { harness.fake.isWaiting(on: .getChatHistory) })
         #expect(await eventually { harness.model.selectedChatID == ChatID(2) })
+        harness.fake.release(.getChatHistory)
+        #expect(await eventually { harness.model.messages[ChatID(2)] != nil })
+        try await settle()
+        #expect(harness.fake.requests.filter {
+            if case .getChats = $0 { return true }
+            return false
+        }.count == 1)
     }
 
     @Test func tapRefreshesBotListForANewChat() async throws {

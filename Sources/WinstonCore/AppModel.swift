@@ -502,7 +502,8 @@ public final class AppModel {
         isLoadingChats = true
         defer {
             isLoadingChats = false
-            let needsReload = reloadChatsForNotification || generation != sessionGeneration
+            let needsReload = (reloadChatsForNotification && pendingNotification != nil)
+                || generation != sessionGeneration
             reloadChatsForNotification = false
             if needsReload, authState == .ready {
                 Task { await loadChats() }
@@ -520,7 +521,9 @@ public final class AppModel {
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
-            if !reloadChatsForNotification {
+            // Use this fresh snapshot immediately when it contains the tapped bot.
+            // Only an unresolved target needs the queued refresh after history loads.
+            if !reloadChatsForNotification || pendingNotification.map({ isBotChat($0.chatID) }) == true {
                 await openPendingNotification()
             }
         } catch {
