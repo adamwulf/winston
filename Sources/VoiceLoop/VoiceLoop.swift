@@ -446,6 +446,7 @@ public final class VoiceLoop {
         // Starting or rebuilding counts as running: speak() queues for the engine then, and
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
+            logPreviewStarted(throughLoop: true)
             stopSpeaking()
             speak(text)
             return
@@ -459,6 +460,7 @@ public final class VoiceLoop {
             Self.log.error("voice preview failed to start", error.logContext())
             return
         }
+        logPreviewStarted(throughLoop: false)
         if let voice = readyKokoroVoice() {
             previewKokoroSynthesis = synthesizeWithKokoro(text, voice: voice, into: playback) { [self] rest in
                 previewWithSystemVoice(rest, into: playback)
@@ -466,6 +468,22 @@ public final class VoiceLoop {
         } else {
             previewWithSystemVoice(text, into: playback)
         }
+    }
+
+    /// Logs the voice, speed and pitch a preview is about to play with. `throughLoop` says it
+    /// plays through the running loop's engine rather than one of its own. No text: it can
+    /// hold the user's words.
+    private func logPreviewStarted(throughLoop: Bool) {
+        let kokoroVoice = readyKokoroVoice()
+        Self.log.info("voice preview started", [
+            "voice": voiceIdentifier ?? "default",
+            "engine": kokoroVoice == nil ? "system" : "kokoro",
+            "kokoroModel": kokoroModelVariant.rawValue,
+            "speechRate": speechRate,
+            "kokoroSpeed": KokoroSpeed.speed(forRate: speechRate),
+            "speechPitch": speechPitch,
+            "throughLoop": throughLoop,
+        ])
     }
 
     private func previewWithSystemVoice(_ text: String, into playback: SpeechPlayback) {

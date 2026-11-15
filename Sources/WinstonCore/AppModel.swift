@@ -65,6 +65,7 @@ public final class AppModel {
     public var pauseThreshold: Double {
         didSet {
             defaults.set(pauseThreshold, forKey: StorageKey.pauseThreshold)
+            logSettingChange(StorageKey.pauseThreshold, from: oldValue, to: pauseThreshold)
             applyVoiceSettings()
         }
     }
@@ -72,6 +73,7 @@ public final class AppModel {
     public var voiceIdentifier: String? {
         didSet {
             defaults.set(voiceIdentifier, forKey: StorageKey.voiceIdentifier)
+            logSettingChange(StorageKey.voiceIdentifier, from: oldValue ?? "default", to: voiceIdentifier ?? "default")
             applyVoiceSettings()
         }
     }
@@ -79,6 +81,7 @@ public final class AppModel {
     public var kokoroModelVariant: KokoroModelVariant {
         didSet {
             defaults.set(kokoroModelVariant.rawValue, forKey: StorageKey.kokoroModelVariant)
+            logSettingChange(StorageKey.kokoroModelVariant, from: oldValue.rawValue, to: kokoroModelVariant.rawValue)
             applyVoiceSettings()
         }
     }
@@ -86,6 +89,7 @@ public final class AppModel {
     public var speechRate: Float {
         didSet {
             defaults.set(speechRate, forKey: StorageKey.speechRate)
+            logSettingChange(StorageKey.speechRate, from: oldValue, to: speechRate)
             applyVoiceSettings()
         }
     }
@@ -93,6 +97,7 @@ public final class AppModel {
     public var speechPitch: Float {
         didSet {
             defaults.set(speechPitch, forKey: StorageKey.speechPitch)
+            logSettingChange(StorageKey.speechPitch, from: oldValue, to: speechPitch)
             applyVoiceSettings()
         }
     }
@@ -100,6 +105,7 @@ public final class AppModel {
     public var pausesOtherAudio: Bool {
         didSet {
             defaults.set(pausesOtherAudio, forKey: StorageKey.pausesOtherAudio)
+            logSettingChange(StorageKey.pausesOtherAudio, from: oldValue, to: pausesOtherAudio)
             applyVoiceSettings()
         }
     }
@@ -186,6 +192,13 @@ public final class AppModel {
         selectedChatID = previewChats.first?.id
     }
     #endif
+
+    /// Logs a voice setting changed to `value`, by its storage key, so the logs say what a reply
+    /// or preview was spoken with. Nothing if it is unchanged. A slider logs each step it passes.
+    private func logSettingChange<Value: Equatable & CustomStringConvertible>(_ setting: String, from old: Value, to value: Value) {
+        guard value != old else { return }
+        Self.log.info("setting changed", ["setting": setting, "from": old, "to": value])
+    }
 
     private func applyVoiceSettings() {
         voiceLoop.pauseThreshold = .seconds(pauseThreshold)
