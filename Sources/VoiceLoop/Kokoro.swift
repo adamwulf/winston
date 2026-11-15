@@ -53,12 +53,12 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     }
 
     /// About how much it downloads when nothing is stored yet, in megabytes. The masked models
-    /// share their voices and dictionaries, so a second one adds about 235 MB; FluidAudio's do
-    /// too, and a second one adds about 325 MB.
+    /// share their voices (28 at 2.7 MB each, with a style per sentence length) and dictionaries,
+    /// so a second one adds about 235 MB; FluidAudio's do too, and a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
         case .soniqo5s: 335
-        case .masked5s, .masked10s, .masked15s: 245
+        case .masked5s, .masked10s, .masked15s: 320
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
         }
     }
