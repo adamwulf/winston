@@ -4,7 +4,7 @@ import WinstonCore
 import WinstonLogging
 
 /// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, Log out, and deleting the downloaded voice models. AppModel persists the settings and applies them to the
-/// voice loop. A sheet on iOS; the standard Settings window on macOS.
+/// voice loop. A sheet on iOS; the standard Settings window, in tabs, on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -31,13 +31,22 @@ struct SettingsView: View {
     var body: some View {
         #if os(iOS)
         NavigationStack {
-            form
-                .navigationTitle("Settings")
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }
-                    }
+            Form {
+                voiceModeSection
+                kokoroSection
+                pronunciationsSection
+                otherAudioSection
+                debugLogsSection
+                logOutSection
+                modelDeletionSection
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
                 }
+            }
         }
         .sheet(item: $exportedLogs) { file in
             ShareSheet(url: file.url) {
@@ -54,158 +63,214 @@ struct SettingsView: View {
             Text(exportError ?? "")
         }
         #else
-        form
-            .frame(width: 460)
-            .fixedSize(horizontal: false, vertical: true)
+        // The standard Settings tabs: all in one form, the window grew taller than the screen.
+        TabView {
+            Tab("Voice", systemImage: "waveform") {
+                pane {
+                    voiceModeSection
+                    kokoroSection
+                    otherAudioSection
+                }
+            }
+            Tab("Pronunciations", systemImage: "character.bubble") {
+                // A fixed height, so a long list scrolls rather than growing the window.
+                Form {
+                    pronunciationsSection
+                }
+                .formStyle(.grouped)
+                .frame(width: Self.paneWidth, height: 400)
+            }
+            Tab("Advanced", systemImage: "gearshape.2") {
+                pane {
+                    debugLogsSection
+                    logOutSection
+                    modelDeletionSection
+                }
+            }
+        }
         #endif
     }
 
-    private var form: some View {
+    #if os(macOS)
+    private static let paneWidth: CGFloat = 460
+
+    /// A tab's form, as tall as its content: the window resizes to fit each tab.
+    private func pane(@ViewBuilder content: () -> some View) -> some View {
+        Form(content: content)
+            .formStyle(.grouped)
+            .frame(width: Self.paneWidth)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+    #endif
+
+    @ViewBuilder
+    private var voiceModeSection: some View {
         @Bindable var model = model
-        return Form {
-            Section {
-                LabeledContent("Pause before sending") {
-                    Text("\(model.pauseThreshold.formatted(.number.precision(.fractionLength(1)))) s")
+        Section {
+            LabeledContent("Pause before sending") {
+                Text("\(model.pauseThreshold.formatted(.number.precision(.fractionLength(1)))) s")
+            }
+            Slider(value: $model.pauseThreshold, in: 0.8...3.0, step: 0.1)
+            Picker("Voice", selection: voiceSelection) {
+                Text("Default").tag(String?.none)
+                ForEach(voices) { voice in
+                    Text(label(for: voice)).tag(Optional(voice.id))
                 }
-                Slider(value: $model.pauseThreshold, in: 0.8...3.0, step: 0.1)
-                Picker("Voice", selection: voiceSelection) {
-                    Text("Default").tag(String?.none)
-                    ForEach(voices) { voice in
-                        Text(label(for: voice)).tag(Optional(voice.id))
-                    }
-                }
-                .onChange(of: model.voiceIdentifier) {
+            }
+            .onChange(of: model.voiceIdentifier) {
+                model.previewVoice()
+            }
+            LabeledContent("Speaking speed") {
+                Text(speedDescription)
+            }
+            Slider(value: $model.speechRate, in: VoiceLoop.speechRates, step: 0.05) {
+                Text("Speaking speed")
+            } minimumValueLabel: {
+                Image(systemName: "tortoise")
+                    .accessibilityLabel("Slower")
+            } maximumValueLabel: {
+                Image(systemName: "hare")
+                    .accessibilityLabel("Faster")
+            } onEditingChanged: { isEditing in
+                if !isEditing {
                     model.previewVoice()
                 }
-                LabeledContent("Speaking speed") {
-                    Text(speedDescription)
-                }
-                Slider(value: $model.speechRate, in: VoiceLoop.speechRates, step: 0.05) {
-                    Text("Speaking speed")
-                } minimumValueLabel: {
-                    Image(systemName: "tortoise")
-                        .accessibilityLabel("Slower")
-                } maximumValueLabel: {
-                    Image(systemName: "hare")
-                        .accessibilityLabel("Faster")
-                } onEditingChanged: { isEditing in
-                    if !isEditing {
-                        model.previewVoice()
-                    }
-                }
-                .labelsHidden()
-                LabeledContent("Pitch") {
-                    Text(pitchDescription)
-                }
-                // 1/16 is exact in binary, so every step, normal pitch included, is an exact value.
-                Slider(value: $model.speechPitch, in: VoiceLoop.speechPitches, step: 0.0625) {
-                    Text("Pitch")
-                } minimumValueLabel: {
-                    Image(systemName: "arrow.down")
-                        .accessibilityLabel("Lower")
-                } maximumValueLabel: {
-                    Image(systemName: "arrow.up")
-                        .accessibilityLabel("Higher")
-                } onEditingChanged: { isEditing in
-                    if !isEditing {
-                        model.previewVoice()
-                    }
-                }
-                .labelsHidden()
-            } header: {
-                Text("Voice Mode")
-            } footer: {
-                Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
             }
-            if voices.contains(where: { $0.engine == .kokoro }) {
-                Section {
-                    Picker("Voice model", selection: $model.kokoroModelVariant) {
-                        ForEach(KokoroModelVariant.allCases, id: \.self) { variant in
-                            Text(variant.name).tag(variant)
-                        }
-                    }
-                    LabeledContent("Status") {
-                        kokoroModelStatus
-                    }
-                    // Its own row, full width under the status, like the sliders under theirs.
-                    if case .downloading(let progress) = model.voiceLoop.kokoroModelState, progress < 1 {
-                        ProgressView(value: progress) {
-                            Text("Download progress")
-                        }
-                        .labelsHidden()
-                    }
-                } header: {
-                    Text("Kokoro Voices")
-                } footer: {
-                    Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
+            .labelsHidden()
+            LabeledContent("Pitch") {
+                Text(pitchDescription)
+            }
+            // 1/16 is exact in binary, so every step, normal pitch included, is an exact value.
+            Slider(value: $model.speechPitch, in: VoiceLoop.speechPitches, step: 0.0625) {
+                Text("Pitch")
+            } minimumValueLabel: {
+                Image(systemName: "arrow.down")
+                    .accessibilityLabel("Lower")
+            } maximumValueLabel: {
+                Image(systemName: "arrow.up")
+                    .accessibilityLabel("Higher")
+            } onEditingChanged: { isEditing in
+                if !isEditing {
+                    model.previewVoice()
                 }
             }
+            .labelsHidden()
+        } header: {
+            Text("Voice Mode")
+        } footer: {
+            Text("Voice mode sends what you say once you've paused this long, or twice as long when you stop mid-sentence.")
+        }
+    }
+
+    @ViewBuilder
+    private var kokoroSection: some View {
+        @Bindable var model = model
+        if voices.contains(where: { $0.engine == .kokoro }) {
             Section {
-                ForEach($model.pronunciations) { $pronunciation in
-                    PronunciationRow(pronunciation: $pronunciation) {
-                        // Read through the binding first: reading it while removeAll changes
-                        // the array it reads from is an exclusive access conflict.
-                        let id = pronunciation.id
-                        model.pronunciations.removeAll { $0.id == id }
+                Picker("Voice model", selection: $model.kokoroModelVariant) {
+                    ForEach(KokoroModelVariant.allCases, id: \.self) { variant in
+                        Text(variant.name).tag(variant)
                     }
                 }
-                .onDelete { offsets in
-                    model.pronunciations.remove(atOffsets: offsets)
+                LabeledContent("Status") {
+                    kokoroModelStatus
                 }
-                Button("Add Pronunciation") {
-                    model.pronunciations.append(Pronunciation())
+                // Its own row, full width under the status, like the sliders under theirs.
+                if case .downloading(let progress) = model.voiceLoop.kokoroModelState, progress < 1 {
+                    ProgressView(value: progress) {
+                        Text("Download progress")
+                    }
+                    .labelsHidden()
                 }
             } header: {
-                Text("Pronunciations")
+                Text("Kokoro Voices")
             } footer: {
-                Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
-            }
-            Section {
-                Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
-            } footer: {
-                Text("Turn this off to keep music and other audio playing during voice mode.")
-            }
-            Section("Debug Logs") {
-                #if os(iOS)
-                Button("Export Debug Logs…", action: exportLogs)
-                    .disabled(isExportingLogs)
-                #else
-                Button("Export Debug Logs…") {
-                    Task { await DebugLogs.export() }
-                }
-                Button("Open Log Folder") {
-                    DebugLogs.openLogFolder()
-                }
-                #endif
-            }
-            // On the Mac the Settings window opens before login too; only offer Log Out once logged in.
-            if model.authState == .ready {
-                Section {
-                    Button("Log Out", role: .destructive) {
-                        confirmingLogOut = true
-                    }
-                }
-            }
-            Section {
-                Button("Delete Downloaded Voice Models", role: .destructive) {
-                    confirmingModelDeletion = true
-                }
-                // On the button, not the form: the form already has the Log Out dialog.
-                .confirmationDialog("Delete downloaded voice models?", isPresented: $confirmingModelDeletion) {
-                    Button("Delete", role: .destructive) {
-                        model.voiceLoop.deleteKokoroModels()
-                    }
-                }
-            } footer: {
-                Text("Deletes every Kokoro model stored on this device. With a Kokoro voice chosen, its model downloads again right away, picking up any update.")
+                Text("Kokoro voices are neural voices that run on this device. Each voice model downloads the first time a Kokoro voice uses it, and until it's ready, the best system voice speaks. A longer model cuts fewer sentences into pieces, but takes longer to start speaking. FluidAudio models speak only at normal speed. The models are removed after a day without a Kokoro voice.")
             }
         }
-        .formStyle(.grouped)
-        .confirmationDialog("Log out of Telegram?", isPresented: $confirmingLogOut) {
-            Button("Log Out", role: .destructive) {
-                dismiss()
-                Task { await model.logOut() }
+    }
+
+    @ViewBuilder
+    private var pronunciationsSection: some View {
+        @Bindable var model = model
+        Section {
+            ForEach($model.pronunciations) { $pronunciation in
+                PronunciationRow(pronunciation: $pronunciation) {
+                    // Read through the binding first: reading it while removeAll changes
+                    // the array it reads from is an exclusive access conflict.
+                    let id = pronunciation.id
+                    model.pronunciations.removeAll { $0.id == id }
+                }
             }
+            .onDelete { offsets in
+                model.pronunciations.remove(atOffsets: offsets)
+            }
+            Button("Add Pronunciation") {
+                model.pronunciations.append(Pronunciation())
+            }
+        } header: {
+            Text("Pronunciations")
+        } footer: {
+            Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
+        }
+    }
+
+    @ViewBuilder
+    private var otherAudioSection: some View {
+        @Bindable var model = model
+        Section {
+            Toggle("Pause Other Audio", isOn: $model.pausesOtherAudio)
+        } footer: {
+            Text("Turn this off to keep music and other audio playing during voice mode.")
+        }
+    }
+
+    private var debugLogsSection: some View {
+        Section("Debug Logs") {
+            #if os(iOS)
+            Button("Export Debug Logs…", action: exportLogs)
+                .disabled(isExportingLogs)
+            #else
+            Button("Export Debug Logs…") {
+                Task { await DebugLogs.export() }
+            }
+            Button("Open Log Folder") {
+                DebugLogs.openLogFolder()
+            }
+            #endif
+        }
+    }
+
+    /// On the Mac the Settings window opens before login too; only offer Log Out once logged in.
+    @ViewBuilder
+    private var logOutSection: some View {
+        if model.authState == .ready {
+            Section {
+                Button("Log Out", role: .destructive) {
+                    confirmingLogOut = true
+                }
+                .confirmationDialog("Log out of Telegram?", isPresented: $confirmingLogOut) {
+                    Button("Log Out", role: .destructive) {
+                        dismiss()
+                        Task { await model.logOut() }
+                    }
+                }
+            }
+        }
+    }
+
+    private var modelDeletionSection: some View {
+        Section {
+            Button("Delete Downloaded Voice Models", role: .destructive) {
+                confirmingModelDeletion = true
+            }
+            .confirmationDialog("Delete downloaded voice models?", isPresented: $confirmingModelDeletion) {
+                Button("Delete", role: .destructive) {
+                    model.voiceLoop.deleteKokoroModels()
+                }
+            }
+        } footer: {
+            Text("Deletes every Kokoro model stored on this device. With a Kokoro voice chosen, its model downloads again right away, picking up any update.")
         }
     }
 
