@@ -454,7 +454,7 @@ public final class VoiceLoop {
         guard !text.isEmpty else { return }
         let playback: SpeechPlayback
         do {
-            playback = try previewPlayer.play(pitch: speechPitch, speed: KokoroSpeed.speed(forRate: speechRate))
+            playback = try previewPlayer.play(pitch: speechPitch)
         } catch {
             Self.log.error("voice preview failed to start", error.logContext())
             return
@@ -963,7 +963,7 @@ public final class VoiceLoop {
         let text = speechQueue.removeFirst()
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)
-        let playback = pipeline.speech.makePlayback(text: text, speed: KokoroSpeed.speed(forRate: speechRate)) { [weak self] playback in
+        let playback = pipeline.speech.makePlayback(text: text) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
@@ -1049,10 +1049,7 @@ public final class VoiceLoop {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                // The first sentence starts with room for the fade-in to finish before its
-                // first word.
-                let audio = index == 0 ? KokoroAudio.silenceBeforeReply(speed: speed) + samples : samples
-                for buffer in KokoroAudio.buffers(audio) {
+                for buffer in KokoroAudio.buffers(samples) {
                     playback.receive(buffer)
                 }
             }

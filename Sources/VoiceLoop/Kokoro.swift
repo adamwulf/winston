@@ -473,20 +473,6 @@ enum KokoroSpeed {
 /// Kokoro's audio as buffers for `SpeechPlayback`.
 enum KokoroAudio {
     static let sampleRate = 24_000.0
-    /// The silence KokoroTTS leaves before a reply's first word at speed 1: it trims each
-    /// rendering's lead-in to this, divided by the speed (speech-swift's
-    /// `KokoroChunkSeams.leadInSeconds`).
-    static let leadInSeconds = 0.1
-
-    /// Silence to play before a reply's first sentence spoken at `speed`, so the reply's fade-in
-    /// for echo cancellation (`SpeechPlayback.fadeInDuration(speed:)`) is over before the first
-    /// word: the fade's length less the lead-in KokoroTTS already leaves, 100 ms divided by the
-    /// speed. KokoroTTS keeps its audio tight; making room for echo cancellation is the voice
-    /// loop's job.
-    static func silenceBeforeReply(speed: Float) -> [Float] {
-        let seconds = SpeechPlayback.fadeInDuration(speed: speed) - leadInSeconds / Double(max(speed, 0.1))
-        return [Float](repeating: 0, count: max(0, Int((seconds * sampleRate).rounded())))
-    }
     /// Frames per buffer: 0.1 s. `SpeechPlayback` holds back a message's newest buffer until the
     /// next one arrives (so the last can carry the completion handler). With short buffers that
     /// is only the tail of a sentence's trailing silence, so a sentence plays as soon as it is
