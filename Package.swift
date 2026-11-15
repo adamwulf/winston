@@ -20,7 +20,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", .upToNextMinor(from: "1.14.0")),
         .package(url: "https://github.com/adamwulf/FellerBuncher.git", branch: "main"),
         // Kokoro-82M neural voices (KokoroTTS, CoreML). speech-swift has no release tags, so it is
-        // pinned to a commit. This is a fork commit: soniqo/speech-swift 31d676c6 plus a fix so
+        // pinned to a branch of our fork: soniqo/speech-swift 31d676c6 plus a fix so
         // KokoroTTS compiles for x86_64 macOS (Swift's Float16 does not exist there), which the
         // universal Mac archive needs, a fix for the pauses inside long sentences: they are
         // cut into even chunks at phrase starts, short clauses join the chunk beside them, and
@@ -28,9 +28,8 @@ let package = Package(
         // and our masked-LSTM exports) with chunks sized from the loaded graph, clearing the
         // noise burst the fp16 graphs emit at the start of each pass, passing parentheses through
         // to Kokoro as its own tokens, boundary token 0 and per-length voice rows for the masked
-        // models, and a 100 ms lead-in before the first word. Branch
-        // agent/kokoro-model-adjustments on the fork.
-        .package(url: "https://github.com/adamwulf/speech-swift", revision: "bd6905cb7c0552be3bf7960f63e1c5ff264779e1"),
+        // models, and a 100 ms lead-in before the first word.
+        .package(url: "https://github.com/adamwulf/speech-swift", branch: "fix/kokoro-x86_64-float16"),
     ],
     targets: [
         .target(
