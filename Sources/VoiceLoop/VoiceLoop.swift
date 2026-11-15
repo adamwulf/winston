@@ -64,10 +64,11 @@ public final class VoiceLoop {
     public var kokoroModelState: KokoroModelState {
         kokoroModel.state
     }
-    /// Which Kokoro model speaks the Kokoro voices, or nil for none: then nothing downloads, and
+    /// Which Kokoro model speaks the Kokoro voices, or nil for none: then no download starts, and
     /// the best system voice speaks for a Kokoro voice. Choosing another while a Kokoro voice is
     /// chosen loads it in place of the one loaded, downloading it the first time, and until it is
-    /// ready the best system voice speaks. Choosing none frees the loaded one.
+    /// ready the best system voice speaks. Choosing none frees the loaded one; a download under
+    /// way isn't cancelled, and its model is freed once it finishes.
     public var kokoroModelVariant: KokoroModelVariant? {
         get { kokoroModel.variant }
         set { kokoroModel.variant = newValue }
