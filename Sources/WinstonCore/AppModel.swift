@@ -6,6 +6,7 @@ import TelegramLink
 import VoiceLoop
 #if os(iOS)
 import UIKit
+import UserNotifications
 #elseif os(macOS)
 import AppKit
 #endif
@@ -252,22 +253,77 @@ public final class AppModel {
     /// Each activation removes unused Kokoro models and, on iOS, refreshes notification
     /// permission and requests the current APNs token. Scene-based apps post this notification
     /// even though they don't call UIApplicationDelegate.applicationDidBecomeActive.
+    /// Each activation, and each time the app leaves the foreground (to the background on iOS,
+    /// where it is then suspended, or to another app on macOS), goes to `appDidBecomeActive()` and
+    /// `appDidLeaveForeground()`.
     private func observeAppActivation() {
         #if os(iOS)
         let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
+        let departures = NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification)
         #elseif os(macOS)
         let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+        let departures = NotificationCenter.default.notifications(named: NSApplication.didResignActiveNotification)
         #endif
         Task { [weak self] in
             for await _ in activations {
                 guard let self else { return }
+                self.appDidBecomeActive()
                 self.voiceLoop.removeUnusedKokoroModel()
                 #if os(iOS)
+                await self.logAlertsInNotificationCenter()
                 await self.notificationAccess.refresh()
                 #endif
             }
         }
+        Task { [weak self] in
+            for await _ in departures {
+                guard let self else { return }
+                self.appDidLeaveForeground()
+            }
+        }
     }
+
+    /// The app came to the foreground. Package so the tests can call it in place of the system's
+    /// notification, which would reach every test's model.
+    package func appDidBecomeActive() {
+        Self.log.notice("app became active", [
+            "authState": authState.logName,
+            "chatsLoaded": chatsLoaded,
+            "newestShownIDs": newestShownIDs,
+        ])
+    }
+
+    /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
+    package func appDidLeaveForeground() {
+        Self.log.notice("app left the foreground", [
+            "authState": authState.logName,
+            "newestShownIDs": newestShownIDs,
+        ])
+    }
+
+    #if os(iOS)
+    /// Logs each Telegram alert still in Notification Center: what arrived while the app was away,
+    /// when, and whether its message is shown yet. A tapped alert leaves Notification Center, and
+    /// `openNotification(_:)` logs it instead. Not in `appDidBecomeActive()`: a test process has no
+    /// app bundle for `UNUserNotificationCenter`.
+    private func logAlertsInNotificationCenter() async {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        Self.log.notice("alerts in notification center", ["count": delivered.count])
+        for notification in delivered {
+            guard let target = TelegramNotification(userInfo: notification.request.content.userInfo) else {
+                Self.log.info("alert in notification center", ["chatID": "notPrivate"])
+                continue
+            }
+            Self.log.info("alert in notification center", [
+                "chatID": target.chatID,
+                "messageID": target.messageID?.description ?? "none",
+                "deliveredSecondsAgo": Int(-notification.date.timeIntervalSinceNow),
+                "botChat": isBotChat(target.chatID),
+                "messageShown": target.messageID.map { isShown($0, in: target.chatID) }?.description ?? "unknown",
+            ])
+        }
+    }
+    #endif
 
     /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the
     /// speed and pitch sliders. Says nothing for a Kokoro voice whose model isn't ready yet, rather than
@@ -429,6 +485,14 @@ public final class AppModel {
     /// A tap can arrive before SwiftUI appears or before Telegram has restored its session.
     /// Keep it until the bot list is loaded; never start voice mode from a notification.
     public func openNotification(_ notification: TelegramNotification) {
+        Self.log.notice("opening notification", [
+            "chatID": notification.chatID,
+            "messageID": notification.messageID?.description ?? "none",
+            "authState": authState.logName,
+            "chatsLoaded": chatsLoaded,
+            // Whether the alert's message is already shown, so a missed one stands out.
+            "messageShown": notification.messageID.map { isShown($0, in: notification.chatID) }?.description ?? "unknown",
+        ])
         notificationOpenCount += 1
         notificationErrorMessage = nil
         pendingNotification = notification
@@ -500,6 +564,7 @@ public final class AppModel {
         }
         let generation = sessionGeneration
         isLoadingChats = true
+        Self.log.info("chat load started")
         defer {
             isLoadingChats = false
             let needsReload = (reloadChatsForNotification && pendingNotification != nil)
@@ -516,6 +581,7 @@ public final class AppModel {
                 .filter { $0.username?.lowercased() != "botfather" }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
             guard generation == sessionGeneration else { return }
+            Self.log.info("bot chats loaded", ["count": loadedChats.count])
             chats = loadedChats
             chatsLoaded = true
             if currentChat == nil {
@@ -539,8 +605,19 @@ public final class AppModel {
                 guard generation == sessionGeneration else { return }
                 // Keep anything that arrived as an event while the history was loading.
                 let historyIDs = Set(history.map(\.id))
-                let newer = (messages[chat.id] ?? []).filter { !historyIDs.contains($0.id) }
+                let shown = messages[chat.id] ?? []
+                let newer = shown.filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
+                let shownIDs = Set(shown.map(\.id))
+                Self.log.info("chat history merged", [
+                    "chatID": chat.id,
+                    "shownBefore": shown.count,
+                    "read": history.count,
+                    // Messages the history had that the model didn't show yet.
+                    "added": history.count(where: { !shownIDs.contains($0.id) }),
+                    "keptFromEvents": newer.count,
+                    "newestID": messages[chat.id]?.last?.id.rawValue ?? 0,
+                ])
             } catch {
                 Self.log.error("loading chat history failed", error.logContext(["chatID": chat.id.description]))
                 guard generation == sessionGeneration else { return }
@@ -553,11 +630,31 @@ public final class AppModel {
         chats.contains { $0.id == chat }
     }
 
+    private func isShown(_ message: MessageID, in chat: ChatID) -> Bool {
+        messages[chat]?.contains { $0.id == message } ?? false
+    }
+
+    /// Each bot chat's newest shown message ID, as `chatID:messageID` pairs, for the lifecycle
+    /// logs: comparing them before and after the app was away shows what arrived meanwhile.
+    private var newestShownIDs: String {
+        chats.map { "\($0.id):\(messages[$0.id]?.last?.id.description ?? "none")" }.joined(separator: ",")
+    }
+
     private func handle(_ event: ChatEvent) {
         switch event {
         case .newMessage(let message):
-            guard isBotChat(message.chatID) else { return }
+            guard isBotChat(message.chatID) else {
+                logIgnoredMessage(message)
+                return
+            }
             let isNew = upsert(message, replacing: message.id)
+            Self.log.info(isNew ? "message delivered" : "message already shown, replaced", [
+                "chatID": message.chatID,
+                "messageID": message.id,
+                "outgoing": message.isOutgoing,
+                "pending": message.sendState == .pending,
+                "currentChat": message.chatID == currentChat?.id,
+            ])
             if !message.isOutgoing {
                 typingChats.remove(message.chatID)
                 if isNew, isVoiceMode, message.chatID == currentChat?.id {
@@ -593,9 +690,32 @@ public final class AppModel {
             }
         case .sendSucceeded(let chat, let oldID, let message):
             guard isBotChat(chat) else { return }
-            upsert(message, replacing: oldID)
+            let isNew = upsert(message, replacing: oldID)
+            Self.log.info("sent message confirmed", [
+                "chatID": chat,
+                "oldID": oldID,
+                "messageID": message.id,
+                // False means the pending message wasn't shown, so the sent one was added.
+                "replacedPending": !isNew,
+            ])
         case .sendFailed(let chat, let id, let error):
             updateMessage(id, in: chat) { $0.sendState = .failed(error) }
+        }
+    }
+
+    /// Logs a new message the model ignores because its chat isn't a loaded bot chat. Until the
+    /// bot chats first load, that ignores a bot's message too (the history load should pick it up
+    /// again), so those go where the log file keeps them; later ones, from other chats, only at debug.
+    private func logIgnoredMessage(_ message: ChatMessage) {
+        let metadata: [String: CustomStringConvertible] = [
+            "chatID": message.chatID,
+            "messageID": message.id,
+            "outgoing": message.isOutgoing,
+        ]
+        if chatsLoaded {
+            Self.log.debug("message ignored: not a bot chat", metadata)
+        } else {
+            Self.log.notice("message ignored: bot chats not loaded yet", metadata)
         }
     }
 

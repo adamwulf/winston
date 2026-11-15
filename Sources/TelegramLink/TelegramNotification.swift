@@ -6,6 +6,9 @@ import Foundation
 public struct TelegramNotification: Equatable, Sendable {
     public let chatID: ChatID
     public let accountID: Int64?
+    /// The message the alert announces, as TDLib identifies it, so the logs can match an alert
+    /// with the message TDLib later delivers. Nil when the payload has no `msg_id`.
+    public let messageID: MessageID?
 
     public init?(userInfo: [AnyHashable: Any]) {
         guard userInfo["chat_id"] == nil, userInfo["channel_id"] == nil,
@@ -19,6 +22,15 @@ public struct TelegramNotification: Equatable, Sendable {
         chatID = ChatID(fromID)
         // Telegram may omit user_id for a single-account registration.
         accountID = Self.identifier(userInfo["user_id"])
+        messageID = Self.identifier(userInfo["msg_id"]).flatMap { Self.tdlibMessageID(serverID: $0) }
+    }
+
+    /// TDLib's ID for the server message ID a push carries: TDLib shifts a server ID left by 20
+    /// bits (`MessageId::SERVER_ID_SHIFT` in TDLib's `MessageId.h`).
+    private static func tdlibMessageID(serverID: Int64) -> MessageID? {
+        guard serverID > 0 else { return nil }
+        let (shifted, overflow) = serverID.multipliedReportingOverflow(by: 1 << 20)
+        return overflow ? nil : MessageID(shifted)
     }
 
     private static func identifier(_ value: Any?) -> Int64? {

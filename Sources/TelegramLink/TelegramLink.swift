@@ -166,7 +166,9 @@ public actor TelegramLink {
             // backwards until there are `limit` messages or no older ones.
             var messages: [Message] = []
             var fromID: Int64 = 0
+            var pages = 0
             while messages.count < limit {
+                pages += 1
                 let batch = try await client.getChatHistory(
                     chatId: chat.rawValue,
                     fromMessageId: fromID,
@@ -179,6 +181,13 @@ public actor TelegramLink {
                 messages += older
                 fromID = oldest.id
             }
+            Self.log.info("chat history read", [
+                "chatID": chat.rawValue,
+                "count": messages.count,
+                "pages": pages,
+                "newestID": messages.first?.id ?? 0,
+                "oldestID": messages.last?.id ?? 0,
+            ])
             return messages.reversed().map(Mapping.chatMessage)
         }
     }
@@ -345,7 +354,11 @@ public actor TelegramLink {
         case .updateAuthorizationState(let update):
             handleAuthorizationState(update.authorizationState)
         case .updateNewMessage(let update):
+            Self.logNewMessage(update.message)
             eventContinuation.yield(.newMessage(Mapping.chatMessage(update.message)))
+        case .updateConnectionState(let update):
+            // `updating` is TDLib downloading what arrived while it was offline (getDifference).
+            Self.log.notice("connection state changed", ["state": Self.logName(of: update.state)])
         case .updateMessageInteractionInfo(let update):
             eventContinuation.yield(.reactionsChanged(
                 chat: ChatID(update.chatId),
@@ -368,6 +381,28 @@ public actor TelegramLink {
             ))
         default:
             break
+        }
+    }
+
+    /// Logs a new message TDLib hands over, by its IDs only. `ageSeconds` is how long ago it was
+    /// sent: one that TDLib only fetched after the app was away arrives with a large age.
+    private static func logNewMessage(_ message: Message) {
+        log.info("new message from TDLib", [
+            "chatID": message.chatId,
+            "messageID": message.id,
+            "outgoing": message.isOutgoing,
+            "pending": message.sendingState != nil,
+            "ageSeconds": Int(Date().timeIntervalSince1970) - message.date,
+        ])
+    }
+
+    private static func logName(of state: ConnectionState) -> String {
+        switch state {
+        case .connectionStateWaitingForNetwork: "waitingForNetwork"
+        case .connectionStateConnectingToProxy: "connectingToProxy"
+        case .connectionStateConnecting: "connecting"
+        case .connectionStateUpdating: "updating"
+        case .connectionStateReady: "ready"
         }
     }
 

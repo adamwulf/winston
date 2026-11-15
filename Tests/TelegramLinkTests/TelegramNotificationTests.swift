@@ -11,6 +11,18 @@ struct TelegramNotificationTests {
         let notification = try #require(TelegramNotification(userInfo: payload))
         #expect(notification.chatID == ChatID(1234567890123))
         #expect(notification.accountID == nil)
+        // TDLib's ID for server message 42: the server ID shifted left 20 bits.
+        #expect(notification.messageID == MessageID(42 << 20))
+    }
+
+    @Test func aMissingOrInvalidMessageIDStillNavigates() throws {
+        for messageID: Any? in [nil, "not-an-id", "0", "-3"] {
+            var payload: [AnyHashable: Any] = ["from_id": "5"]
+            payload["msg_id"] = messageID
+            let notification = try #require(TelegramNotification(userInfo: payload))
+            #expect(notification.chatID == ChatID(5))
+            #expect(notification.messageID == nil)
+        }
     }
 
     @Test func accountIdentifierCanBeAStringOrNumber() throws {

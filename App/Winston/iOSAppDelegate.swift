@@ -50,17 +50,48 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) async -> UNNotificationPresentationOptions {
         let target = TelegramNotification(userInfo: notification.request.content.userInfo)
         // The current conversation already displays the message (and speaks it in voice mode).
-        if let target, target.chatID == model?.currentChat?.id { return [] }
-        return [.banner, .list, .sound]
+        let isCurrentChat = target != nil && target?.chatID == model?.currentChat?.id
+        var metadata = Self.alertMetadata(target)
+        metadata["banner"] = !isCurrentChat
+        Self.log.notice("alert arrived in the foreground", metadata)
+        return isCurrentChat ? [] : [.banner, .list, .sound]
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
-              let target = TelegramNotification(userInfo: response.notification.request.content.userInfo) else { return }
+        let target = TelegramNotification(userInfo: response.notification.request.content.userInfo)
+        let action: String = switch response.actionIdentifier {
+        case UNNotificationDefaultActionIdentifier: "open"
+        case UNNotificationDismissActionIdentifier: "dismiss"
+        default: "other"
+        }
+        var metadata = Self.alertMetadata(target)
+        metadata["action"] = action
+        // False when a tap launched the app, so iOS had ended it while it was away.
+        metadata["modelReady"] = model != nil
+        Self.log.notice("alert response", metadata)
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier, let target else { return }
         if let model {
             model.openNotification(target)
         } else {
             pendingNotification = target
+        }
+    }
+
+    /// An alert's chat and message IDs (never its text), and the app's state when it came.
+    private static func alertMetadata(_ target: TelegramNotification?) -> [String: CustomStringConvertible] {
+        [
+            "chatID": target?.chatID.description ?? "notPrivate",
+            "messageID": target?.messageID?.description ?? "none",
+            "appState": appStateName,
+        ]
+    }
+
+    private static var appStateName: String {
+        switch UIApplication.shared.applicationState {
+        case .active: "active"
+        case .inactive: "inactive"
+        case .background: "background"
+        @unknown default: "unknown"
         }
     }
 
