@@ -330,14 +330,14 @@ struct SettingsView: View {
     }
 
     private func label(for voice: VoiceOption) -> String {
-        if voice.engine == .kokoro {
-            return "\(voice.name) (Kokoro)"
+        let suffix = switch (voice.engine, voice.quality) {
+        case (.kokoro, _): " (Kokoro)"
+        case (.system, .premium): " (Premium)"
+        case (.system, .enhanced): " (Enhanced)"
+        case (.system, .standard): ""
         }
-        return switch voice.quality {
-        case .premium: "\(voice.name) (Premium)"
-        case .enhanced: "\(voice.name) (Enhanced)"
-        case .standard: voice.name
-        }
+        // Some system voices already have it in their name, such as "Susan (Enhanced)" on iOS.
+        return voice.name.hasSuffix(suffix) ? voice.name : voice.name + suffix
     }
 
     /// Where the chosen Kokoro model, `variant`, is: its size before anything has asked for it,
