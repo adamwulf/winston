@@ -408,6 +408,11 @@ private struct PronunciationRow: View {
             // Borderless, so on iOS only the button plays, not a tap anywhere in the row.
             Button(action: play) {
                 Image(systemName: "play.circle")
+                    #if os(iOS)
+                    // Borderless, only the symbol itself would take a tap: too small a target.
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
+                    #endif
             }
             .buttonStyle(.borderless)
             .disabled(pronunciation.spokenForm.isEmpty)
