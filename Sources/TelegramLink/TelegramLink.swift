@@ -115,6 +115,24 @@ public actor TelegramLink {
         try await perform { try await $0.logOut() }
     }
 
+    /// Registers this installation for ordinary APNs alerts. Telegram must also have the
+    /// app's APNs credentials; a successful registration alone does not prove delivery.
+    public func registerForPushNotifications(token: String, isSandbox: Bool) async throws {
+        try await perform {
+            try await $0.registerDevice(
+                deviceToken: .deviceTokenApplePush(DeviceTokenApplePush(
+                    deviceToken: token, isAppSandbox: isSandbox
+                )),
+                otherUserIds: []
+            )
+        }
+    }
+
+    /// The current account, to check an alert's user_id when Telegram supplies it.
+    public func currentUserID() async throws -> Int64 {
+        try await perform { try await $0.getMe().id }
+    }
+
     // MARK: - Chats and messages
 
     /// Adam's private chats whose peer is a bot.

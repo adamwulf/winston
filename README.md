@@ -23,6 +23,59 @@ Copy `App/Config/Secrets.example.xcconfig` to `App/Config/Secrets.xcconfig`
 (gitignored) and fill in `TG_API_ID` / `TG_API_HASH` from
 <https://my.telegram.org> → API development tools.
 
+## iOS push notifications
+
+Settings → Notifications → Enable Notifications asks for permission. Winston requests
+a fresh APNs token at launch and on activation, then registers it with Telegram once
+logged in. Token changes and a new login register again; a failure offers Retry.
+No Winston server is needed: Telegram sends ordinary APNs alerts directly to Apple.\[^1]
+
+Alerts follow the account's Telegram notification settings, including non-bot chats.
+Winston does not change those cloud settings. Tapping a private bot alert selects its
+chat after login and chat loading; other alerts open the app without navigating to a
+group or secret chat. If Telegram includes the receiving account ID, Winston checks it
+before opening the chat. Single-account payloads can omit that ID.\[^2]
+The current chat does not show a duplicate foreground banner. Push does not start
+voice mode; background speech still requires an already active voice session.
+
+### Provider and signing setup
+
+1. Enable Push Notifications for `com.milestonemade.winston` in the Apple Developer
+   account, and refresh the app's provisioning profiles. The iOS target now includes
+   the `aps-environment` entitlement.
+2. Configure APNs certificates for the same Telegram application that owns
+   `TG_API_ID` at [Telegram's application settings](https://my.telegram.org/apps).
+   TDLib requires the correct application platform and uploaded provider credentials.\[^1\]
+   Telegram's certificate upload expects PEM containing both the certificate and its
+   private key.\[^3\] Keep those provider credentials out of the app and repository.
+3. `PUSH_ENVIRONMENT` in `App/Config/Shared.xcconfig` defaults to `development` for
+   Debug and `production` for Release. It supplies both the entitlement and the
+   environment sent to Telegram. **It must match the final signed app.** For a
+   development-signed Release build, explicitly build with
+   `PUSH_ENVIRONMENT=development`; for a distributed Debug build, use
+   `PUSH_ENVIRONMENT=production`. Xcode export may change signing entitlements
+   without changing Info.plist, so check the exported app before testing delivery.
+4. Install a signed build on an iPhone, log in, enable notifications, then background
+   Winston and send a message from an unmuted bot. Repeat with TestFlight to verify
+   production delivery. A successful device registration is not evidence that the
+   provider certificate is configured correctly.
+
+### Verification
+
+Package tests exercise the real TelegramLink and AppModel with fake TDLib requests:
+token/login ordering, token changes during registration, retry, logout, cold-launch
+navigation, account checks, and private/group payload parsing.
+
+For a device check, test permission denial and later enabling it in iOS Settings;
+tap alerts with Winston running and after termination; verify the current-chat banner
+is suppressed in the foreground; and verify a locked-screen voice session separately.
+Regular APNs alerts are displayed by iOS. There is no notification service extension,
+silent-push processing, or new background mode in this implementation.
+
+\[^1]: [Telegram push setup](https://core.telegram.org/api/push-updates) and [TDLib device-token requirements](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1_device_token.html).
+\[^2]: [TDLib maintainer guidance and ordinary APNs payload examples](https://github.com/tdlib/td/issues/2613).
+\[^3]: [TDLib maintainer's APNs certificate format requirements](https://github.com/tdlib/td/issues/421).
+
 ## Build and test
 
 The first package resolve downloads TDLibFramework (about 375 MB).

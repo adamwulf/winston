@@ -8,6 +8,8 @@
 	<string>$(TG_API_ID)</string>
 	<key>TelegramAPIHash</key>
 	<string>$(TG_API_HASH)</string>
+	<key>TelegramPushEnvironment</key>
+	<string>$(PUSH_ENVIRONMENT)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

@@ -39,6 +39,9 @@ package protocol TDLibRequests: Sendable {
     @discardableResult
     func logOut() async throws -> Ok
 
+    func registerDevice(deviceToken: DeviceToken?, otherUserIds: [Int64]?) async throws -> PushReceiverId
+    func getMe() async throws -> User
+
     @discardableResult
     func loadChats(chatList: ChatList?, limit: Int?) async throws -> Ok
     func getChats(chatList: ChatList?, limit: Int?) async throws -> Chats

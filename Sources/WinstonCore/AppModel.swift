@@ -31,6 +31,10 @@ public final class AppModel {
     /// False when `Secrets.xcconfig` is missing, so there is no Telegram session.
     public let hasCredentials: Bool
     public let voiceLoop: VoiceLoop
+    public let pushRegistration: PushRegistration
+    #if os(iOS)
+    public let notificationAccess = NotificationAccess()
+    #endif
 
     public private(set) var authState: AuthState = .starting
     /// Why TDLib failed to start, if it did.
@@ -139,6 +143,8 @@ public final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isLoadingChats = false
+    @ObservationIgnored private var pendingNotification: TelegramNotification?
+    @ObservationIgnored private var sessionGeneration = 0
 
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
@@ -160,6 +166,7 @@ public final class AppModel {
     /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
     package init(link: TelegramLink?, voiceLoop: VoiceLoop, defaults: UserDefaults, hasCredentials: Bool? = nil) {
         self.link = link
+        pushRegistration = PushRegistration(link: link)
         self.voiceLoop = voiceLoop
         self.defaults = defaults
         self.hasCredentials = hasCredentials ?? (link != nil)
@@ -378,6 +385,7 @@ public final class AppModel {
 
     private func handle(_ state: AuthState) {
         authState = state
+        pushRegistration.setAuthorized(state == .ready)
         switch state {
         case .ready:
             Task { await loadChats() }
@@ -389,6 +397,8 @@ public final class AppModel {
     }
 
     private func clearSession() {
+        sessionGeneration += 1
+        pendingNotification = nil
         if isVoiceMode {
             voiceLoop.stop()
             isVoiceMode = false
@@ -404,6 +414,50 @@ public final class AppModel {
     }
 
     // MARK: - Chats
+
+    /// A tap can arrive before SwiftUI appears or before Telegram has restored its session.
+    /// Keep it until the bot list is loaded; never start voice mode from a notification.
+    public func openNotification(_ notification: TelegramNotification) {
+        pendingNotification = notification
+        start()
+        if authState == .ready {
+            Task {
+                if isBotChat(notification.chatID) {
+                    await openPendingNotification()
+                } else {
+                    await loadChats()
+                }
+            }
+        }
+    }
+
+    private func openPendingNotification() async {
+        guard authState == .ready, let notification = pendingNotification, let link else { return }
+        let generation = sessionGeneration
+        do {
+            if let accountID = notification.accountID {
+                let currentAccount = try await link.currentUserID()
+                guard generation == sessionGeneration, pendingNotification == notification else { return }
+                if accountID != currentAccount {
+                    pendingNotification = nil
+                    errorMessage = "This notification belongs to a different Telegram account."
+                    return
+                }
+            }
+            guard authState == .ready, generation == sessionGeneration,
+                  pendingNotification == notification else { return }
+            pendingNotification = nil
+            if isBotChat(notification.chatID) {
+                selectedChatID = notification.chatID
+            } else {
+                errorMessage = "This chat isn't available in Winston. Open it in Telegram."
+            }
+        } catch {
+            Self.log.error("opening notification failed", error.tdlibLogCodes())
+            guard generation == sessionGeneration, pendingNotification == notification else { return }
+            errorMessage = "Couldn't open the notification. Please try again."
+        }
+    }
 
     public var currentChat: BotChat? {
         chats.first { $0.id == selectedChatID }
@@ -425,32 +479,45 @@ public final class AppModel {
     /// Loads the bot chats and their recent history.
     public func loadChats() async {
         guard let link, !isLoadingChats else { return }
+        let generation = sessionGeneration
         isLoadingChats = true
-        defer { isLoadingChats = false }
+        defer {
+            isLoadingChats = false
+            if generation != sessionGeneration, authState == .ready {
+                Task { await loadChats() }
+            }
+        }
         chatsError = nil
         do {
             // botChats() lists every bot chat by recency. Drop @BotFather and sort by title so the picker is stable.
-            chats = try await link.botChats()
+            let loadedChats = try await link.botChats()
                 .filter { $0.username?.lowercased() != "botfather" }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            guard generation == sessionGeneration else { return }
+            chats = loadedChats
             chatsLoaded = true
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
+            await openPendingNotification()
         } catch {
             Self.log.error("loading bot chats failed", error.logContext())
+            guard generation == sessionGeneration else { return }
             chatsError = userMessage(for: error)
             return
         }
+        guard generation == sessionGeneration else { return }
         for chat in chats {
             do {
                 let history = try await link.history(in: chat.id, limit: 50)
+                guard generation == sessionGeneration else { return }
                 // Keep anything that arrived as an event while the history was loading.
                 let historyIDs = Set(history.map(\.id))
                 let newer = (messages[chat.id] ?? []).filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
             } catch {
                 Self.log.error("loading chat history failed", error.logContext(["chatID": chat.id.description]))
+                guard generation == sessionGeneration else { return }
                 errorMessage = "Couldn't load the history for \(chat.title): \(userMessage(for: error))"
             }
         }
