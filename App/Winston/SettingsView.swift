@@ -37,6 +37,7 @@ struct SettingsView: View {
                 pronunciationsSection
                 otherAudioSection
                 debugLogsSection
+                NotificationSettings()
                 logOutSection
                 modelDeletionSection
             }

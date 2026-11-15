@@ -6,6 +6,13 @@ VERSIONING_SYSTEM = apple-generic
 MARKETING_VERSION = 0.1
 CURRENT_PROJECT_VERSION = 1
 
+// Must match the signed app's aps-environment entitlement. Override for a Release build
+// installed with a development profile, or a Debug build exported for distribution.
+PUSH_ENVIRONMENT = production
+PUSH_ENVIRONMENT[config=Debug] = development
+CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Config/iOS.entitlements
+CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = Config/iOS.entitlements
+
 // Telegram API credentials from https://my.telegram.org (API development tools).
 // Real values go in Secrets.xcconfig, which is gitignored. Copy Secrets.example.xcconfig to start.
 // Xcode Cloud writes it from its TG_API_ID / TG_API_HASH environment variables (ci_post_clone.sh).

@@ -115,6 +115,38 @@ public actor TelegramLink {
         try await perform { try await $0.logOut() }
     }
 
+    /// Registers this installation for ordinary APNs alerts. Telegram must also have the
+    /// app's APNs credentials; a successful registration alone does not prove delivery.
+    public func registerForPushNotifications(token: String, isSandbox: Bool) async throws {
+        try await perform {
+            try await $0.registerDevice(
+                deviceToken: .deviceTokenApplePush(DeviceTokenApplePush(
+                    deviceToken: token, isAppSandbox: isSandbox
+                )),
+                otherUserIds: []
+            )
+        }
+    }
+
+    /// Tells TDLib whether the app is in the foreground, through its `online` option.
+    ///
+    /// Going online, TDLib pings its connection at once and gives it up if no answer comes within
+    /// a couple of seconds, then reconnects and fetches what it missed. Offline, it waits about
+    /// 135 seconds without hearing from the server before it gives up on a connection. After iOS
+    /// has suspended the app, the connection is often dead, so without this, catching up can wait
+    /// that long. Online also shows Adam as online in Telegram, as Telegram's own apps do in the
+    /// foreground.
+    public func setOnline(_ isOnline: Bool) async throws {
+        try await perform {
+            try await $0.setOption(name: "online", value: .optionValueBoolean(OptionValueBoolean(value: isOnline)))
+        }
+    }
+
+    /// The current account, to check an alert's user_id when Telegram supplies it.
+    public func currentUserID() async throws -> Int64 {
+        try await perform { try await $0.getMe().id }
+    }
+
     // MARK: - Chats and messages
 
     /// Adam's private chats whose peer is a bot.
@@ -148,7 +180,9 @@ public actor TelegramLink {
             // backwards until there are `limit` messages or no older ones.
             var messages: [Message] = []
             var fromID: Int64 = 0
+            var pages = 0
             while messages.count < limit {
+                pages += 1
                 let batch = try await client.getChatHistory(
                     chatId: chat.rawValue,
                     fromMessageId: fromID,
@@ -161,6 +195,13 @@ public actor TelegramLink {
                 messages += older
                 fromID = oldest.id
             }
+            Self.log.info("chat history read", [
+                "chatID": chat.rawValue,
+                "count": messages.count,
+                "pages": pages,
+                "newestID": messages.first?.id ?? 0,
+                "oldestID": messages.last?.id ?? 0,
+            ])
             return messages.reversed().map(Mapping.chatMessage)
         }
     }
@@ -327,7 +368,11 @@ public actor TelegramLink {
         case .updateAuthorizationState(let update):
             handleAuthorizationState(update.authorizationState)
         case .updateNewMessage(let update):
+            Self.logNewMessage(update.message)
             eventContinuation.yield(.newMessage(Mapping.chatMessage(update.message)))
+        case .updateConnectionState(let update):
+            // `updating` is TDLib downloading what arrived while it was offline (getDifference).
+            Self.log.notice("connection state changed", ["state": Self.logName(of: update.state)])
         case .updateMessageInteractionInfo(let update):
             eventContinuation.yield(.reactionsChanged(
                 chat: ChatID(update.chatId),
@@ -350,6 +395,28 @@ public actor TelegramLink {
             ))
         default:
             break
+        }
+    }
+
+    /// Logs a new message TDLib hands over, by its IDs only. `ageSeconds` is how long ago it was
+    /// sent: one that TDLib only fetched after the app was away arrives with a large age.
+    private static func logNewMessage(_ message: Message) {
+        log.info("new message from TDLib", [
+            "chatID": message.chatId,
+            "messageID": message.id,
+            "outgoing": message.isOutgoing,
+            "pending": message.sendingState != nil,
+            "ageSeconds": Int(Date().timeIntervalSince1970) - message.date,
+        ])
+    }
+
+    private static func logName(of state: ConnectionState) -> String {
+        switch state {
+        case .connectionStateWaitingForNetwork: "waitingForNetwork"
+        case .connectionStateConnectingToProxy: "connectingToProxy"
+        case .connectionStateConnecting: "connecting"
+        case .connectionStateUpdating: "updating"
+        case .connectionStateReady: "ready"
         }
     }
 

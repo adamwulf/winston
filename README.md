@@ -23,6 +23,96 @@ Copy `App/Config/Secrets.example.xcconfig` to `App/Config/Secrets.xcconfig`
 (gitignored) and fill in `TG_API_ID` / `TG_API_HASH` from
 <https://my.telegram.org> → API development tools.
 
+## iOS push notifications
+
+Settings → Notifications → Enable Notifications asks for permission. Winston requests
+the current APNs token at launch and on activation, then registers it with Telegram once
+logged in. Each launch, token or environment change, and new login registers again;
+an unchanged token already registered or being registered is left alone. A failure offers Retry.
+No Winston server is needed: Telegram sends ordinary APNs alerts directly to Apple.[^1]
+
+Alerts follow the account's Telegram notification settings, including non-bot chats.
+Winston does not change those cloud settings. Tapping a private bot alert selects its
+chat after login and chat loading; other alerts open the app without navigating to a
+group or secret chat. If Telegram includes the receiving account ID, Winston checks it
+before opening the chat. Single-account payloads can omit that ID.[^2]
+The current chat does not show a duplicate foreground banner. Push does not start
+voice mode; background speech still requires an already active voice session.
+
+### Provider and signing setup
+
+1. Enable Push Notifications for `com.milestonemade.winston` in the Apple Developer
+   account, and refresh the app's provisioning profiles. The iOS target now includes
+   the `aps-environment` entitlement.
+2. Configure APNs certificates for the same Telegram application that owns
+   `TG_API_ID` at [Telegram's application settings](https://my.telegram.org/apps).
+   TDLib requires the correct application platform and uploaded provider credentials.[^1]
+   Telegram's certificate upload expects PEM containing both the certificate and its
+   private key.[^3] Keep those provider credentials out of the app and repository.
+3. `PUSH_ENVIRONMENT` in `App/Config/Shared.xcconfig` defaults to `development` for
+   Debug and `production` for Release. It supplies both the entitlement and the
+   environment sent to Telegram. **It must match the final signed app.** For a
+   development-signed Release build, explicitly build with
+   `PUSH_ENVIRONMENT=development`; for a distributed Debug build, use
+   `PUSH_ENVIRONMENT=production`. Xcode export may change signing entitlements
+   without changing Info.plist, so check the exported app before testing delivery.
+4. Install a signed build on an iPhone, log in, enable notifications, then background
+   Winston and send a message from an unmuted bot. Repeat with TestFlight to verify
+   production delivery. A successful device registration is not evidence that the
+   provider certificate is configured correctly.
+
+### Verification
+
+Package tests exercise the real TelegramLink and AppModel with fake TDLib requests:
+token/login ordering, token changes during registration, retry, logout, cold-launch
+navigation, account checks, and private/group payload parsing.
+
+For a device check, test permission denial and later enabling it in iOS Settings;
+tap alerts with Winston running and after termination; verify the current-chat banner
+is suppressed in the foreground; and verify a locked-screen voice session separately.
+With a photo/file picker or document preview open, tap another bot's alert: the
+presentation should close, and a pending picker selection must not send to the new chat.
+Repeat with a non-bot alert: its explanation should remain visible inline in the chat
+screen after the picker or preview closes, with a working Dismiss button.
+Regular APNs alerts are displayed by iOS. There is no notification service extension,
+silent-push processing, or new background mode in this implementation.
+
+### Catching up after the background
+
+iOS suspends Winston soon after it leaves the foreground, unless a voice session keeps
+it running, so a bot's message that comes while the phone is locked reaches Winston
+only as an alert. The alert doesn't use the message up: Telegram keeps every update in
+the account's update sequence, and TDLib fetches what it missed
+(`updates.getDifference`) at startup, when the server reports a new session, and when
+it sees a gap.[^4] What can hold it up is the connection, the likely cause of messages
+missing after Adam opened Winston (the logs below are there to confirm it on a
+device). Unless TDLib's `online` option is set, TDLib waits about 135 seconds without
+hearing from the server before it gives up on a connection,[^5] and after a suspension
+the connection is often dead. Winston never set it, so after Adam opened the app,
+TDLib could sit on a dead connection for two minutes before catching up.
+
+`AppModel` now sets `online` each time the app becomes active (and on login while
+it is), and clears it when the app leaves the foreground: to the background on iOS,
+to another app on macOS. Going online makes TDLib ping at once and give up on the
+connection if no answer comes within a couple of seconds; it then reconnects and
+fetches what it missed. Telegram shows Adam as online meanwhile, as its own apps do.
+Each message TDLib catches up arrives as a new message, and `AppModel` shows a
+message ID once however often it arrives.
+
+To follow an alert's message through the logs (IDs and counts only), grep a log file
+for `alert` (in Notification Center at activation, or the tapped one's response),
+`opening notification`, `app became active`, `telegram online status set`,
+`connection state changed` (`updating` is TDLib fetching what it missed),
+`new message from TDLib`, `message delivered`, `message already shown`,
+`message ignored`, and `chat history merged`. An alert's `messageID` is TDLib's ID for
+the message, the same one the other lines show.
+
+[^1]: [Telegram push setup](https://core.telegram.org/api/push-updates) and [TDLib device-token requirements](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1_device_token.html).
+[^2]: [TDLib maintainer guidance and ordinary APNs payload examples](https://github.com/tdlib/td/issues/2613).
+[^3]: [TDLib maintainer's APNs certificate format requirements](https://github.com/tdlib/td/issues/421).
+[^4]: [Telegram's update handling](https://core.telegram.org/api/updates) lists when a client must fetch the difference. In TDLib 1.8.69, `Td::init` and `UpdatesManager::init_state` fetch it at startup, and `Session::on_new_session_created` feeds TDLib a fake `updatesTooLong` to fetch it after a new session.
+[^5]: TDLib 1.8.69, `td/mtproto/SessionConnection.h`: `read_disconnect_delay()` and `ping_disconnect_delay()` are 135 seconds plus a random delay of up to 5 offline. `OptionManager::set_option` passes `online` to `StateManager::on_online`, and `SessionConnection::set_online` then pings at once and treats the connection as dead without an answer within `rtt()`: 1.5 times the measured round trip plus 1 second, at least 2 seconds.
+
 ## Build and test
 
 The first package resolve downloads TDLibFramework (about 375 MB).

@@ -157,6 +157,7 @@ struct LoginTests {
             try await link.downloadFile(FileRef(id: 1, localPath: nil))
         }
         await #expect(throws: TelegramLinkError.notStarted) { try await link.markRead([MessageID(1)], in: chat) }
+        await #expect(throws: TelegramLinkError.notStarted) { try await link.setOnline(true) }
         #expect(session.fake.clientCount == 0)
         #expect(session.fake.requests.isEmpty)
     }
@@ -570,6 +571,33 @@ struct FileAndReadTests {
         try await session.link.markRead([], in: ChatID(5))
 
         #expect(session.fake.requests.count == loginRequests)
+    }
+}
+
+/// Telling TDLib whether the app is in the foreground.
+@Suite(.timeLimit(.minutes(1)))
+struct OnlineTests {
+    @Test func setOnlineSetsTDLibsOnlineOption() async throws {
+        let session = Session()
+        try await session.startAndLogIn()
+
+        try await session.link.setOnline(true)
+        try await session.link.setOnline(false)
+
+        #expect(session.fake.requests.suffix(2) == [
+            .setOption(name: "online", value: true),
+            .setOption(name: "online", value: false),
+        ])
+    }
+
+    @Test func setOnlineRethrowsTDLibsError() async throws {
+        let session = Session()
+        session.fake.fail(.setOption, code: 400, message: "Option can't be set")
+        try await session.startAndLogIn()
+
+        await #expect(throws: TelegramLinkError.tdlib(code: 400, message: "Option can't be set")) {
+            try await session.link.setOnline(true)
+        }
     }
 }
 

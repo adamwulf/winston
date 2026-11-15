@@ -36,7 +36,25 @@ struct ChatScreen: View {
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
+        .onChange(of: model.notificationOpenCount) {
+            showingSettings = false
+        }
         #endif
+        .safeAreaInset(edge: .top) {
+            if let error = model.notificationErrorMessage {
+                HStack(alignment: .top) {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button("Dismiss", systemImage: "xmark") {
+                        model.notificationErrorMessage = nil
+                    }
+                    .labelStyle(.iconOnly)
+                }
+                .font(.callout)
+                .padding()
+                .background(.regularMaterial)
+            }
+        }
         .alert("Winston", isPresented: showingError) {
             Button("OK") {}
         } message: {

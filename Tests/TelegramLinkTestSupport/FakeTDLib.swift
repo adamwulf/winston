@@ -18,6 +18,10 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case checkAuthenticationCode(String?)
         case checkAuthenticationPassword(String?)
         case logOut
+        case registerDevice(token: String, isSandbox: Bool, otherUserIDs: [Int64]?)
+        case getMe
+        /// `setOption` with a boolean value; `value` is nil for any other kind of value.
+        case setOption(name: String?, value: Bool?)
         case loadChats(limit: Int?)
         case getChats(limit: Int?)
         case getChat(Int64?)
@@ -38,6 +42,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case execute, setTdlibParameters, setAuthenticationPhoneNumber, checkAuthenticationCode
         case checkAuthenticationPassword, logOut, loadChats, getChats, getChat, getUser, getChatHistory
         case getMessage, sendMessage, addMessageReaction, removeMessageReaction, viewMessages, downloadFile
+        case registerDevice, getMe, setOption
         /// Not a request: the answer to `getChatHistory`, after TDLib has read the history. Only
         /// for `hold(_:)`, to make the answer arrive after something that happened meanwhile.
         case chatHistoryReply
@@ -64,6 +69,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         var held: Set<Call> = []
         var waiting: [Call: [CheckedContinuation<Void, Never>]] = [:]
         var closeCount = 0
+        var currentUserID: Int64 = 999
     }
 
     package let encoder: JSONEncoder
@@ -91,6 +97,11 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     /// Every request so far, in order.
     package var requests: [Request] {
         withState { $0.requests }
+    }
+
+    package var currentUserID: Int64 {
+        get { withState { $0.currentUserID } }
+        set { withState { $0.currentUserID = newValue } }
     }
 
     /// How many clients the link has created. A second one follows a logout.
@@ -438,6 +449,30 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         withState { $0.isLoggedIn = false }
         send(.authorizationStateLoggingOut)
         send(.authorizationStateClosed)
+        return Ok()
+    }
+
+    package func registerDevice(deviceToken: DeviceToken?, otherUserIds: [Int64]?) async throws -> PushReceiverId {
+        guard case .deviceTokenApplePush(let token) = deviceToken else {
+            throw TDLibKit.Error(code: 400, message: "Expected ordinary Apple push token")
+        }
+        try await begin(.registerDevice(
+            token: token.deviceToken, isSandbox: token.isAppSandbox, otherUserIDs: otherUserIds
+        ), .registerDevice)
+        return PushReceiverId(id: 123)
+    }
+
+    package func getMe() async throws -> User {
+        try await begin(.getMe, .getMe)
+        return user(id: currentUserID, type: .userTypeRegular, username: "test_user")
+    }
+
+    package func setOption(name: String?, value: OptionValue?) async throws -> Ok {
+        var boolean: Bool?
+        if case .optionValueBoolean(let option) = value {
+            boolean = option.value
+        }
+        try await begin(.setOption(name: name, value: boolean), .setOption)
         return Ok()
     }
 

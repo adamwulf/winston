@@ -6,6 +6,7 @@ import TelegramLink
 import VoiceLoop
 #if os(iOS)
 import UIKit
+import UserNotifications
 #elseif os(macOS)
 import AppKit
 #endif
@@ -31,6 +32,10 @@ public final class AppModel {
     /// False when `Secrets.xcconfig` is missing, so there is no Telegram session.
     public let hasCredentials: Bool
     public let voiceLoop: VoiceLoop
+    public let pushRegistration: PushRegistration
+    #if os(iOS)
+    public let notificationAccess = NotificationAccess()
+    #endif
 
     public private(set) var authState: AuthState = .starting
     /// Why TDLib failed to start, if it did.
@@ -39,6 +44,10 @@ public final class AppModel {
     public private(set) var chats: [BotChat] = []
     public private(set) var chatsLoaded = false
     public private(set) var chatsError: String?
+    /// Each notification tap dismisses the iOS settings sheet, even for the same chat.
+    public private(set) var notificationOpenCount = 0
+    /// Shown inline, so a picker or preview closing cannot swallow a routing error alert.
+    public var notificationErrorMessage: String?
     /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
     public var selectedChatID: ChatID? {
         didSet { defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
@@ -139,6 +148,16 @@ public final class AppModel {
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isLoadingChats = false
+    @ObservationIgnored private var reloadChatsForNotification = false
+    @ObservationIgnored private var pendingNotification: TelegramNotification?
+    @ObservationIgnored private var sessionGeneration = 0
+    /// Whether the app is in the foreground, which TDLib's `online` option follows once logged in.
+    @ObservationIgnored private var isAppActive = false
+    /// The latest request to set TDLib's `online` option. Each waits for the one before, so they
+    /// reach TDLib in the order the app came and went.
+    @ObservationIgnored private var onlineStatusTask: Task<Void, Never>?
+    /// The observers of the app coming and going, removed with the model (the tests make many).
+    @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
@@ -160,6 +179,7 @@ public final class AppModel {
     /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
     package init(link: TelegramLink?, voiceLoop: VoiceLoop, defaults: UserDefaults, hasCredentials: Bool? = nil) {
         self.link = link
+        pushRegistration = PushRegistration(link: link)
         self.voiceLoop = voiceLoop
         self.defaults = defaults
         self.hasCredentials = hasCredentials ?? (link != nil)
@@ -175,6 +195,12 @@ public final class AppModel {
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
         observeAppActivation()
+    }
+
+    isolated deinit {
+        for observer in lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     #if DEBUG
@@ -237,21 +263,108 @@ public final class AppModel {
         }
     }
 
-    /// Each time the app comes back to the foreground, deletes the Kokoro voices' model if it has
-    /// gone unused for a day, as launching does.
+    /// Each activation, and each time the app leaves the foreground (to the background on iOS, or
+    /// to another app on macOS), goes to `appDidBecomeActive()` or `appDidLeaveForeground()` as
+    /// the system posts it. Main-queue observers keep them in the order they came, which an
+    /// activation's slower work below must not hold up.
+    ///
+    /// Each activation also removes unused Kokoro models and, on iOS, logs the alerts in
+    /// Notification Center and refreshes notification permission, requesting the current APNs
+    /// token. Scene-based apps post these notifications even though they don't call the
+    /// UIApplicationDelegate methods.
     private func observeAppActivation() {
         #if os(iOS)
-        let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
+        let becameActive = UIApplication.didBecomeActiveNotification
+        let leftForeground = UIApplication.didEnterBackgroundNotification
         #elseif os(macOS)
-        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
+        let becameActive = NSApplication.didBecomeActiveNotification
+        let leftForeground = NSApplication.didResignActiveNotification
         #endif
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: becameActive, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidBecomeActive() }
+            },
+            center.addObserver(forName: leftForeground, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidLeaveForeground() }
+            },
+        ]
+        let activations = center.notifications(named: becameActive)
         Task { [weak self] in
             for await _ in activations {
                 guard let self else { return }
                 self.voiceLoop.removeUnusedKokoroModel()
+                #if os(iOS)
+                await self.logAlertsInNotificationCenter()
+                await self.notificationAccess.refresh()
+                #endif
             }
         }
     }
+
+    /// The app came to the foreground. Package so the tests can call it in place of the system's
+    /// notification, which would reach every test's model.
+    package func appDidBecomeActive() {
+        Self.log.notice("app became active", [
+            "authState": authState.logName,
+            "chatsLoaded": chatsLoaded,
+            "newestShownIDs": newestShownIDs,
+        ])
+        isAppActive = true
+        sendOnlineStatus()
+    }
+
+    /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
+    package func appDidLeaveForeground() {
+        Self.log.notice("app left the foreground", [
+            "authState": authState.logName,
+            "newestShownIDs": newestShownIDs,
+        ])
+        isAppActive = false
+        sendOnlineStatus()
+    }
+
+    /// Tells TDLib whether the app is in the foreground (see `TelegramLink.setOnline(_:)`), so
+    /// that coming back replaces a dead connection at once and TDLib fetches what arrived
+    /// meanwhile. Only once logged in: TDLib's account status needs an account.
+    private func sendOnlineStatus() {
+        guard let link, authState == .ready else { return }
+        let isOnline = isAppActive
+        let previous = onlineStatusTask
+        onlineStatusTask = Task {
+            await previous?.value
+            do {
+                try await link.setOnline(isOnline)
+                Self.log.notice("telegram online status set", ["online": isOnline])
+            } catch {
+                Self.log.error("setting telegram online status failed", error.logContext(["online": String(isOnline)]))
+            }
+        }
+    }
+
+    #if os(iOS)
+    /// Logs each Telegram alert still in Notification Center: what arrived while the app was away,
+    /// when, and whether its message is shown yet. A tapped alert leaves Notification Center, and
+    /// `openNotification(_:)` logs it instead. Not in `appDidBecomeActive()`: a test process has no
+    /// app bundle for `UNUserNotificationCenter`.
+    private func logAlertsInNotificationCenter() async {
+        let delivered = await UNUserNotificationCenter.current().deliveredNotifications()
+        Self.log.notice("alerts in notification center", ["count": delivered.count])
+        for notification in delivered {
+            guard let target = TelegramNotification(userInfo: notification.request.content.userInfo) else {
+                Self.log.info("alert in notification center", ["chatID": "notPrivate"])
+                continue
+            }
+            Self.log.info("alert in notification center", [
+                "chatID": target.chatID,
+                "messageID": target.messageID?.description ?? "none",
+                "deliveredSecondsAgo": Int(-notification.date.timeIntervalSinceNow),
+                "botChat": isBotChat(target.chatID),
+                "messageShown": target.messageID.map { isShown($0, in: target.chatID) }?.description ?? "unknown",
+            ])
+        }
+    }
+    #endif
 
     /// Says a sample sentence in the chosen voice, speed and pitch, for the settings voice picker and the
     /// speed and pitch sliders. Says nothing for a Kokoro voice whose model isn't ready yet, rather than
@@ -378,8 +491,10 @@ public final class AppModel {
 
     private func handle(_ state: AuthState) {
         authState = state
+        pushRegistration.setAuthorized(state == .ready)
         switch state {
         case .ready:
+            sendOnlineStatus()
             Task { await loadChats() }
         case .loggingOut, .closed:
             clearSession()
@@ -389,6 +504,10 @@ public final class AppModel {
     }
 
     private func clearSession() {
+        sessionGeneration += 1
+        pendingNotification = nil
+        reloadChatsForNotification = false
+        notificationErrorMessage = nil
         if isVoiceMode {
             voiceLoop.stop()
             isVoiceMode = false
@@ -404,6 +523,60 @@ public final class AppModel {
     }
 
     // MARK: - Chats
+
+    /// A tap can arrive before SwiftUI appears or before Telegram has restored its session.
+    /// Keep it until the bot list is loaded; never start voice mode from a notification.
+    public func openNotification(_ notification: TelegramNotification) {
+        Self.log.notice("opening notification", [
+            "chatID": notification.chatID,
+            "messageID": notification.messageID?.description ?? "none",
+            "authState": authState.logName,
+            "chatsLoaded": chatsLoaded,
+            // Whether the alert's message is already shown, so a missed one stands out.
+            "messageShown": notification.messageID.map { isShown($0, in: notification.chatID) }?.description ?? "unknown",
+        ])
+        notificationOpenCount += 1
+        notificationErrorMessage = nil
+        pendingNotification = notification
+        start()
+        if authState == .ready {
+            Task {
+                if isBotChat(notification.chatID) {
+                    await openPendingNotification()
+                } else {
+                    await loadChats()
+                }
+            }
+        }
+    }
+
+    private func openPendingNotification() async {
+        guard authState == .ready, let notification = pendingNotification, let link else { return }
+        let generation = sessionGeneration
+        do {
+            if let accountID = notification.accountID {
+                let currentAccount = try await link.currentUserID()
+                guard generation == sessionGeneration, pendingNotification == notification else { return }
+                if accountID != currentAccount {
+                    pendingNotification = nil
+                    notificationErrorMessage = "This notification belongs to a different Telegram account."
+                    return
+                }
+            }
+            guard authState == .ready, generation == sessionGeneration,
+                  pendingNotification == notification else { return }
+            pendingNotification = nil
+            if isBotChat(notification.chatID) {
+                selectedChatID = notification.chatID
+            } else {
+                notificationErrorMessage = "This chat isn't available in Winston. Open it in Telegram."
+            }
+        } catch {
+            Self.log.error("opening notification failed", error.tdlibLogCodes())
+            guard generation == sessionGeneration, pendingNotification == notification else { return }
+            notificationErrorMessage = "Couldn't open the notification. Please try again."
+        }
+    }
 
     public var currentChat: BotChat? {
         chats.first { $0.id == selectedChatID }
@@ -424,33 +597,76 @@ public final class AppModel {
 
     /// Loads the bot chats and their recent history.
     public func loadChats() async {
-        guard let link, !isLoadingChats else { return }
+        guard let link else { return }
+        guard !isLoadingChats else {
+            // A tap may name a new bot that wasn't in this load's chat-list snapshot.
+            // Coalesce those requests into one fresh load after the history work finishes.
+            if pendingNotification != nil { reloadChatsForNotification = true }
+            return
+        }
+        let generation = sessionGeneration
         isLoadingChats = true
-        defer { isLoadingChats = false }
+        Self.log.info("chat load started")
+        defer {
+            isLoadingChats = false
+            let needsReload = (reloadChatsForNotification && pendingNotification != nil)
+                || generation != sessionGeneration
+            reloadChatsForNotification = false
+            if needsReload, authState == .ready {
+                Task { await loadChats() }
+            }
+        }
         chatsError = nil
         do {
             // botChats() lists every bot chat by recency. Drop @BotFather and sort by title so the picker is stable.
-            chats = try await link.botChats()
+            let loadedChats = try await link.botChats()
                 .filter { $0.username?.lowercased() != "botfather" }
                 .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+            guard generation == sessionGeneration else { return }
+            Self.log.info("bot chats loaded", ["count": loadedChats.count])
+            chats = loadedChats
             chatsLoaded = true
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
+            // Use this fresh snapshot immediately when it contains the tapped bot.
+            // Only an unresolved target needs the queued refresh after history loads.
+            if !reloadChatsForNotification || pendingNotification.map({ isBotChat($0.chatID) }) == true {
+                await openPendingNotification()
+            }
         } catch {
             Self.log.error("loading bot chats failed", error.logContext())
+            guard generation == sessionGeneration else { return }
             chatsError = userMessage(for: error)
             return
         }
+        guard generation == sessionGeneration else { return }
         for chat in chats {
             do {
                 let history = try await link.history(in: chat.id, limit: 50)
+                guard generation == sessionGeneration else { return }
                 // Keep anything that arrived as an event while the history was loading.
                 let historyIDs = Set(history.map(\.id))
-                let newer = (messages[chat.id] ?? []).filter { !historyIDs.contains($0.id) }
+                let shown = messages[chat.id] ?? []
+                let newer = shown.filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
+                let shownIDs = Set(shown.map(\.id))
+                // Messages the history had that the model didn't show yet, such as one TDLib
+                // delivered before the bot chats loaded.
+                let added = history.filter { !shownIDs.contains($0.id) }
+                Self.log.info("chat history merged", [
+                    "chatID": chat.id,
+                    "shownBefore": shown.count,
+                    "read": history.count,
+                    "added": added.count,
+                    // The newest few by ID, to match with an alert or an ignored message.
+                    "newestAddedIDs": added.suffix(10).map(\.id.description).joined(separator: ","),
+                    "keptFromEvents": newer.count,
+                    "newestID": messages[chat.id]?.last?.id.rawValue ?? 0,
+                ])
             } catch {
                 Self.log.error("loading chat history failed", error.logContext(["chatID": chat.id.description]))
+                guard generation == sessionGeneration else { return }
                 errorMessage = "Couldn't load the history for \(chat.title): \(userMessage(for: error))"
             }
         }
@@ -460,11 +676,31 @@ public final class AppModel {
         chats.contains { $0.id == chat }
     }
 
+    private func isShown(_ message: MessageID, in chat: ChatID) -> Bool {
+        messages[chat]?.contains { $0.id == message } ?? false
+    }
+
+    /// Each bot chat's newest shown message ID, as `chatID:messageID` pairs, for the lifecycle
+    /// logs: comparing them before and after the app was away shows what arrived meanwhile.
+    private var newestShownIDs: String {
+        chats.map { "\($0.id):\(messages[$0.id]?.last?.id.description ?? "none")" }.joined(separator: ",")
+    }
+
     private func handle(_ event: ChatEvent) {
         switch event {
         case .newMessage(let message):
-            guard isBotChat(message.chatID) else { return }
+            guard isBotChat(message.chatID) else {
+                logIgnoredMessage(message)
+                return
+            }
             let isNew = upsert(message, replacing: message.id)
+            Self.log.info(isNew ? "message delivered" : "message already shown, replaced", [
+                "chatID": message.chatID,
+                "messageID": message.id,
+                "outgoing": message.isOutgoing,
+                "pending": message.sendState == .pending,
+                "currentChat": message.chatID == currentChat?.id,
+            ])
             if !message.isOutgoing {
                 typingChats.remove(message.chatID)
                 if isNew, isVoiceMode, message.chatID == currentChat?.id {
@@ -500,9 +736,32 @@ public final class AppModel {
             }
         case .sendSucceeded(let chat, let oldID, let message):
             guard isBotChat(chat) else { return }
-            upsert(message, replacing: oldID)
+            let isNew = upsert(message, replacing: oldID)
+            Self.log.info("sent message confirmed", [
+                "chatID": chat,
+                "oldID": oldID,
+                "messageID": message.id,
+                // False means the pending message wasn't shown, so the sent one was added.
+                "replacedPending": !isNew,
+            ])
         case .sendFailed(let chat, let id, let error):
             updateMessage(id, in: chat) { $0.sendState = .failed(error) }
+        }
+    }
+
+    /// Logs a new message the model ignores because its chat isn't a loaded bot chat. Until the
+    /// bot chats first load, that ignores a bot's message too (the history load should pick it up
+    /// again), so those go where the log file keeps them; later ones, from other chats, only at debug.
+    private func logIgnoredMessage(_ message: ChatMessage) {
+        let metadata: [String: CustomStringConvertible] = [
+            "chatID": message.chatID,
+            "messageID": message.id,
+            "outgoing": message.isOutgoing,
+        ]
+        if chatsLoaded {
+            Self.log.debug("message ignored: not a bot chat", metadata)
+        } else {
+            Self.log.notice("message ignored: bot chats not loaded yet", metadata)
         }
     }
 

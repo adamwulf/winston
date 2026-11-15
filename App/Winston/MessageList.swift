@@ -261,12 +261,17 @@ struct DocumentRow: View {
         .disabled(model.isDownloading(file))
         #if os(iOS)
         .quickLookPreview($previewURL)
+        .onChange(of: model.notificationOpenCount) {
+            previewURL = nil
+        }
         #endif
     }
 
     private func open() async {
+        let notificationCount = model.notificationOpenCount
         do {
             let url = try await model.download(file)
+            guard notificationCount == model.notificationOpenCount else { return }
             #if os(iOS)
             previewURL = url
             #else
@@ -275,6 +280,7 @@ struct DocumentRow: View {
         } catch {
             // Codes only: a TDLib file error's message can hold a local path.
             Self.log.error("document download failed", error.tdlibLogCodes(["fileID": String(file.id)]))
+            guard notificationCount == model.notificationOpenCount else { return }
             model.errorMessage = userMessage(for: error)
         }
     }

@@ -102,29 +102,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateLater
     }
 }
-#else
-/// iOS only calls this when the app is running at termination, for example when it's swiped
-/// away while voice mode keeps it alive in the background. A suspended app is killed without it.
-final class AppDelegate: NSObject, UIApplicationDelegate {
-    private static let log = Logger(label: "app.lifecycle")
-
-    var model: AppModel?
-
-    /// UIKit's delegate form of `didReceiveMemoryWarningNotification`. Logged with the memory left,
-    /// since iOS may kill the app next, as it can while a Kokoro model loads.
-    func applicationDidReceiveMemoryWarning(_ application: UIApplication) {
-        var metadata: [String: CustomStringConvertible] = [:]
-        if let megabytes = AvailableMemory.megabytes {
-            metadata["availableMB"] = megabytes
-        }
-        Self.log.warning("memory warning", metadata)
-    }
-
-    func applicationWillTerminate(_ application: UIApplication) {
-        guard let model else { return }
-        model.closeForQuitBlocking()
-        WinstonLog.flushBlocking()
-        _exit(0)
-    }
-}
 #endif
