@@ -66,7 +66,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
         var metadata = Self.alertMetadata(target)
         metadata["action"] = action
-        // False when a tap launched the app, so iOS had ended it while it was away.
+        // A tapped alert leaves Notification Center, so its delivery time is logged here.
+        metadata["deliveredSecondsAgo"] = Int(-response.notification.date.timeIntervalSinceNow)
+        // Whether SwiftUI has handed this delegate the model yet: false right after a launch,
+        // such as one from this tap.
         metadata["modelReady"] = model != nil
         Self.log.notice("alert response", metadata)
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier, let target else { return }
@@ -77,7 +80,8 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    /// An alert's chat and message IDs (never its text), and the app's state when it came.
+    /// An alert's chat and message IDs (never its text), and the app's state now, as iOS calls
+    /// the delegate: for a tapped alert, that is when it was tapped, not when it arrived.
     private static func alertMetadata(_ target: TelegramNotification?) -> [String: CustomStringConvertible] {
         [
             "chatID": target?.chatID.description ?? "notPrivate",

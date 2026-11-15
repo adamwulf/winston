@@ -156,6 +156,8 @@ public final class AppModel {
     /// The latest request to set TDLib's `online` option. Each waits for the one before, so they
     /// reach TDLib in the order the app came and went.
     @ObservationIgnored private var onlineStatusTask: Task<Void, Never>?
+    /// The observers of the app coming and going, removed with the model (the tests make many).
+    @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
@@ -193,6 +195,12 @@ public final class AppModel {
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
         observeAppActivation()
+    }
+
+    isolated deinit {
+        for observer in lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 
     #if DEBUG
@@ -255,35 +263,41 @@ public final class AppModel {
         }
     }
 
-    /// Each activation removes unused Kokoro models and, on iOS, refreshes notification
-    /// permission and requests the current APNs token. Scene-based apps post this notification
-    /// even though they don't call UIApplicationDelegate.applicationDidBecomeActive.
-    /// Each activation, and each time the app leaves the foreground (to the background on iOS,
-    /// where it is then suspended, or to another app on macOS), goes to `appDidBecomeActive()` and
-    /// `appDidLeaveForeground()`.
+    /// Each activation, and each time the app leaves the foreground (to the background on iOS, or
+    /// to another app on macOS), goes to `appDidBecomeActive()` or `appDidLeaveForeground()` as
+    /// the system posts it. Main-queue observers keep them in the order they came, which an
+    /// activation's slower work below must not hold up.
+    ///
+    /// Each activation also removes unused Kokoro models and, on iOS, logs the alerts in
+    /// Notification Center and refreshes notification permission, requesting the current APNs
+    /// token. Scene-based apps post these notifications even though they don't call the
+    /// UIApplicationDelegate methods.
     private func observeAppActivation() {
         #if os(iOS)
-        let activations = NotificationCenter.default.notifications(named: UIApplication.didBecomeActiveNotification)
-        let departures = NotificationCenter.default.notifications(named: UIApplication.didEnterBackgroundNotification)
+        let becameActive = UIApplication.didBecomeActiveNotification
+        let leftForeground = UIApplication.didEnterBackgroundNotification
         #elseif os(macOS)
-        let activations = NotificationCenter.default.notifications(named: NSApplication.didBecomeActiveNotification)
-        let departures = NotificationCenter.default.notifications(named: NSApplication.didResignActiveNotification)
+        let becameActive = NSApplication.didBecomeActiveNotification
+        let leftForeground = NSApplication.didResignActiveNotification
         #endif
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: becameActive, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidBecomeActive() }
+            },
+            center.addObserver(forName: leftForeground, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.appDidLeaveForeground() }
+            },
+        ]
+        let activations = center.notifications(named: becameActive)
         Task { [weak self] in
             for await _ in activations {
                 guard let self else { return }
-                self.appDidBecomeActive()
                 self.voiceLoop.removeUnusedKokoroModel()
                 #if os(iOS)
                 await self.logAlertsInNotificationCenter()
                 await self.notificationAccess.refresh()
                 #endif
-            }
-        }
-        Task { [weak self] in
-            for await _ in departures {
-                guard let self else { return }
-                self.appDidLeaveForeground()
             }
         }
     }
@@ -311,8 +325,8 @@ public final class AppModel {
     }
 
     /// Tells TDLib whether the app is in the foreground (see `TelegramLink.setOnline(_:)`), so
-    /// that coming back reconnects at once and TDLib fetches what arrived meanwhile. Only once
-    /// logged in: TDLib's account status needs an account.
+    /// that coming back replaces a dead connection at once and TDLib fetches what arrived
+    /// meanwhile. Only once logged in: TDLib's account status needs an account.
     private func sendOnlineStatus() {
         guard let link, authState == .ready else { return }
         let isOnline = isAppActive
@@ -637,12 +651,16 @@ public final class AppModel {
                 let newer = shown.filter { !historyIDs.contains($0.id) }
                 messages[chat.id] = history + newer
                 let shownIDs = Set(shown.map(\.id))
+                // Messages the history had that the model didn't show yet, such as one TDLib
+                // delivered before the bot chats loaded.
+                let added = history.filter { !shownIDs.contains($0.id) }
                 Self.log.info("chat history merged", [
                     "chatID": chat.id,
                     "shownBefore": shown.count,
                     "read": history.count,
-                    // Messages the history had that the model didn't show yet.
-                    "added": history.count(where: { !shownIDs.contains($0.id) }),
+                    "added": added.count,
+                    // The newest few by ID, to match with an alert or an ignored message.
+                    "newestAddedIDs": added.suffix(10).map(\.id.description).joined(separator: ","),
                     "keptFromEvents": newer.count,
                     "newestID": messages[chat.id]?.last?.id.rawValue ?? 0,
                 ])

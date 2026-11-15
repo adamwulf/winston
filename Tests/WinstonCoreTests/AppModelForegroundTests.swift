@@ -76,11 +76,11 @@ struct ForegroundTests {
         harness.fake.fail(.setOption, code: 500, message: "Internal Server Error")
 
         model.appDidBecomeActive()
-        #expect(await eventually { onlineValues(harness.fake) == [false, true] })
-        harness.fake.succeed(.setOption)
         model.appDidLeaveForeground()
 
+        // The second request waits for the first, so it goes only after the first failed.
         #expect(await eventually { onlineValues(harness.fake) == [false, true, false] })
+        try await settle()
         #expect(model.errorMessage == nil)
     }
 

@@ -130,11 +130,12 @@ public actor TelegramLink {
 
     /// Tells TDLib whether the app is in the foreground, through its `online` option.
     ///
-    /// Online, TDLib pings its connection at once and reconnects if no answer comes within a
-    /// couple of seconds; offline, it waits up to 135 seconds without hearing from the server
-    /// before it gives up on a connection. After iOS has suspended the app, the connection is
-    /// usually dead, so without this, messages that came meanwhile wait that long. Online also
-    /// shows Adam as online in Telegram, as Telegram's own apps do in the foreground.
+    /// Going online, TDLib pings its connection at once and gives it up if no answer comes within
+    /// a couple of seconds, then reconnects and fetches what it missed. Offline, it waits about
+    /// 135 seconds without hearing from the server before it gives up on a connection. After iOS
+    /// has suspended the app, the connection is often dead, so without this, catching up can wait
+    /// that long. Online also shows Adam as online in Telegram, as Telegram's own apps do in the
+    /// foreground.
     public func setOnline(_ isOnline: Bool) async throws {
         try await perform {
             try await $0.setOption(name: "online", value: .optionValueBoolean(OptionValueBoolean(value: isOnline)))
