@@ -286,6 +286,25 @@ struct PronunciationPreviewTests {
         #expect(harness.bed.kokoro.requests.map(\.text) == ["cat"])
     }
 
+    @Test func theReplacementKeepsWhatLooksLikeMarkdownInVoiceModeAndOutsideIt() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        // Made speakable as a message is, the asterisks would go: they read as emphasis.
+        model.pronunciations = [Pronunciation(word: "Kokoro", replacement: "*Ko*-ko-ro")]
+
+        model.previewPronunciation(model.pronunciations[0])
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        await model.setVoiceMode(true)
+        model.previewPronunciation(model.pronunciations[0])
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["*Ko*-ko-ro", "*Ko*-ko-ro"])
+    }
+
     @Test func withTheReplacementBlankTheWordIsSaid() async throws {
         let harness = Harness()
         let model = harness.model
