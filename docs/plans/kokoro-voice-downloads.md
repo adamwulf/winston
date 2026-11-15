@@ -31,18 +31,21 @@ Pass `voiceFilter: [<the chosen voice>]` instead of `["a*", "b*"]`, so a model
 downloads and parses only the voice in use.
 
 - `KokoroEngine.load(_:voice:downloadProgress:)` takes the voice too, and
-  `LiveKokoro` would pass it to `fromPretrained`. Today a load depends only on
-  the model; it would depend on the model and the voice.
-- `KokoroModel` would load again when the chosen Kokoro voice changes, not only
-  when the model changes, the same way it already handles `variant` (a load under
-  way finishes first, then the newly chosen one loads).
-- Picking a voice not stored yet would download it (2.7 MB, a second or two)
-  before it speaks. Until then the system voice speaks, as for a model download.
-  A voice preview in settings would wait for that download too.
+  `LiveKokoro` passes it to `fromPretrained`. A load depends on the model and the
+  voice.
+- soniqo's model still takes every voice (`KokoroModelVariant.loadsEveryVoice`):
+  they are about 5 KB each, and its stored downloads already hold them all.
+- `KokoroModel` loads again when the chosen Kokoro voice changes, not only when
+  the model changes, the same way it handles `variant` (a load under way finishes
+  first, then the newly chosen one loads). A ready model that loads every voice
+  stays ready.
+- Picking a voice not stored yet downloads it before it speaks: an online load,
+  which asks Hugging Face for the file list (several seconds) and fetches the
+  2.7 MB voice. Until then replies use the system voice, as for a model download,
+  and settings plays no sample: its play button appears once the model is ready.
 - The model's marker (`<folder>.<model>.downloaded`) says only that the model
-  downloaded, not which voices. A voice not yet stored needs an online load, so
-  either a marker per voice, or check for `voices/<voice>.json` before loading
-  offline.
+  downloaded, not which voices, so an offline load also needs
+  `voices/<voice>.json`; without it, the load goes online.
 - The day-unused cleanup and the "Delete Downloaded Voice Models" button already
   delete whole folders, voices included; no change there.
 

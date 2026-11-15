@@ -37,6 +37,7 @@ package final class FakeKokoro: KokoroEngine {
 
     private struct State {
         var loadBehavior = LoadBehavior.succeeds
+        var loadCalls = 0
         var loadedModels: [KokoroModelVariant] = []
         var loadedVoices: [String] = []
         var unloads = 0
@@ -67,6 +68,10 @@ package final class FakeKokoro: KokoroEngine {
 
     /// How many loads were needed for the requested model and voice.
     package var loads: Int { state.withLock { $0.loadedModels.count } }
+
+    /// How many times the loop called `load`, counting calls that found the model and voice
+    /// already loaded and did nothing.
+    package var loadCalls: Int { state.withLock { $0.loadCalls } }
 
     /// The model each load asked for, oldest first.
     package var loadedModels: [KokoroModelVariant] { state.withLock { $0.loadedModels } }
@@ -158,36 +163,58 @@ package final class FakeKokoro: KokoroEngine {
     }
 
     package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
-        let behavior: LoadBehavior? = state.withLock { state in
-            // Soniqo loads all voices; the other models load only the requested one.
-            if state.loadedModel == variant, variant == .soniqo5s || state.loadedVoice == voice {
-                return nil
+        enum Outcome { case done, fails, waits }
+        let outcome: Outcome = state.withLock { state in
+            state.loadCalls += 1
+            // A model that loads every voice has them all; the others have only the one asked for.
+            if state.loadedModel == variant, variant.loadsEveryVoice || state.loadedVoice == voice {
+                return .done
             }
-            state.loadedModels.append(variant)
-            state.loadedVoices.append(voice)
             state.downloadProgress = downloadProgress
-            if state.nextLoadSucceeds {
-                state.nextLoadSucceeds = false
-                return LoadBehavior.succeeds
-            }
             // As `KokoroEngine` promises: another model loaded is freed first.
             state.loadedModel = nil
             state.loadedVoice = nil
-            return state.loadBehavior
-        }
-        guard let behavior else { return }
-        switch behavior {
-        case .succeeds:
-            state.withLock { state in
+            let behavior = state.nextLoadSucceeds ? .succeeds : state.loadBehavior
+            switch behavior {
+            case .succeeds:
+                state.nextLoadSucceeds = false
+                state.loadedModels.append(variant)
+                state.loadedVoices.append(voice)
                 state.loadedModel = variant
                 state.loadedVoice = voice
                 state.isStored = true
+                return .done
+            case .fails:
+                state.loadedModels.append(variant)
+                state.loadedVoices.append(voice)
+                return .fails
+            case .waits:
+                // Counted only once it waits, below, so a test that sees the load can finish it.
+                return .waits
             }
+        }
+        switch outcome {
+        case .done:
+            return
         case .fails:
             throw FakeKokoroError.loadFailed
         case .waits:
             try await withCheckedThrowingContinuation { continuation in
-                state.withLock { $0.waitingLoads.append((variant, voice, continuation)) }
+                let finishedEarly = state.withLock { state in
+                    state.loadedModels.append(variant)
+                    state.loadedVoices.append(voice)
+                    // `finishLoading(succeeding: true)` came before this load could wait.
+                    if state.nextLoadSucceeds {
+                        state.nextLoadSucceeds = false
+                        state.loadedModel = variant
+                        state.loadedVoice = voice
+                        state.isStored = true
+                        return true
+                    }
+                    state.waitingLoads.append((variant, voice, continuation))
+                    return false
+                }
+                if finishedEarly { continuation.resume() }
             }
         }
     }

@@ -52,10 +52,17 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
         }
     }
 
+    /// Whether it downloads and loads every voice, so a change of voice needs no load: soniqo's
+    /// model, whose voices are about 5 KB each. The others load only the chosen voice (2.7 MB
+    /// each), and load again for another.
+    package var loadsEveryVoice: Bool {
+        self == .soniqo5s
+    }
+
     /// About how much it downloads when nothing is stored yet, in megabytes. The masked models
-    /// download only the chosen voice (2.7 MB, with a style per sentence length), and share
-    /// stored voices and dictionaries,
-    /// so a second one adds about 235 MB; FluidAudio's do too, and a second one adds about 325 MB.
+    /// download only the chosen voice (2.7 MB, with a style per sentence length) and share stored
+    /// voices and dictionaries, so a second one adds about 235 MB; FluidAudio's do too, and a
+    /// second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
         case .soniqo5s: 335
@@ -125,10 +132,12 @@ final class KokoroModel {
         }
     }
     /// The Kokoro voice to load with the model. As with `variant`, a load under way finishes
-    /// before the newly chosen voice loads.
+    /// before the newly chosen voice loads. A ready model that loads every voice
+    /// (`KokoroModelVariant.loadsEveryVoice`) already has it, and stays ready.
     var voice = "af_heart" {
         didSet {
             guard voice != oldValue else { return }
+            if state == .ready, variant.loadsEveryVoice { return }
             loadIfChoiceChanged()
         }
     }
@@ -158,6 +167,12 @@ final class KokoroModel {
     private var unchosenSince: Date? {
         get { readUnchosenSince() }
         set { writeUnchosenSince(newValue) }
+    }
+
+    /// Whether a load of `loaded` with `loadedVoice` gives the model and voice chosen now. A model
+    /// that loads every voice gives any voice.
+    private func serves(_ loaded: KokoroModelVariant, voice loadedVoice: String) -> Bool {
+        loaded == variant && (loadedVoice == voice || loaded.loadsEveryVoice)
     }
 
     /// Loads a changed model or voice while a Kokoro voice is chosen. A load under way picks up
@@ -199,7 +214,7 @@ final class KokoroModel {
             } catch {
                 // Codes only: the downloader's messages name the model's folder.
                 Self.log.error("kokoro model load failed", error.logCodes(["model": requested.rawValue]))
-                if self.isWanted, self.variant != requested || self.voice != requestedVoice {
+                if self.isWanted, !self.serves(requested, voice: requestedVoice) {
                     // Another model or voice was chosen while this one loaded; it may load.
                     self.state = .notLoaded
                     self.load()
@@ -222,7 +237,7 @@ final class KokoroModel {
                 }
                 return
             }
-            guard self.variant == requested, self.voice == requestedVoice else {
+            guard self.serves(requested, voice: requestedVoice) else {
                 // Another model or voice was chosen while this one loaded.
                 self.state = .notLoaded
                 self.load()
@@ -288,7 +303,18 @@ final class KokoroModel {
     /// again, fresh: the way to pick up changed files on the Hub, since a stored model loads
     /// offline. Until it is ready, the best system voice speaks.
     func removeStoredModels() {
+        // The engine frees the loaded model as soon as the removal starts, so from now on replies
+        // use the system voice rather than ask a model that is going away.
+        if state == .ready {
+            state = .notLoaded
+            dictionaryWords = []
+        }
         callEngine { [engine] in
+            // Again here: a load under way when the deletion was asked for has finished since.
+            if self.state == .ready {
+                self.state = .notLoaded
+                self.dictionaryWords = []
+            }
             do {
                 let removed = try await engine.removeStoredModel()
                 Self.log.notice("kokoro models deleted from settings", ["anyStored": removed])

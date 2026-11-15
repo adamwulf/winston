@@ -299,13 +299,11 @@ extension KokoroModelVariant {
         }
     }
 
-    /// The voices it downloads and loads. soniqo's repository's voices are small, so it
-    /// takes them all, as it always has; the others take only the chosen voice (2.7 MB).
+    /// The voices it downloads and loads with `voice` chosen: every voice for a model that
+    /// `loadsEveryVoice` (soniqo's, whose voices are small), as it always has; the others take
+    /// only the chosen voice (2.7 MB).
     fileprivate func voiceFilter(for voice: String) -> [String]? {
-        switch self {
-        case .soniqo5s: nil
-        case .masked5s, .masked10s, .masked15s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: [voice]
-        }
+        loadsEveryVoice ? nil : [voice]
     }
 
     /// What it may run on. Never `.all`, the default: on macOS 27 compiling these models for the
