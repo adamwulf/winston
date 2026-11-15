@@ -925,6 +925,20 @@ struct KokoroCancellingTests {
     @Test func noSamplesMakeNoBuffers() {
         #expect(KokoroAudio.buffers([]).isEmpty)
     }
+
+    @Test func aReplyStartsWithSilenceSoItsFadeInEndsBeforeTheFirstWordAtEverySpeed() {
+        for speed: Float in [0.5, 1, 2] {
+            let silence = KokoroAudio.silenceBeforeReply(speed: speed)
+            #expect(silence.allSatisfy { $0 == 0 })
+            // With KokoroTTS's own lead-in, the silence lasts exactly as long as the fade-in.
+            let seconds = Double(silence.count) / KokoroAudio.sampleRate + KokoroAudio.leadInSeconds / Double(speed)
+            #expect(abs(seconds - SpeechPlayback.fadeInDuration(speed: speed)) < 0.001)
+        }
+        // 100 ms at normal speed, 50 ms at double, 200 ms at half.
+        #expect(KokoroAudio.silenceBeforeReply(speed: 1).count == 2_400)
+        #expect(KokoroAudio.silenceBeforeReply(speed: 2).count == 1_200)
+        #expect(KokoroAudio.silenceBeforeReply(speed: 0.5).count == 4_800)
+    }
 }
 
 // MARK: - The voice list

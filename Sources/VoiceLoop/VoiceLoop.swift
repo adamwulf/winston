@@ -1043,7 +1043,10 @@ public final class VoiceLoop {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                for buffer in KokoroAudio.buffers(samples) {
+                // The first sentence starts with room for the fade-in to finish before its
+                // first word.
+                let audio = index == 0 ? KokoroAudio.silenceBeforeReply(speed: speed) + samples : samples
+                for buffer in KokoroAudio.buffers(audio) {
                     playback.receive(buffer)
                 }
             }
