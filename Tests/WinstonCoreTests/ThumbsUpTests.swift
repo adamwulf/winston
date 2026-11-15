@@ -28,11 +28,15 @@ import WinstonCore
         ]).hasMyThumbsUp)
     }
 
-    @Test func theBotsThumbsUpIsEveryThumbsUpButAdamsOwn() {
-        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: false)]).othersThumbsUpCount == 1)
-        #expect(message(reactions: [Reaction(emoji: "👍", count: 2, isChosen: true)]).othersThumbsUpCount == 1)
-        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: true)]).othersThumbsUpCount == 0)
-        #expect(message(reactions: [Reaction(emoji: "👀", count: 1, isChosen: false)]).othersThumbsUpCount == 0)
-        #expect(message(reactions: []).othersThumbsUpCount == 0)
+    @Test func theBotsReactionsAreEveryReactionButAdamsOwn() {
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: false)]).othersReactionCounts == ["👍": 1])
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 2, isChosen: true)]).othersReactionCounts == ["👍": 1])
+        #expect(message(reactions: [Reaction(emoji: "👍", count: 1, isChosen: true)]).othersReactionCounts == ["👍": 0])
+        #expect(message(reactions: [Reaction(emoji: "🎉", count: 1, isChosen: false)]).othersReactionCounts == ["🎉": 1])
+        #expect(message(reactions: [
+            Reaction(emoji: "👀", count: 1, isChosen: false),
+            Reaction(emoji: "👍", count: 1, isChosen: true),
+        ]).othersReactionCounts == ["👀": 1, "👍": 0])
+        #expect(message(reactions: []).othersReactionCounts == [:])
     }
 }

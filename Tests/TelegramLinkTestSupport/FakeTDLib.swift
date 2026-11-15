@@ -262,6 +262,26 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         try reactOutsideTheLink(emoji, to: messageID, in: chatID, byAdam: false)
     }
 
+    /// The bot swaps its `old` reaction for `new` in one update, as the coordinator's
+    /// setMessageReaction does: a bot has at most one reaction per message, and setting one
+    /// replaces it. One fewer `old`, one more `new`. The link is told, as TDLib does.
+    package func botChangesReaction(from old: String, to new: String, on messageID: Int64, in chatID: Int64) throws {
+        try react(chatID: chatID, messageID: messageID) { reactions in
+            if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == old }) {
+                if reactions[index].totalCount > 1 {
+                    reactions[index] = messageReaction(
+                        reactions[index].type,
+                        count: reactions[index].totalCount - 1,
+                        isChosen: reactions[index].isChosen
+                    )
+                } else {
+                    reactions.remove(at: index)
+                }
+            }
+            Self.addReaction(new, to: &reactions, byAdam: false)
+        }
+    }
+
     /// Adam reacts to a message with `emoji` from another Telegram app, not through the link:
     /// the count goes up and he has chosen it. The link is told, as TDLib does.
     package func adamReactsInAnotherApp(_ emoji: String, to messageID: Int64, in chatID: Int64) throws {
@@ -651,20 +671,23 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         return ""
     }
 
-    /// One more `emoji` reaction on a message, from the bot or from Adam in another app. Adam's
-    /// chooses it; the bot's leaves whether Adam chose it as it was.
+    /// One more `emoji` reaction on a message, from the bot or from Adam in another app.
     private func reactOutsideTheLink(_ emoji: String, to messageID: Int64, in chatID: Int64, byAdam: Bool) throws {
+        try react(chatID: chatID, messageID: messageID) { Self.addReaction(emoji, to: &$0, byAdam: byAdam) }
+    }
+
+    /// One more `emoji` in `reactions`, from the bot or from Adam. Adam's chooses it; the bot's
+    /// leaves whether Adam chose it as it was.
+    private static func addReaction(_ emoji: String, to reactions: inout [MessageReaction], byAdam: Bool) {
         let type = ReactionType.reactionTypeEmoji(ReactionTypeEmoji(emoji: emoji))
-        try react(chatID: chatID, messageID: messageID) { reactions in
-            if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
-                reactions[index] = messageReaction(
-                    type,
-                    count: reactions[index].totalCount + 1,
-                    isChosen: byAdam || reactions[index].isChosen
-                )
-            } else {
-                reactions.append(messageReaction(type, count: 1, isChosen: byAdam))
-            }
+        if let index = reactions.firstIndex(where: { Self.emoji(of: $0.type) == emoji }) {
+            reactions[index] = messageReaction(
+                type,
+                count: reactions[index].totalCount + 1,
+                isChosen: byAdam || reactions[index].isChosen
+            )
+        } else {
+            reactions.append(messageReaction(type, count: 1, isChosen: byAdam))
         }
     }
 
