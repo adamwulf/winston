@@ -37,6 +37,7 @@ package final class FakeKokoro: KokoroEngine {
 
     private struct State {
         var loadBehavior = LoadBehavior.succeeds
+        var loadCalls = 0
         var loadedModels: [KokoroModelVariant] = []
         var loadedVoices: [String] = []
         var unloads = 0
@@ -67,6 +68,10 @@ package final class FakeKokoro: KokoroEngine {
 
     /// How many loads were needed for the requested model and voice.
     package var loads: Int { state.withLock { $0.loadedModels.count } }
+
+    /// How many times the loop called `load`, counting calls that found the model and voice
+    /// already loaded and did nothing.
+    package var loadCalls: Int { state.withLock { $0.loadCalls } }
 
     /// The model each load asked for, oldest first.
     package var loadedModels: [KokoroModelVariant] { state.withLock { $0.loadedModels } }
@@ -160,6 +165,7 @@ package final class FakeKokoro: KokoroEngine {
     package func load(_ variant: KokoroModelVariant, voice: String, downloadProgress: @escaping @Sendable (Double) -> Void) async throws {
         enum Outcome { case done, fails, waits }
         let outcome: Outcome = state.withLock { state in
+            state.loadCalls += 1
             // A model that loads every voice has them all; the others have only the one asked for.
             if state.loadedModel == variant, variant.loadsEveryVoice || state.loadedVoice == voice {
                 return .done

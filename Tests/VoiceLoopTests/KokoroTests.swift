@@ -574,7 +574,8 @@ struct KokoroModelChoiceTests {
         _ = await framesPlayed(saying: "Hi.", by: loop, on: bed)
         #expect(bed.kokoro.requests.map(\.voice) == ["af_bella"])
         try await settle()
-        #expect(bed.kokoro.loads == 1)
+        // Not even a call that would find the voice already loaded.
+        #expect(bed.kokoro.loadCalls == 1)
         #expect(loop.kokoroModelState == .ready)
     }
 
@@ -590,7 +591,8 @@ struct KokoroModelChoiceTests {
 
         #expect(await eventually { loop.kokoroModelState == .ready })
         try await settle()
-        #expect(bed.kokoro.loads == 1)
+        // The load with the first voice counts for the second: no second call at all.
+        #expect(bed.kokoro.loadCalls == 1)
         #expect(loop.kokoroModelState == .ready)
     }
 

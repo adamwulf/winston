@@ -310,6 +310,11 @@ final class KokoroModel {
             dictionaryWords = []
         }
         callEngine { [engine] in
+            // Again here: a load under way when the deletion was asked for has finished since.
+            if self.state == .ready {
+                self.state = .notLoaded
+                self.dictionaryWords = []
+            }
             do {
                 let removed = try await engine.removeStoredModel()
                 Self.log.notice("kokoro models deleted from settings", ["anyStored": removed])
