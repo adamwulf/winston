@@ -151,6 +151,11 @@ public final class AppModel {
     @ObservationIgnored private var reloadChatsForNotification = false
     @ObservationIgnored private var pendingNotification: TelegramNotification?
     @ObservationIgnored private var sessionGeneration = 0
+    /// Whether the app is in the foreground, which TDLib's `online` option follows once logged in.
+    @ObservationIgnored private var isAppActive = false
+    /// The latest request to set TDLib's `online` option. Each waits for the one before, so they
+    /// reach TDLib in the order the app came and went.
+    @ObservationIgnored private var onlineStatusTask: Task<Void, Never>?
 
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
     /// the standard user defaults.
@@ -291,6 +296,8 @@ public final class AppModel {
             "chatsLoaded": chatsLoaded,
             "newestShownIDs": newestShownIDs,
         ])
+        isAppActive = true
+        sendOnlineStatus()
     }
 
     /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
@@ -299,6 +306,26 @@ public final class AppModel {
             "authState": authState.logName,
             "newestShownIDs": newestShownIDs,
         ])
+        isAppActive = false
+        sendOnlineStatus()
+    }
+
+    /// Tells TDLib whether the app is in the foreground (see `TelegramLink.setOnline(_:)`), so
+    /// that coming back reconnects at once and TDLib fetches what arrived meanwhile. Only once
+    /// logged in: TDLib's account status needs an account.
+    private func sendOnlineStatus() {
+        guard let link, authState == .ready else { return }
+        let isOnline = isAppActive
+        let previous = onlineStatusTask
+        onlineStatusTask = Task {
+            await previous?.value
+            do {
+                try await link.setOnline(isOnline)
+                Self.log.notice("telegram online status set", ["online": isOnline])
+            } catch {
+                Self.log.error("setting telegram online status failed", error.logContext(["online": String(isOnline)]))
+            }
+        }
     }
 
     #if os(iOS)
@@ -453,6 +480,7 @@ public final class AppModel {
         pushRegistration.setAuthorized(state == .ready)
         switch state {
         case .ready:
+            sendOnlineStatus()
             Task { await loadChats() }
         case .loggingOut, .closed:
             clearSession()

@@ -77,9 +77,36 @@ screen after the picker or preview closes, with a working Dismiss button.
 Regular APNs alerts are displayed by iOS. There is no notification service extension,
 silent-push processing, or new background mode in this implementation.
 
+### Catching up after the background
+
+iOS suspends Winston soon after it leaves the foreground, so a bot's message that
+comes while the phone is locked reaches Winston only as an alert. The alert doesn't
+use the message up: Telegram keeps every update in the account's update sequence,
+and TDLib fetches what it missed (`updates.getDifference`) at startup, when the
+server reports a new session, and when it sees a gap.[^4] What can hold it up is the
+connection. Unless TDLib's `online` option is set, TDLib waits up to 135 seconds
+without hearing from the server before it gives up on a connection,[^5] and after a
+suspension the connection is often dead. Winston never set it, so after Adam opened
+the app, TDLib could sit on a dead connection for two minutes before catching up.
+
+`AppModel` now sets `online` each time the app becomes active (and on login while
+it is), and clears it when the app leaves the foreground: to the background on iOS,
+to another app on macOS. Going online makes TDLib ping at once and reconnect if no
+answer comes within about two seconds, so it catches up right away. Telegram shows
+Adam as online meanwhile, as its own apps do. Each message TDLib catches up arrives
+as a new message, and `AppModel` shows a message ID once however often it arrives.
+
+To follow an alert's message through the logs (IDs and counts only), grep a log file for
+`alert`, `app became active`, `telegram online status set`, `connection state changed`
+(`updating` is TDLib fetching what it missed), `new message from TDLib`, and
+`message delivered`. An alert's `messageID` is TDLib's ID for the message, the same
+one the other lines show.
+
 [^1]: [Telegram push setup](https://core.telegram.org/api/push-updates) and [TDLib device-token requirements](https://core.telegram.org/tdlib/docs/classtd_1_1td__api_1_1_device_token.html).
 [^2]: [TDLib maintainer guidance and ordinary APNs payload examples](https://github.com/tdlib/td/issues/2613).
 [^3]: [TDLib maintainer's APNs certificate format requirements](https://github.com/tdlib/td/issues/421).
+[^4]: [Telegram's update handling](https://core.telegram.org/api/updates) lists when a client must fetch the difference. In TDLib 1.8.69, `Td::init` and `UpdatesManager::init_state` fetch it at startup, and `Session::on_new_session_created` feeds TDLib a fake `updatesTooLong` to fetch it after a new session.
+[^5]: TDLib 1.8.69, `td/mtproto/SessionConnection.h`: `read_disconnect_delay()` and `ping_disconnect_delay()` are 135 seconds offline. `OptionManager::set_option` passes `online` to `StateManager::on_online`, and `SessionConnection::set_online` then pings at once with a deadline of `rtt()`, at least 2 seconds.
 
 ## Build and test
 

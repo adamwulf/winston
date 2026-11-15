@@ -20,6 +20,8 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case logOut
         case registerDevice(token: String, isSandbox: Bool, otherUserIDs: [Int64]?)
         case getMe
+        /// `setOption` with a boolean value; `value` is nil for any other kind of value.
+        case setOption(name: String?, value: Bool?)
         case loadChats(limit: Int?)
         case getChats(limit: Int?)
         case getChat(Int64?)
@@ -40,7 +42,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         case execute, setTdlibParameters, setAuthenticationPhoneNumber, checkAuthenticationCode
         case checkAuthenticationPassword, logOut, loadChats, getChats, getChat, getUser, getChatHistory
         case getMessage, sendMessage, addMessageReaction, removeMessageReaction, viewMessages, downloadFile
-        case registerDevice, getMe
+        case registerDevice, getMe, setOption
         /// Not a request: the answer to `getChatHistory`, after TDLib has read the history. Only
         /// for `hold(_:)`, to make the answer arrive after something that happened meanwhile.
         case chatHistoryReply
@@ -463,6 +465,15 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
     package func getMe() async throws -> User {
         try await begin(.getMe, .getMe)
         return user(id: currentUserID, type: .userTypeRegular, username: "test_user")
+    }
+
+    package func setOption(name: String?, value: OptionValue?) async throws -> Ok {
+        var boolean: Bool?
+        if case .optionValueBoolean(let option) = value {
+            boolean = option.value
+        }
+        try await begin(.setOption(name: name, value: boolean), .setOption)
+        return Ok()
     }
 
     package func loadChats(chatList: ChatList?, limit: Int?) async throws -> Ok {
