@@ -15,11 +15,6 @@ import LogSupport
 /// concurrency thread.
 package actor LiveKokoro: KokoroEngine {
     private static let log = Logger(label: "voice.kokoro.live")
-    /// What every model may run on. Not `.all`, the default: on macOS 27 compiling these models
-    /// for the GPU aborts the process in MPSGraph ("invalid axis (122) for input of rank 2"), which
-    /// can't be caught. The Neural Engine and CPU work. Core ML picks which of them each operation
-    /// runs on; `logPlacement` logs what it picked.
-    private static let computeUnits = MLComputeUnits.cpuAndNeuralEngine
 
     /// Holds the models' folders and, for each model, the marker saying its download finished.
     private let directory: URL
@@ -100,7 +95,7 @@ package actor LiveKokoro: KokoroEngine {
             voiceFilter: variant.voiceFilter,
             cacheDir: folder,
             offlineMode: offline,
-            computeUnits: computeUnits
+            computeUnits: variant.computeUnits
         ) { fraction, _ in
             // KokoroTTS reports the download as 0...0.7 of its progress, then loading.
             downloadProgress?(min(fraction / 0.7, 1))
@@ -123,7 +118,7 @@ package actor LiveKokoro: KokoroEngine {
     private static func logPlacement(of model: URL, variant: KokoroModelVariant) async {
         let started = ContinuousClock.now
         let configuration = MLModelConfiguration()
-        configuration.computeUnits = computeUnits
+        configuration.computeUnits = variant.computeUnits
         let plan: MLComputePlan
         do {
             plan = try await MLComputePlan.load(contentsOf: model, configuration: configuration)
@@ -243,22 +238,25 @@ package enum KokoroEngineError: Error {
     case notLoaded
 }
 
-/// Where each model comes from and is stored.
+/// Where each model comes from, where it is stored, and what it runs on.
 extension KokoroModelVariant {
-    /// Its folder in `LiveKokoro`'s directory. FluidAudio's folder keeps the name it had when it
+    /// Its folder in `LiveKokoro`'s directory. The models from one repository share a folder, so
+    /// its voices and dictionaries download once. FluidAudio's folder keeps the name it had when it
     /// held only the 15 s model, so a download stored then is still found.
     fileprivate var folderName: String {
         switch self {
         case .original: "Kokoro-82M-CoreML"
+        case .masked5s, .masked10s, .masked15s: "Kokoro-82M-Masked"
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: "Kokoro-82M-15s"
         }
     }
 
     /// Its marker in `LiveKokoro`'s directory, without `.downloaded`. Each model has one, since
-    /// FluidAudio's share a folder.
+    /// models share folders.
     fileprivate var markerName: String {
         switch self {
         case .original: "Kokoro-82M-CoreML"
+        case .masked5s, .masked10s, .masked15s: "Kokoro-82M-Masked.\(modelFile)"
         case .fluidAudio5s: "Kokoro-82M-15s.kokoro_21_5s"
         case .fluidAudio10s: "Kokoro-82M-15s.kokoro_21_10s"
         case .fluidAudio15s: "Kokoro-82M-15s"
@@ -269,6 +267,7 @@ extension KokoroModelVariant {
     fileprivate var modelId: String {
         switch self {
         case .original: KokoroTTSModel.defaultModelId
+        case .masked5s, .masked10s, .masked15s: "milestonemade/Kokoro-82M-CoreML-Masked"
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: "FluidInference/kokoro-82m-coreml"
         }
     }
@@ -277,6 +276,9 @@ extension KokoroModelVariant {
     fileprivate var modelFile: String {
         switch self {
         case .original: KokoroTTSModel.defaultModelFile
+        case .masked5s: "kokoro_masked_5s_fp16"
+        case .masked10s: "kokoro_masked_10s_fp16"
+        case .masked15s: "kokoro_masked_15s_fp16"
         case .fluidAudio5s: "kokoro_21_5s"
         case .fluidAudio10s: "kokoro_21_10s"
         case .fluidAudio15s: "kokoro_21_15s"
@@ -284,12 +286,24 @@ extension KokoroModelVariant {
     }
 
     /// The voices it downloads and loads. The original repository's voices are small, so it
-    /// takes them all, as it always has; FluidAudio's are 2.7 MB each, so it takes only the
-    /// American and British English voices `KokoroCatalog` offers.
+    /// takes them all, as it always has; the others take only the American and British English
+    /// voices `KokoroCatalog` offers (FluidAudio's are 2.7 MB each).
     fileprivate var voiceFilter: [String]? {
         switch self {
         case .original: nil
-        case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: ["a*", "b*"]
+        case .masked5s, .masked10s, .masked15s, .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: ["a*", "b*"]
         }
+    }
+
+    /// What it may run on: the CPU and the Neural Engine, for every model. Never `.all`, the
+    /// default: on macOS 27 compiling these models for the GPU aborts the process in MPSGraph
+    /// ("invalid axis (122) for input of rank 2"), which can't be caught. Core ML picks each
+    /// operation's device; `logPlacement` logs it (the original runs entirely on the CPU).
+    ///
+    /// An experiment for the masked fp16 models: on a Mac, allowing the Neural Engine made their
+    /// first load compile for it for over 70 minutes, and each pass then about 5 times slower than
+    /// with `.cpuOnly`. `KokoroLoadTimingTests` measures it here; the iPhone may differ.
+    fileprivate var computeUnits: MLComputeUnits {
+        .cpuAndNeuralEngine
     }
 }

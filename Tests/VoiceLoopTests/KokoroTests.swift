@@ -1049,15 +1049,24 @@ struct KokoroLanguageTests {
     @Test func removingTheStoredModelsDeletesEachFolderAndMarkerAndNothingElse() async throws {
         let directory = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        // As finished downloads of every model leave them: the original model's folder, and
-        // FluidAudio's folder shared by its three models, each with its marker. Plus a file of
-        // someone else's.
-        for name in ["Kokoro-82M-CoreML", "Kokoro-82M-15s"] {
+        // As finished downloads of every model leave them: the original model's folder, the
+        // masked models' folder and FluidAudio's folder, each shared by three models, and each
+        // model's marker. Plus a file of someone else's.
+        for name in ["Kokoro-82M-CoreML", "Kokoro-82M-Masked", "Kokoro-82M-15s"] {
             let folder = directory.appending(path: name, directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: folder.appending(path: "voices"), withIntermediateDirectories: true)
             try Data([1, 2, 3]).write(to: folder.appending(path: "voices/af_heart.json"))
         }
-        for marker in ["Kokoro-82M-CoreML", "Kokoro-82M-15s", "Kokoro-82M-15s.kokoro_21_10s", "Kokoro-82M-15s.kokoro_21_5s"] {
+        let markers = [
+            "Kokoro-82M-CoreML",
+            "Kokoro-82M-Masked.kokoro_masked_5s_fp16",
+            "Kokoro-82M-Masked.kokoro_masked_10s_fp16",
+            "Kokoro-82M-Masked.kokoro_masked_15s_fp16",
+            "Kokoro-82M-15s",
+            "Kokoro-82M-15s.kokoro_21_10s",
+            "Kokoro-82M-15s.kokoro_21_5s",
+        ]
+        for marker in markers {
             try Data().write(to: directory.appending(path: "\(marker).downloaded"))
         }
         try Data().write(to: directory.appending(path: "other"))
@@ -1240,6 +1249,63 @@ struct KokoroRealModelTests {
             loop.speak("Hello from \(variant.name).")
             #expect(await eventually(timeout: .seconds(60)) { loop.state == .listening(partial: "") })
             #expect(kokoro.audibleSamples - before > 24_000)
+        }
+    }
+}
+
+// MARK: - Load and render times
+
+/// The models `KokoroLoadTimingTests` times: `WINSTON_KOKORO_TIMING`, raw values separated by
+/// commas, such as `masked5s,masked15s`.
+private let timedModels: [KokoroModelVariant] = (ProcessInfo.processInfo.environment["WINSTON_KOKORO_TIMING"] ?? "")
+    .split(separator: ",")
+    .compactMap { KokoroModelVariant(rawValue: String($0)) }
+
+/// How long the real models take to load and to render, for the models `WINSTON_KOKORO_TIMING`
+/// names, in `realModelDirectory` (each downloads first if it isn't stored). A first load can
+/// compile the model for the Neural Engine, which for the masked models has taken over an hour on
+/// a Mac, hence the long limit. Prints one `KOKORO TIMING` line per model. Run one at a time, on
+/// its own: it is slow and uses a lot of memory.
+@Suite(
+    .serialized,
+    .enabled(if: !timedModels.isEmpty, "WINSTON_KOKORO_TIMING names no models"),
+    .timeLimit(.minutes(180))
+)
+struct KokoroLoadTimingTests {
+    @Test func eachModelsFirstLoadSecondLoadAndRenderTimes() async throws {
+        let sentence = "I checked the build server this morning, and both jobs finished without errors."
+        let clock = ContinuousClock()
+        func milliseconds(since start: ContinuousClock.Instant) -> Int {
+            Int(start.duration(to: clock.now) / .milliseconds(1))
+        }
+
+        for variant in timedModels {
+            let engine = LiveKokoro(directory: realModelDirectory)
+
+            var start = clock.now
+            try await engine.load(variant) { _ in }
+            let firstLoad = milliseconds(since: start)
+            start = clock.now
+            let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let firstRender = milliseconds(since: start)
+
+            // Loaded again, as at the next launch: anything compiled the first time is cached.
+            await engine.unload()
+            start = clock.now
+            try await engine.load(variant) { _ in }
+            let secondLoad = milliseconds(since: start)
+            start = clock.now
+            let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let render = milliseconds(since: start)
+            let fast = try await engine.synthesize(sentence, voice: "af_heart", speed: 2)
+
+            print(
+                "KOKORO TIMING model=\(variant.rawValue) firstLoadMs=\(firstLoad) firstRenderMs=\(firstRender)",
+                "secondLoadMs=\(secondLoad) renderMs=\(render) samples=\(audio.count) fastSamples=\(fast.count)"
+            )
+            #expect(firstAudio.count > 24_000)
+            #expect(audio.count > 24_000)
+            await engine.unload()
         }
     }
 }

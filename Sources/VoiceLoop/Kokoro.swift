@@ -11,17 +11,26 @@ import Observation
 // for a day, the stored models are deleted. The real engine is speech-swift's KokoroTTS; see
 // `LiveKokoro.swift`.
 
-/// Which Kokoro model speaks the Kokoro voices: one of four end-to-end graphs, each rendering up to
-/// a fixed length of speech per pass. A longer sentence is cut into pieces, and the tone of voice
-/// resets at each cut; a pass costs the same however short the sentence. Each model downloads the
-/// first time it is used, and stays stored until the stored models are deleted, a day after the
-/// last Kokoro voice was unchosen.
+/// Which Kokoro model speaks the Kokoro voices: one of seven end-to-end graphs, each rendering up
+/// to a fixed length of speech per pass. A longer sentence is cut into pieces, and the tone of
+/// voice resets at each cut; a pass costs the same however short the sentence, and nothing plays
+/// until it finishes. Each model downloads the first time it is used, and stays stored until the
+/// stored models are deleted, a day after the last Kokoro voice was unchosen.
 public enum KokoroModelVariant: String, CaseIterable, Sendable {
-    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass. The only one that speaks at
-    /// the speech rate (FluidAudio's graphs have no speed input, so they speak at normal speed),
-    /// and the only one whose voices are averaged rather than matched to each sentence's length.
+    /// speech-swift's 5 s graph: about 56 phoneme tokens per pass.
     case original = "5s"
-    /// FluidAudio's 5 s graph (7.3 s in fact): about 90 tokens per pass.
+    /// Our own export at 5 s (`milestonemade/Kokoro-82M-CoreML-Masked`): about 56 tokens per pass,
+    /// about 0.2 s a pass on a Mac's CPU. The masked exports run their LSTMs over the text only,
+    /// not the padding, as the original does, and in fp16; in blind tests they sound at least as
+    /// good as the original.
+    case masked5s = "masked5s"
+    /// Our own export at 10 s: about 125 tokens per pass, about 0.6 s a pass on a Mac.
+    case masked10s = "masked10s"
+    /// Our own export at 15 s: about 194 tokens per pass, a whole long sentence without cuts, about
+    /// 1 s a pass on a Mac.
+    case masked15s = "masked15s"
+    /// FluidAudio's 5 s graph (7.3 s in fact): about 90 tokens per pass. FluidAudio's graphs run
+    /// their LSTMs over the padding too, which makes them warble.
     case fluidAudio5s = "fluid5s"
     /// FluidAudio's 10 s graph: about 130 tokens per pass.
     case fluidAudio10s = "fluid10s"
@@ -33,17 +42,22 @@ public enum KokoroModelVariant: String, CaseIterable, Sendable {
     public var name: String {
         switch self {
         case .original: "Original 5 s"
+        case .masked5s: "Masked 5 s"
+        case .masked10s: "Masked 10 s"
+        case .masked15s: "Masked 15 s"
         case .fluidAudio5s: "FluidAudio 5 s"
         case .fluidAudio10s: "FluidAudio 10 s"
         case .fluidAudio15s: "FluidAudio 15 s"
         }
     }
 
-    /// About how much it downloads when nothing is stored yet, in megabytes. FluidAudio's models
-    /// share their voices, so a second one adds about 325 MB.
+    /// About how much it downloads when nothing is stored yet, in megabytes. The masked models
+    /// share their voices and dictionaries, so a second one adds about 235 MB; FluidAudio's do
+    /// too, and a second one adds about 325 MB.
     public var downloadMegabytes: Int {
         switch self {
         case .original: 335
+        case .masked5s, .masked10s, .masked15s: 245
         case .fluidAudio5s, .fluidAudio10s, .fluidAudio15s: 410
         }
     }
