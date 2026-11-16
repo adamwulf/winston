@@ -10,8 +10,10 @@ CURRENT_PROJECT_VERSION = 1
 // installed with a development profile, or a Debug build exported for distribution.
 PUSH_ENVIRONMENT = production
 PUSH_ENVIRONMENT[config=Debug] = development
-CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Config/iOS.entitlements
-CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = Config/iOS.entitlements
+
+// Push is off: the App ID doesn't have Push Notifications yet, so no profile carries
+// aps-environment and App Store export fails. Config/iOS.entitlements holds that entitlement
+// but isn't signed in. To turn push on, follow plans/enable-push.md.
 
 // Telegram API credentials from https://my.telegram.org (API development tools).
 // Real values go in Secrets.xcconfig, which is gitignored. Copy Secrets.example.xcconfig to start.
