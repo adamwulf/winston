@@ -16,6 +16,10 @@ mode and a hands-free voice mode. See [PLAN.md](PLAN.md) for the design.
   without project file edits. It holds only SwiftUI views and AppKit/UIKit
   glue, and has no tests. Anything with logic worth testing goes in a package
   target.
+- `App/Winston.xcworkspace`: the app project plus the package, so the
+  `Winston` scheme can run the package's tests. Open this one to test in
+  Xcode. Opened alone, the project sees the package's libraries but not its
+  tests. See [Xcode Cloud](#xcode-cloud).
 
 ## Setup
 
@@ -180,6 +184,8 @@ Scripts/coverage.sh
 ```
 
 runs the tests on macOS and prints line coverage for every file in `Sources/`.
+[docs/coverage](docs/coverage/README.md) has the dated reports, how to make
+one, and the goals for coverage and tests.
 
 Four places stay uncovered on purpose, because they only call into the
 system:
@@ -213,6 +219,31 @@ xcrun xccov view --report --files-for-target VoiceLoop DerivedData/ios-tests.xcr
 
 `Tests/VoiceLoopInterruptionTests` only has tests on iOS. The tests that need a
 child process (logging bootstrap, the real `Library` folder) only run on macOS.
+
+### Xcode Cloud
+
+The `Winston` scheme tests with `App/Winston.xctestplan`: every test target,
+with code coverage on. Xcode Cloud reaches it through the workspace, so the
+workflow uses `App/Winston.xcworkspace`, with a Test action for an iOS
+simulator and one for macOS, since some tests only run on one of them. Its
+environment needs `TG_API_ID` and `TG_API_HASH` (mark the hash Secret), as
+every workflow does: `ci_post_clone.sh` fails without them. The same run,
+locally:
+
+```sh
+xcodebuild test -workspace App/Winston.xcworkspace -scheme Winston \
+  -destination "platform=macOS,arch=arm64" -derivedDataPath DerivedData \
+  -resultBundlePath DerivedData/macos-tests.xcresult
+```
+
+A test action runs `build-for-testing`, then `test-without-building` in a fresh
+environment that has `App/ci_scripts` but not the source code. In that second
+phase `ci_post_xcodebuild.sh` prints line coverage by target and file to the
+build log. Each test bundle links the package code it tests, so a library's
+files are listed under the bundles that test it (`Sources/VoiceLoop/` under
+`VoiceLoopTests`), and a bundle's total counts its test files too. The test
+action's result bundle, in the build's artifacts, opens in Xcode with the full
+report.
 
 ## Kokoro voices
 

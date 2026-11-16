@@ -1,5 +1,7 @@
 #!/bin/sh
 
+# After a test run: print line coverage by target and file to the build log.
+#
 # After a successful App Store-signed archive (a build headed to TestFlight):
 # 1. write TestFlight "What to Test" notes from the commits since the previous build;
 # 2. tag the commit build/<CI_BUILD_NUMBER> on GitHub.
@@ -27,6 +29,22 @@ if [ "$CI_XCODEBUILD_EXIT_CODE" -ne 0 ]; then
     exit 0
 fi
 echo "Build succeeded"
+
+# The second phase of a test action. App/Winston.xctestplan turns coverage on, so the result
+# bundle has it; if it doesn't, fail so the missing report gets noticed. Each test bundle
+# links the package code it tests, so read the Sources/ rows under each bundle, not the
+# bundle's total, which counts the test files too.
+if [ "$CI_XCODEBUILD_ACTION" = "test-without-building" ]; then
+    report=$(mktemp)
+    if ! xcrun xccov view --report "$CI_RESULT_BUNDLE_PATH" > "$report"; then
+        echo "error: no coverage report in $CI_RESULT_BUNDLE_PATH; is coverage on in App/Winston.xctestplan?"
+        exit 1
+    fi
+    echo "Line coverage by target and file:"
+    # Targets aren't indented, files are indented 4 spaces, functions 8. Leave out the functions.
+    grep -v '^        ' "$report"
+    exit 0
+fi
 
 # Only App Store-signed archives (TestFlight builds) get notes and a tag; a plain
 # build or test action is skipped, so build/N always means "uploaded to TestFlight".
