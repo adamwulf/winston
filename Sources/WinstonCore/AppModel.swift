@@ -41,7 +41,9 @@ public final class AppModel {
     /// Why TDLib failed to start, if it did.
     public private(set) var startError: String?
 
-    public private(set) var chats: [BotChat] = []
+    public private(set) var chats: [BotChat] = [] {
+        didSet { updateAgentWorking() }
+    }
     public private(set) var chatsLoaded = false
     public private(set) var chatsError: String?
     /// Each notification tap dismisses the iOS settings sheet, even for the same chat.
@@ -50,10 +52,15 @@ public final class AppModel {
     public var notificationErrorMessage: String?
     /// The bot chat shown in the chat screen. Persisted; reset to the first chat if it's no longer a bot chat.
     public var selectedChatID: ChatID? {
-        didSet { defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID) }
+        didSet {
+            defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID)
+            updateAgentWorking()
+        }
     }
     public private(set) var messages: [ChatID: [ChatMessage]] = [:]
-    public private(set) var typingChats: Set<ChatID> = []
+    public private(set) var typingChats: Set<ChatID> = [] {
+        didSet { updateAgentWorking() }
+    }
     /// The latest 👍 Adam added from this app, set once TDLib's update shows it on its message in the
     /// current chat. The message list scrolls it into view, so it doesn't land behind the bottom bar.
     public private(set) var addedThumbsUp: AddedThumbsUp?
@@ -598,6 +605,14 @@ public final class AppModel {
 
     public var isBotTyping: Bool {
         currentChat.map { typingChats.contains($0.id) } ?? false
+    }
+
+    /// Tells the voice loop whether the bot in the current chat is typing a reply, for its working
+    /// sound. Called whenever `typingChats`, `selectedChatID` or `chats` change. The loop plays
+    /// nothing while voice mode is off, so this needs no check for it. Typing ends with the bot's
+    /// message, typing's own end or its timeout; the loop stops the sound while a reply is said.
+    private func updateAgentWorking() {
+        voiceLoop.isAgentWorking = isBotTyping
     }
 
     /// The bot's latest message in the current chat.

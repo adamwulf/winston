@@ -791,13 +791,99 @@ struct ReactionChimeTests {
         let played = harness.bed.audio.playedFrames
 
         try harness.fake.botReacts("👍", to: 5, in: 1)
-        // Events arrive in order, so once this one shows, the reaction was handled.
-        harness.fake.setTyping(true, in: 1)
+        // Events arrive in order, so once this one shows, the reaction was handled. In the other
+        // chat, so the bot typing plays no working sound.
+        harness.fake.setTyping(true, in: 2)
 
-        #expect(await eventually { model.isBotTyping })
+        #expect(await eventually { model.typingChats.contains(ChatID(2)) })
         try await settle()
         #expect(harness.bed.audio.playedFrames == played)
         #expect(!model.currentMessages.contains { $0.id == MessageID(5) })
+    }
+}
+
+/// The working sound: a soft ticking the voice loop plays while the bot in the current chat is
+/// typing a reply.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct BotTypingSoundTests {
+    @Test func theBotTypingInTheCurrentChatIsWorkingUntilItsMessageArrives() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        #expect(!model.voiceLoop.isAgentWorking)
+
+        harness.fake.setTyping(true, in: 1)
+        #expect(await eventually { model.voiceLoop.isAgentWorking })
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+
+        #expect(await eventually { model.currentMessages.last?.text == "Done." })
+        #expect(!model.voiceLoop.isAgentWorking)
+    }
+
+    @Test func theBotStoppingTypingIsDoneWorking() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        harness.fake.setTyping(true, in: 1)
+        #expect(await eventually { model.voiceLoop.isAgentWorking })
+
+        harness.fake.setTyping(false, in: 1)
+
+        #expect(await eventually { !model.voiceLoop.isAgentWorking })
+    }
+
+    @Test func theBotTypingInAnotherChatIsWorkingOnlyOnceThatChatIsChosen() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+
+        harness.fake.setTyping(true, in: 2)
+        #expect(await eventually { model.typingChats == [ChatID(2)] })
+        #expect(!model.voiceLoop.isAgentWorking)
+
+        model.selectedChatID = ChatID(2)
+        #expect(model.voiceLoop.isAgentWorking)
+
+        model.selectedChatID = ChatID(1)
+        #expect(!model.voiceLoop.isAgentWorking)
+    }
+
+    @Test func inVoiceModeTheBotTypingTicksUntilItsReplyIsSpoken() async throws {
+        let harness = Harness.withTwoBots(soundCues: true)
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setVoiceMode(true)
+        #expect(await eventually { harness.bed.audio.playedFrames > 0 })
+        try await settle()
+        let played = harness.bed.audio.playedFrames
+
+        harness.fake.setTyping(true, in: 1)
+
+        #expect(await eventually { model.voiceLoop.isPlayingWorkingSound })
+        #expect(await eventually { harness.bed.audio.playedFrames > played })
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+
+        #expect(await eventually { model.voiceLoop.state == .speaking })
+        #expect(!model.voiceLoop.isPlayingWorkingSound)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(!model.voiceLoop.isPlayingWorkingSound)
+    }
+
+    @Test func inTextModeTheBotTypingPlaysNothing() async throws {
+        let harness = Harness.withTwoBots(soundCues: true)
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+
+        harness.fake.setTyping(true, in: 1)
+
+        #expect(await eventually { model.voiceLoop.isAgentWorking })
+        try await settle()
+        #expect(!model.voiceLoop.isPlayingWorkingSound)
+        #expect(harness.bed.audio.playedFrames == 0)
+        #expect(harness.bed.audio.engines.isEmpty)
     }
 }
 
