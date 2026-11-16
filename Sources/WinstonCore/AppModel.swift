@@ -510,6 +510,7 @@ public final class AppModel {
         notificationErrorMessage = nil
         if isVoiceMode {
             voiceLoop.stop()
+            voiceLoop.isPushToTalk = false
             isVoiceMode = false
         }
         chats = []
@@ -956,13 +957,30 @@ public final class AppModel {
                 if !isVoiceMode { voiceLoop.stop() }
             } catch {
                 Self.log.error("starting voice mode failed", error.logContext())
+                voiceLoop.isPushToTalk = false
                 isVoiceMode = false
                 errorMessage = userMessage(for: error)
             }
         } else {
             voiceModeOffCount += 1
             voiceLoop.stop()
+            voiceLoop.isPushToTalk = false
             isVoiceMode = false
+        }
+    }
+
+    /// Enters or leaves push-to-talk, for the push-to-talk sheet, which opens from text mode.
+    /// Entering starts voice mode, as `setVoiceMode(true)` does, with the loop in push-to-talk:
+    /// it hears only what is said while `voiceLoop.beginTalking()` to `voiceLoop.endTalking()`
+    /// hold the button, and sends it after the release. Replies are spoken as in voice mode.
+    /// Leaving stops voice mode and returns to text mode. Push-to-talk ends whenever voice mode
+    /// does, so a failed start leaves it off.
+    public func setPushToTalk(_ on: Bool) async {
+        if on {
+            voiceLoop.isPushToTalk = true
+            await setVoiceMode(true)
+        } else {
+            await setVoiceMode(false)
         }
     }
 

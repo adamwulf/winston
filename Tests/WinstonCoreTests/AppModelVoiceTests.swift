@@ -243,6 +243,97 @@ struct VoiceModeTests {
     }
 }
 
+/// Push-to-talk, from the sheet a long press on the mic button opens: voice mode that hears only
+/// while the button is held.
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct PushToTalkModeTests {
+    @Test func whatIsSaidWhileHeldIsSentAfterTheReleaseAndLeavingReturnsToTextMode() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.pauseThreshold = 0.05
+        let requestsBefore = harness.fake.requests.count
+
+        await model.setPushToTalk(true)
+
+        #expect(model.isVoiceMode)
+        #expect(model.voiceLoop.isPushToTalk)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        // Heard without a hold: not sent.
+        #expect(await eventually { harness.bed.recognizer.heardFrames > 16_000 })
+        harness.bed.recognizer.hear("Not this.", over: 0...0.5, isFinal: true)
+        try await settle()
+        #expect(harness.fake.requests.count == requestsBefore)
+        harness.bed.audio.isVoicePresent = true
+        model.voiceLoop.beginTalking()
+        #expect(await eventually { harness.bed.recognizer.soundHeard != nil })
+        let held = try #require(harness.bed.recognizer.soundHeard)
+        harness.bed.recognizer.hear("Mark that read.", over: held, isFinal: true)
+        try await settle()
+        #expect(harness.fake.requests.count == requestsBefore)
+        model.voiceLoop.endTalking()
+
+        #expect(await eventually {
+            harness.fake.requests.last == .sendText(chatID: 1, text: "🎙️ Mark that read.")
+        })
+        #expect(harness.fake.requests.count == requestsBefore + 1)
+
+        await model.setPushToTalk(false)
+
+        #expect(!model.isVoiceMode)
+        #expect(!model.voiceLoop.isPushToTalk)
+        #expect(model.voiceLoop.state == .off)
+        #expect(await eventually { harness.bed.recognizer.isCancelled })
+    }
+
+    @Test func inPushToTalkTheBotsReplyIsSpoken() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        await model.setPushToTalk(true)
+
+        harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
+
+        #expect(await eventually { model.voiceLoop.state == .speaking })
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        #expect(harness.bed.audio.playedFrames > 0)
+    }
+
+    @Test func aFailedStartLeavesPushToTalkOffAndSaysWhy() async throws {
+        let harness = Harness()
+        harness.bed.permissionError = .microphonePermissionDenied
+        let model = harness.model
+
+        await model.setPushToTalk(true)
+
+        #expect(!model.isVoiceMode)
+        #expect(!model.voiceLoop.isPushToTalk)
+        #expect(model.errorMessage == userMessage(for: VoiceLoopError.microphonePermissionDenied))
+        #expect(model.voiceLoop.state == .off)
+
+        // Voice mode turned on later is hands-free.
+        harness.bed.permissionError = nil
+        await model.setVoiceMode(true)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+        #expect(!model.voiceLoop.isPushToTalk)
+    }
+
+    @Test func leavingWhileItStartsLeavesVoiceModeOff() async throws {
+        let harness = Harness()
+        let model = harness.model
+        harness.bed.whenRequestingPermissions = { await model.setPushToTalk(false) }
+
+        await model.setPushToTalk(true)
+
+        #expect(!model.isVoiceMode)
+        #expect(!model.voiceLoop.isPushToTalk)
+        #expect(model.voiceLoop.state == .off)
+        try await settle()
+        #expect(model.voiceLoop.state == .off)
+    }
+}
+
 /// A pronunciation's play buttons in settings, one for its word and one for its replacement: what
 /// each says, said in the chosen voice and model.
 @MainActor
