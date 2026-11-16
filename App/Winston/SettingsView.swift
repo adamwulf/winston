@@ -4,7 +4,7 @@ import WinstonCore
 import WinstonLogging
 
 /// The pause threshold, the voice with its speed and pitch, the Kokoro voices' model and its status, pronunciations, whether other audio pauses, debug logs, Log out, and deleting the downloaded voice models. AppModel persists the settings and applies them to the
-/// voice loop. A sheet on iOS; the standard Settings window, in tabs, on macOS.
+/// voice loop. A sheet on iOS, where the pronunciations are a screen of their own; the standard Settings window, in tabs, on macOS.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -34,7 +34,7 @@ struct SettingsView: View {
             Form {
                 voiceModeSection
                 kokoroSection
-                pronunciationsSection
+                pronunciationsLink
                 otherAudioSection
                 debugLogsSection
                 NotificationSettings()
@@ -74,12 +74,14 @@ struct SettingsView: View {
                 }
             }
             Tab("Pronunciations", systemImage: "character.bubble") {
-                // A fixed height, so a long list scrolls rather than growing the window.
+                // As tall as its list up to a limit, so a long list scrolls rather than growing the window.
                 Form {
-                    pronunciationsSection
+                    PronunciationsSection()
                 }
                 .formStyle(.grouped)
-                .frame(width: Self.paneWidth, height: 400)
+                .frame(width: Self.paneWidth)
+                .frame(maxHeight: 400)
+                .fixedSize(horizontal: false, vertical: true)
             }
             Tab("Advanced", systemImage: "gearshape.2") {
                 pane {
@@ -201,32 +203,20 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder
-    private var pronunciationsSection: some View {
-        @Bindable var model = model
+    #if os(iOS)
+    /// A row that pushes the pronunciations, so a long list doesn't make Settings long.
+    private var pronunciationsLink: some View {
         Section {
-            ForEach($model.pronunciations) { $pronunciation in
-                PronunciationRow(pronunciation: $pronunciation) { text in
-                    model.previewPronunciation(text)
-                } remove: {
-                    // Read through the binding first: reading it while removeAll changes
-                    // the array it reads from is an exclusive access conflict.
-                    let id = pronunciation.id
-                    model.pronunciations.removeAll { $0.id == id }
+            NavigationLink("Pronunciations") {
+                Form {
+                    PronunciationsSection()
                 }
+                .formStyle(.grouped)
+                .navigationTitle("Pronunciations")
             }
-            .onDelete { offsets in
-                model.pronunciations.remove(atOffsets: offsets)
-            }
-            Button("Add Pronunciation") {
-                model.pronunciations.append(Pronunciation())
-            }
-        } header: {
-            Text("Pronunciations")
-        } footer: {
-            Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
         }
     }
+    #endif
 
     @ViewBuilder
     private var otherAudioSection: some View {
@@ -417,6 +407,38 @@ struct SettingsView: View {
         case .vocabulary, .g2p, .voices: "Preparing…"
         case .coreML: "Building model…"
         case .warmingUp: "Warming up…"
+        }
+    }
+}
+
+/// The pronunciations, a row each, and a button that adds one: on iOS, the screen Settings
+/// pushes from its Pronunciations row; on the Mac, the Pronunciations tab.
+private struct PronunciationsSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        Section {
+            ForEach($model.pronunciations) { $pronunciation in
+                PronunciationRow(pronunciation: $pronunciation) { text in
+                    model.previewPronunciation(text)
+                } remove: {
+                    // Read through the binding first: reading it while removeAll changes
+                    // the array it reads from is an exclusive access conflict.
+                    let id = pronunciation.id
+                    model.pronunciations.removeAll { $0.id == id }
+                }
+            }
+            .onDelete { offsets in
+                model.pronunciations.remove(atOffsets: offsets)
+            }
+            Button("Add Pronunciation") {
+                model.pronunciations.append(Pronunciation())
+            }
+        } header: {
+            Text("Pronunciations")
+        } footer: {
+            Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
         }
     }
 }
