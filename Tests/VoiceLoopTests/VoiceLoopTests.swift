@@ -217,6 +217,51 @@ import Testing
     }
 }
 
+@Suite struct WorkingSoundSynthesisTests {
+    private let sampleRate = 48_000.0
+
+    @Test func onePassLastsItsDurationAndJoinsTheNextInSilence() {
+        let samples = WorkingSound.samples(sampleRate: sampleRate)
+
+        #expect(samples.count == Int((WorkingSound.duration / .seconds(1) * sampleRate).rounded()))
+        // No click where one pass runs into the next.
+        #expect(samples.first == 0)
+        #expect(samples.last == 0)
+        // The last tick is long over by the end, so the seam doesn't sound like a tick cut short.
+        let lastSound = samples.lastIndex { abs($0) >= 0.001 } ?? samples.count
+        #expect(Double(samples.count - lastSound) / sampleRate > 0.2)
+    }
+
+    @Test func itIsAudibleButWellBelowEveryCue() {
+        let peak = WorkingSound.samples(sampleRate: sampleRate).map(abs).max() ?? 0
+
+        #expect(peak > 0.02)
+        for cue in SoundCue.allCases {
+            let cuePeak = cue.samples(sampleRate: sampleRate).map(abs).max() ?? 0
+            #expect(peak < cuePeak / 2)
+        }
+    }
+
+    @Test func itIsMostlySilence() {
+        let samples = WorkingSound.samples(sampleRate: sampleRate)
+        let sounding = samples.count { abs($0) >= 0.001 }
+
+        #expect(sounding > 0)
+        #expect(sounding * 10 < samples.count)
+    }
+
+    @Test func aBufferHoldsOnePassInTheSpeechFormat() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        let buffer = try #require(WorkingSound.buffer(in: format))
+        let samples = WorkingSound.samples(sampleRate: 48_000)
+
+        #expect(buffer.format == format)
+        #expect(Int(buffer.frameLength) == samples.count)
+        let channel = try #require(buffer.floatChannelData)[0]
+        #expect(Array(UnsafeBufferPointer(start: channel, count: samples.count)) == samples)
+    }
+}
+
 @Suite struct PauseDetectorTests {
     let start = ContinuousClock.Instant.now
 
