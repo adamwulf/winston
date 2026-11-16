@@ -1319,6 +1319,41 @@ private func press(_ loop: VoiceLoop, talkingOn bed: VoiceTestBed) async throws 
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct PushToTalkTests {
+    @Test func aPressBeforeTheLoopIsListeningDoesNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.isPushToTalk = true
+        #expect(!loop.canTalk)
+        loop.beginTalking()
+        #expect(!loop.isTalking)
+        // A view showing whether it can talk is told when that changes.
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = loop.canTalk
+        } onChange: {
+            MainActor.assumeIsolated { changed.isSet = true }
+        }
+        var couldTalkWhileStarting = true
+        var talkedWhileStarting = true
+        bed.whenRecognizerStarts = {
+            loop.beginTalking()
+            couldTalkWhileStarting = loop.canTalk
+            talkedWhileStarting = loop.isTalking
+        }
+
+        try await loop.start()
+        defer { loop.stop() }
+
+        #expect(!couldTalkWhileStarting)
+        #expect(!talkedWhileStarting)
+        #expect(!loop.isTalking)
+        #expect(loop.canTalk)
+        #expect(changed.isSet)
+        // Without push-to-talk there is nothing to hold.
+        loop.isPushToTalk = false
+        #expect(!loop.canTalk)
+    }
+
     @Test func whatIsHeardWithoutAHoldIsNotSent() async throws {
         let bed = VoiceTestBed()
         let loop = try await pushToTalkLoop(on: bed)

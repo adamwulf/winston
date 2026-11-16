@@ -68,19 +68,24 @@ struct PushToTalkSheet: View {
             .accessibilityAddTraits(.isButton)
     }
 
-    /// Off while not starting means the loop gave up, such as after an interruption it can't
-    /// resume from: holding would do nothing.
+    /// Until the loop is listening a press would do nothing. A hold already under way stays
+    /// enabled, so the loop rebuilding its engine doesn't end it.
     private var canTalk: Bool {
-        model.voiceLoop.state != .off || model.isStartingVoice
+        model.voiceLoop.canTalk || model.voiceLoop.isTalking
     }
 
     private var status: String {
-        switch model.voiceLoop.state {
-        case .off: model.isStartingVoice ? "Starting…" : "Not listening"
-        case .listening(let partial) where !partial.isEmpty: partial
-        case .listening: model.voiceLoop.isTalking ? "Listening…" : "Hold to talk"
-        case .speaking: "Speaking…"
+        let loop = model.voiceLoop
+        switch loop.state {
+        case .listening(let partial) where !partial.isEmpty: return partial
+        case .speaking: return "Speaking…"
+        default: break
         }
+        if loop.isTalking { return "Listening…" }
+        if loop.canTalk { return "Hold to talk" }
+        // Off while not starting means the loop gave up, such as after an interruption it
+        // can't resume from.
+        return loop.state == .off && !model.isStartingVoice ? "Not listening" : "Starting…"
     }
 
     private var statusIsPlaceholder: Bool {

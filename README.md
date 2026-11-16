@@ -250,7 +250,9 @@ report.
 
 In text mode, a long press on the mic button (or its Push to Talk
 accessibility action) opens a sheet with one big button. What is said while
-it is held is sent as one 🎙️ message after it is let go. Close, or swiping
+it is held is sent as one 🎙️ message after it is let go. Until voice mode is
+listening (`VoiceLoop.canTalk`), the button is disabled and says Starting….
+Close, or swiping
 the sheet away, returns to text mode. Replies are spoken while the sheet is
 open, as in voice mode, but not during a hold or before its message is sent,
 and a press stops the one being spoken.

@@ -132,6 +132,13 @@ public final class VoiceLoop {
     }
     /// Whether the push-to-talk button is held: from `beginTalking()` to `endTalking()`.
     public private(set) var isTalking = false
+    /// Whether `beginTalking()` would start a hold: push-to-talk is on, and the loop is
+    /// listening. Not while it is off, starting, or rebuilding its engine, when the start cue
+    /// couldn't play and what was said would be lost.
+    public var canTalk: Bool {
+        access(keyPath: \.canTalk)
+        return isPushToTalk && pipeline != nil
+    }
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -154,7 +161,12 @@ public final class VoiceLoop {
 
     /// The running engine and analyzer. Nil while off, while starting, and during a rebuild
     /// or an interruption (when `state` is still `.listening`).
-    @ObservationIgnored private var pipeline: Pipeline?
+    @ObservationIgnored private var pipeline: Pipeline? {
+        didSet {
+            guard (oldValue == nil) != (pipeline == nil) else { return }
+            withMutation(keyPath: \.canTalk) {}
+        }
+    }
     /// The pipeline playing the stop cue after `stop()`: it has stopped listening, and its engine
     /// runs only until the cue has played. Nil otherwise.
     @ObservationIgnored private var closingPipeline: Pipeline?
@@ -466,9 +478,9 @@ public final class VoiceLoop {
     /// Pressed again before the last hold's utterance was sent, it carries that utterance on
     /// rather than sending it early, so none of its words still to be reported are lost: both
     /// holds are sent as one utterance after this one is released. Does nothing unless
-    /// `isPushToTalk` is on, or while the button is already held.
+    /// `canTalk`, or while the button is already held.
     public func beginTalking() {
-        guard isPushToTalk, !isTalking else { return }
+        guard canTalk, !isTalking else { return }
         isTalking = true
         speechQueue.removeAll()
         silence(consumingEcho: true, reason: "pushToTalk")
