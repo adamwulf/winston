@@ -2,33 +2,29 @@ import SwiftUI
 import VoiceLoop
 import WinstonCore
 
-/// Push-to-talk, opened by a long press on the mic button: one big button that listens while it
-/// is held, with a line under it saying what is going on. The bottom bar puts voice mode in
-/// push-to-talk while this shows (`AppModel.setPushToTalk(_:)`); `VoiceLoop` does the rest.
+/// Push-to-talk, opened by a long press on the mic button: one big button that listens while
+/// it is held, with a line under it saying what is going on. A hold anywhere below a strip at
+/// the top holds the button; the strip keeps Close and room to pull the sheet down. The bottom
+/// bar puts voice mode in push-to-talk while this shows (`AppModel.setPushToTalk(_:)`);
+/// `VoiceLoop` does the rest.
 struct PushToTalkSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     /// True from touch down to touch up, and back to false if the touch is cancelled.
     @GestureState private var isPressing = false
 
+    /// The strip at the top that a hold doesn't cover, so a drag there still pulls the sheet
+    /// down instead of talking.
+    private static let pullDownStripHeight: CGFloat = 72
+
     var body: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            talkButton
-            Text(status)
-                .font(.title3)
-                .foregroundStyle(statusIsPlaceholder ? .secondary : .primary)
-                .multilineTextAlignment(.center)
-                .lineLimit(4, reservesSpace: true)
-                .padding(.horizontal)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-        .overlay(alignment: .topTrailing) {
+        VStack(spacing: 0) {
             Button("Close") {
                 dismiss()
             }
             .padding()
+            .frame(maxWidth: .infinity, minHeight: Self.pullDownStripHeight, alignment: .topTrailing)
+            holdArea
         }
         #if os(macOS)
         .frame(minWidth: 360, minHeight: 420)
@@ -40,6 +36,29 @@ struct PushToTalkSheet: View {
                 model.voiceLoop.endTalking()
             }
         }
+    }
+
+    /// Everything below the strip at the top: a hold anywhere in it holds the button.
+    private var holdArea: some View {
+        VStack(spacing: 24) {
+            Spacer()
+            talkButton
+            Text(status)
+                .font(.title3)
+                .foregroundStyle(statusIsPlaceholder ? .secondary : .primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(4, reservesSpace: true)
+                .padding(.horizontal)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0).updating($isPressing) { _, isPressing, _ in
+                isPressing = true
+            },
+            isEnabled: canTalk
+        )
     }
 
     private var talkButton: some View {
@@ -55,13 +74,6 @@ struct PushToTalkSheet: View {
             .scaleEffect(isTalking ? 1.12 : 1)
             .animation(.spring(duration: 0.2), value: isTalking)
             .opacity(canTalk ? 1 : 0.4)
-            .contentShape(Circle())
-            .gesture(
-                DragGesture(minimumDistance: 0).updating($isPressing) { _, isPressing, _ in
-                    isPressing = true
-                },
-                isEnabled: canTalk
-            )
             .accessibilityElement()
             .accessibilityLabel("Talk")
             .accessibilityValue(isTalking ? "Listening" : canTalk ? "" : notReadyStatus)
