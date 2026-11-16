@@ -504,9 +504,11 @@ session in time order, sort its lines by `tMs`.
 | 12 | "speech started" | `VoiceLoop.speakNextIfIdle`, after `player.play()`[^3] | `reply` (counts replies in the session), `chars`, `queued`, `voiceActive` |
 | 13 | "speech first audio" | recorded in `SpeechPlayback` when the first buffer is scheduled[^42]; written by `writeRecorded()` | `reply`, `synthMs` |
 | 14 | "speech finished" | `VoiceLoop.speechFinished`[^43] | the "reply ended" fields, and `reply` |
-| 15 | "utterance sent" | `VoiceLoop.checkForPause`, where it yields[^11] | `words`, `sinceVoiceMs`, `sinceChangeMs`, `endsSentence` |
+| 15 | "utterance sent" | `VoiceLoop.checkForPause`, where it yields[^11]; for a push-to-talk hold, `VoiceLoop.sendHeldUtterance`[^66] | `words`, `sinceVoiceMs`, `sinceChangeMs`, `endsSentence`; for a hold also `sinceReleaseMs` and `trigger` (`finalized`, `finalResult` or `timeout`) |
 | 16 | "utterance discarded" | `VoiceLoop.discardCurrentUtterance`[^44] | `words` |
 | 17 | "barge-in timeline" | `VoiceLoop.silence`, after line 11, when a barge-in stopped the reply[^9] | `voiceToResultMs`, `resultToStopMs`, `voiceToStopMs` |
+| 18 | "talk started" | `VoiceLoop.beginTalking`, the push-to-talk button pressed[^67] | none; `audioMs` is the fed audio, which lags the press |
+| 19 | "talk ended" | `VoiceLoop.endTalking`, the button released[^68] | none |
 
 What the keys measure:
 
@@ -1047,3 +1049,6 @@ out("done wall=\(f3(box.elapsed()))")
 [^63]: [LiveKit Agents docs, Turns and interruptions (and the Silero plugin's vad.py in the livekit/agents repository), read by a helper](https://docs.livekit.io/agents/build/turns/)
 [^64]: [Pipecat, vad_analyzer.py, VADParams defaults, read by a helper](https://github.com/pipecat-ai/pipecat/blob/main/src/pipecat/audio/vad/vad_analyzer.py)
 [^65]: [PLAN.md, Barge-in behaviour and Risk 1](../../PLAN.md:247-327)
+[^66]: [VoiceLoop.sendHeldUtterance](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.sendHeldUtterance)
+[^67]: [VoiceLoop.beginTalking](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.beginTalking)
+[^68]: [VoiceLoop.endTalking](../../Sources/VoiceLoop/VoiceLoop.swift:VoiceLoop.endTalking)
