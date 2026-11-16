@@ -98,6 +98,12 @@ struct MessageRow: View {
                     Task { await model.toggleThumbsUp(on: message) }
                 }
             }
+            // The bubble's text: the message, or a photo's or file's caption.
+            if !message.text.isEmpty {
+                Button("Copy", systemImage: "doc.on.doc") {
+                    copyText()
+                }
+            }
             // Says it again in the chosen voice and model, to compare them after changing settings.
             if !message.spokenText.isEmpty {
                 Button("Speak", systemImage: "speaker.wave.2") {
@@ -105,6 +111,15 @@ struct MessageRow: View {
                 }
             }
         }
+    }
+
+    private func copyText() {
+        #if os(iOS)
+        UIPasteboard.general.string = message.text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(message.text, forType: .string)
+        #endif
     }
 
     private var bubble: some View {
