@@ -64,8 +64,17 @@ struct PushToTalkSheet: View {
             )
             .accessibilityElement()
             .accessibilityLabel("Talk")
-            .accessibilityHint("Hold to talk, and let go to send.")
+            .accessibilityValue(isTalking ? "Listening" : "")
+            .accessibilityHint(isTalking ? "Activate to stop talking and send." : "Activate to start talking.")
             .accessibilityAddTraits(.isButton)
+            // VoiceOver can't hold: one activation starts talking, the next ends it.
+            .accessibilityAction {
+                if model.voiceLoop.isTalking {
+                    model.voiceLoop.endTalking()
+                } else {
+                    model.voiceLoop.beginTalking()
+                }
+            }
     }
 
     /// Until the loop is listening a press would do nothing. A hold already under way stays
