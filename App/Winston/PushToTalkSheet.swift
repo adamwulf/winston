@@ -64,8 +64,10 @@ struct PushToTalkSheet: View {
             )
             .accessibilityElement()
             .accessibilityLabel("Talk")
-            .accessibilityValue(isTalking ? "Listening" : "")
-            .accessibilityHint(isTalking ? "Activate to stop talking and send." : "Activate to start talking.")
+            .accessibilityValue(isTalking ? "Listening" : canTalk ? "" : notReadyStatus)
+            .accessibilityHint(
+                isTalking ? "Activate to stop talking and send." : canTalk ? "Activate to start talking." : ""
+            )
             .accessibilityAddTraits(.isButton)
             // VoiceOver can't hold: one activation starts talking, the next ends it.
             .accessibilityAction {
@@ -75,6 +77,8 @@ struct PushToTalkSheet: View {
                     model.voiceLoop.beginTalking()
                 }
             }
+            // Like the hold, VoiceOver's action waits until the loop can talk, and says so.
+            .disabled(!canTalk)
     }
 
     /// Until the loop is listening a press would do nothing. A hold already under way stays
@@ -92,9 +96,13 @@ struct PushToTalkSheet: View {
         }
         if loop.isTalking { return "Listening…" }
         if loop.canTalk { return "Hold to talk" }
-        // Off while not starting means the loop gave up, such as after an interruption it
-        // can't resume from.
-        return loop.state == .off && !model.isStartingVoice ? "Not listening" : "Starting…"
+        return notReadyStatus
+    }
+
+    /// Why the button can't be held yet. Off while not starting means the loop gave up, such as
+    /// after an interruption it can't resume from.
+    private var notReadyStatus: String {
+        model.voiceLoop.state == .off && !model.isStartingVoice ? "Not listening" : "Starting…"
     }
 
     private var statusIsPlaceholder: Bool {
