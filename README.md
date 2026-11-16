@@ -30,6 +30,11 @@ Copy `App/Config/Secrets.example.xcconfig` to `App/Config/Secrets.xcconfig`
 
 ## iOS push notifications
 
+**Push is off for now.** Builds don't sign in the `aps-environment` entitlement until the
+App ID has Push Notifications. Until then, iOS turns down every APNs token request, and
+Settings → Notifications shows "Couldn't connect" with Retry. To turn push on, follow
+[Turning push back on](#turning-push-back-on).
+
 Settings → Notifications → Enable Notifications asks for permission. Winston requests
 the current APNs token at launch and on activation, then registers it with Telegram once
 logged in. Each launch, token or environment change, and new login registers again;
@@ -44,11 +49,42 @@ before opening the chat. Single-account payloads can omit that ID.[^2]
 The current chat does not show a duplicate foreground banner. Push does not start
 voice mode; background speech still requires an already active voice session.
 
+### Turning push back on
+
+`App/Config/iOS.entitlements` holds `aps-environment`. Without the Push Notifications
+capability on the App ID, no profile includes that entitlement, so local signing fails and
+Xcode Cloud's App Store export fails. That happened to every build from 39 until push was
+turned off. Do these steps in order. [plans/enable-push.md](plans/enable-push.md) has
+them in more detail, with how to check each one.
+
+1. In the Apple Developer account, go to Certificates, IDs & Profiles → Identifiers →
+   `com.milestonemade.winston`. Check Push Notifications and Save. App Store Connect needs
+   no change.
+2. Refresh the provisioning profiles. Xcode Cloud's automatic signing should make new ones
+   on its next build. On a Mac, sign in to Xcode → Settings → Accounts, then build to an
+   iPhone with automatic signing, so Xcode makes a profile for the App ID with Push.
+3. Sign the entitlement back in. In `App/Config/Shared.xcconfig`, replace the "Push is
+   off" comment with:
+
+   ```
+   CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Config/iOS.entitlements
+   CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = Config/iOS.entitlements
+   ```
+
+4. Check that a signed Release archive succeeds and that
+   `codesign -d --entitlements - <archive>/Products/Applications/Winston.app` prints
+   `aps-environment`. Then push, and check that Xcode Cloud's "Exporting for App Store
+   Distribution" step passes.
+5. Remove the "Push is off" note above, this section, and `plans/enable-push.md`. Then
+   reword Provider and signing setup step 1 to say the App ID has Push Notifications and
+   the iOS target signs in `aps-environment`.
+6. Finish [Provider and signing setup](#provider-and-signing-setup) steps 2 and 4: the
+   APNs certificate for Telegram, and a device check.
+
 ### Provider and signing setup
 
-1. Enable Push Notifications for `com.milestonemade.winston` in the Apple Developer
-   account, and refresh the app's provisioning profiles. The iOS target now includes
-   the `aps-environment` entitlement.
+1. Enable Push Notifications for `com.milestonemade.winston` and sign in the
+   `aps-environment` entitlement. See [Turning push back on](#turning-push-back-on).
 2. Configure APNs certificates for the same Telegram application that owns
    `TG_API_ID` at [Telegram's application settings](https://my.telegram.org/apps).
    TDLib requires the correct application platform and uploaded provider credentials.[^1]
