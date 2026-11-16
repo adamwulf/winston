@@ -34,7 +34,9 @@ package struct TranscriptPiece: Sendable {
 ///
 /// The audio can also be *closed* at a time (`close(at:)`), for push-to-talk: words starting at
 /// or after it are left out too, so only words inside the window from the consumed audio to
-/// that time are kept, by their audio time, whenever their results arrive.
+/// that time are kept, by their audio time, whenever their results arrive. A result reaching
+/// past the closed audio still corrects the volatile result it overlaps, even when none of its
+/// own words are kept: a word the transcriber took back, or moved past the end, goes.
 struct Transcript {
     private struct Segment {
         var text: String
@@ -62,11 +64,18 @@ struct Transcript {
 
     var wordCount: Int { text.split(separator: " ").count }
 
+    /// Whether some of the text is from a volatile result, which the transcriber may still change.
+    var hasVolatileText: Bool {
+        !(volatile?.text.isEmpty ?? true)
+    }
+
     /// Adds a result. Returns false, changing nothing, when the result has no words after
-    /// the consumed audio and before the closed audio.
+    /// the consumed audio and before the closed audio, unless it reaches past the closed audio
+    /// and overlaps the volatile result, which it then replaces.
     mutating func apply(_ piece: TranscriptPiece) -> Bool {
-        if let closedFrom, piece.range.start >= closedFrom { return false }
-        let isTrimmed = piece.range.start < consumedThrough || closedFrom.map { piece.range.end > $0 } == true
+        let reachesConsumed = piece.range.start < consumedThrough
+        let reachesClosed = closedFrom.map { piece.range.end > $0 || piece.range.start >= $0 } == true
+        let isTrimmed = reachesConsumed || reachesClosed
         let text: String
         let alternatives: [String]
         if isTrimmed {
@@ -77,7 +86,11 @@ struct Transcript {
             alternatives = piece.alternatives.map { String($0.characters) }
         }
         let line = Utterance.singleLine(text)
-        if isTrimmed && line.isEmpty { return false }
+        if isTrimmed && line.isEmpty {
+            // Nothing of it is kept. Reaching past the closed audio, it is still a correction of
+            // the volatile result it overlaps.
+            guard reachesClosed, let volatile, volatile.range.end > piece.range.start else { return false }
+        }
 
         let segment = Segment(
             text: line,

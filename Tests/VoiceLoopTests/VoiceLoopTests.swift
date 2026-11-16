@@ -446,9 +446,16 @@ import Testing
 }
 
 @Suite struct TranscriptTests {
-    /// A result whose runs carry word timings in seconds.
-    func piece(_ words: [(String, Double)], end: Double, final: Bool = false, alternatives: [[(String, Double)]] = []) -> TranscriptPiece {
-        let start = words.first?.1 ?? end
+    /// A result whose runs carry word timings in seconds. Its range starts at `start`, or else at
+    /// its first word.
+    func piece(
+        _ words: [(String, Double)],
+        start: Double? = nil,
+        end: Double,
+        final: Bool = false,
+        alternatives: [[(String, Double)]] = []
+    ) -> TranscriptPiece {
+        let start = start ?? words.first?.1 ?? end
         return TranscriptPiece(
             text: timed(words, end: end),
             alternatives: alternatives.map { timed($0, end: end) },
@@ -671,6 +678,63 @@ import Testing
         applied = transcript.apply(piece([("Yeah.", 4)], end: 4.5, final: true))
         #expect(!applied)
         #expect(transcript.take() == Utterance(text: "Hello there.", alternatives: ["Hello their."]))
+    }
+
+    @Test func aWordTakenBackPastTheClosedAudioIsDropped() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello.", 0.5)], end: 1, final: true))
+        _ = transcript.apply(piece([("uh", 1.2)], end: 1.8))
+        #expect(transcript.text == "Hello. uh")
+
+        // The transcriber takes the word back, in a result reaching past the closed audio.
+        var applied = transcript.apply(piece([], start: 1.2, end: 2.5))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+        #expect(!transcript.hasVolatileText)
+
+        // A final one does the same.
+        _ = transcript.apply(piece([("uh", 1.2)], end: 1.8))
+        applied = transcript.apply(piece([], start: 1.2, end: 2.5, final: true))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+    }
+
+    @Test func aWordMovedPastTheClosedAudioIsDropped() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello.", 0.5)], end: 1, final: true))
+        _ = transcript.apply(piece([("uh", 1.8)], end: 2))
+        #expect(transcript.text == "Hello. uh")
+        #expect(transcript.hasVolatileText)
+
+        // Its correction times it after the end, from the same start: none of it is kept.
+        let applied = transcript.apply(piece([("uh", 2.1)], start: 1.8, end: 2.4))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+    }
+
+    @Test func aResultPastTheClosedAudioLeavesWhatItDoesNotOverlap() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello", 0.5)], end: 1.5))
+
+        // Wholly after the volatile result, so it was finalized without being sent again.
+        let applied = transcript.apply(piece([("Mhm.", 2.5)], end: 3, final: true))
+        #expect(!applied)
+        #expect(transcript.text == "Hello")
+    }
+
+    @Test func outsideClosedAudioAnEmptyLateResultStillChangesNothing() {
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("one", 0)], end: 1, final: true))
+        _ = transcript.take()
+        _ = transcript.apply(piece([("two", 2)], end: 2.5))
+
+        // It covers only taken audio, so as before it doesn't replace the volatile result.
+        let applied = transcript.apply(piece([("one", 0)], start: 0, end: 2.6))
+        #expect(!applied)
+        #expect(transcript.text == "two")
     }
 
     @Test func takingKeepsTheAudioClosedUntilItIsOpened() {
