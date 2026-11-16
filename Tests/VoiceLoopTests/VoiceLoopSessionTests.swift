@@ -1491,6 +1491,73 @@ struct PushToTalkTests {
         #expect(await eventually { sent.texts == ["Hello there."] })
     }
 
+    /// Presses, says "Hello there." and releases, with the recognizer slow to finalize, so the
+    /// release is still waiting for it.
+    private func releaseWaitingForTheRecognizer(_ loop: VoiceLoop, on bed: VoiceTestBed) async throws {
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello there.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there.") })
+        bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+        loop.endTalking()
+        #expect(await eventually { bed.recognizer.finalizations.count == 1 })
+    }
+
+    @Test func aReleasedHoldIsSentWithWhatWasHeardWhenTheEngineIsRebuiltMeanwhile() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        try await releaseWaitingForTheRecognizer(loop, on: bed)
+        #expect(sent.texts.isEmpty)
+
+        // A settings change rebuilds the engine, as AirPods connecting can.
+        loop.pausesOtherAudio = false
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func aReleasedHoldIsSentWithWhatWasHeardWhenVoiceModeStopsMeanwhile() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        let sent = UtteranceLog(loop)
+        try await releaseWaitingForTheRecognizer(loop, on: bed)
+        #expect(sent.texts.isEmpty)
+
+        // Adam lets go and closes the sheet at once.
+        loop.stop()
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        #expect(loop.state == .off)
+    }
+
+    @Test func aHoldStillHeldWhenTheEngineIsRebuiltIsDroppedButCarriesOn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Never mind.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Never mind.") })
+
+        loop.pausesOtherAudio = false
+
+        // What it heard goes with the old engine, as an utterance in progress does hands-free.
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.isTalking)
+        #expect(loop.state == .listening(partial: ""))
+        try await settle()
+        #expect(sent.texts.isEmpty)
+        // The hold carries on into the new engine.
+        #expect(await eventually { bed.recognizer.soundHeard != nil })
+        let heard = try #require(bed.recognizer.soundHeard)
+        bed.recognizer.hear("Hello.", over: heard, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello.") })
+        loop.endTalking()
+        #expect(await eventually { sent.texts == ["Hello."] })
+    }
+
     @Test func aPressStopsTheReplyAndOneArrivingDuringTheHoldWaitsForTheRelease() async throws {
         let bed = VoiceTestBed()
         let loop = try await pushToTalkLoop(on: bed)

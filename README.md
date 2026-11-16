@@ -277,8 +277,9 @@ reaching the release has been read, and nothing in the transcript is still
 volatile. Finalizing publishes its results before it returns, but the app may
 read them after, so its return alone doesn't send. If that hasn't happened 0.5
 s after it returns, or 4 s after the release, the message is sent with what
-was heard. Nothing is sent if nothing was heard. A press before then carries
-on: both holds are sent as one message.
+was heard, and so it is if voice mode stops (Close right after letting go) or
+the engine is rebuilt meanwhile. Nothing is sent if nothing was heard. A press
+before then carries on: both holds are sent as one message.
 
 A press plays the rising taps and a release the falling ones; opening and
 closing the sheet play neither. Without echo cancellation the microphone would

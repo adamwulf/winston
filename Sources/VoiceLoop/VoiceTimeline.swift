@@ -435,7 +435,7 @@ final class VoiceTimeline {
 
     /// An utterance was sent. `lastVoice` and `lastChange` are when the pause detector last
     /// heard voice and saw the transcript change. For a push-to-talk hold, `release` is when the
-    /// button was released and what sent it then: `reported`, `finalized` or `timeout`.
+    /// button was released and what sent it then: `reported`, `finalized`, `timeout` or `teardown`.
     func utteranceSent(
         words: Int,
         lastVoice: ContinuousClock.Instant?,

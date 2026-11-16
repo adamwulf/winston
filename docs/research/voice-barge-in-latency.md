@@ -504,7 +504,7 @@ session in time order, sort its lines by `tMs`.
 | 12 | "speech started" | `VoiceLoop.speakNextIfIdle`, after `player.play()`[^3] | `reply` (counts replies in the session), `chars`, `queued`, `voiceActive` |
 | 13 | "speech first audio" | recorded in `SpeechPlayback` when the first buffer is scheduled[^42]; written by `writeRecorded()` | `reply`, `synthMs` |
 | 14 | "speech finished" | `VoiceLoop.speechFinished`[^43] | the "reply ended" fields, and `reply` |
-| 15 | "utterance sent" | `VoiceLoop.checkForPause`, where it yields[^11]; for a push-to-talk hold, `VoiceLoop.sendHeldUtterance`[^66] | `words`, `sinceVoiceMs`, `sinceChangeMs`, `endsSentence`; for a hold also `sinceReleaseMs` and `trigger` (`reported`: a result through the release read and nothing volatile; `finalized`: 0.5 s after finalizing returned; `timeout`) |
+| 15 | "utterance sent" | `VoiceLoop.checkForPause`, where it yields[^11]; for a push-to-talk hold, `VoiceLoop.sendHeldUtterance`[^66] | `words`, `sinceVoiceMs`, `sinceChangeMs`, `endsSentence`; for a hold also `sinceReleaseMs` and `trigger` (`reported`: a result through the release read and nothing volatile; `finalized`: 0.5 s after finalizing returned; `timeout`; `teardown`: the loop stopped or rebuilt its engine first) |
 | 16 | "utterance discarded" | `VoiceLoop.discardCurrentUtterance`[^44] | `words` |
 | 17 | "barge-in timeline" | `VoiceLoop.silence`, after line 11, when a barge-in stopped the reply[^9] | `voiceToResultMs`, `resultToStopMs`, `voiceToStopMs` |
 | 18 | "talk started" | `VoiceLoop.beginTalking`, the push-to-talk button pressed[^67] | none; `audioMs` is the fed audio, which lags the press |

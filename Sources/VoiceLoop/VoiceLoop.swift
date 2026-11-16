@@ -501,8 +501,9 @@ public final class VoiceLoop {
     /// the transcript is still volatile; or `finalizeGrace` after finalizing returned, for when
     /// nothing more comes; or `releaseTimeout` after the release, whichever comes first. Until
     /// then, results are kept or dropped by their audio time, inside the hold or not, never by
-    /// when they arrive, so the held words it reports after the release still count. Nothing is
-    /// sent if nothing was heard. Does nothing unless the button is held.
+    /// when they arrive, so the held words it reports after the release still count. If the loop
+    /// stops or rebuilds its engine meanwhile, what has been heard is sent then. Nothing is sent
+    /// if nothing was heard. Does nothing unless the button is held.
     public func endTalking() {
         guard isTalking else { return }
         isTalking = false
@@ -927,10 +928,19 @@ public final class VoiceLoop {
         sendHeldUtterance(trigger: "reported")
     }
 
+    /// Sends what the released hold heard, if anything, and listens on: a reply waiting for it
+    /// can play. `trigger` says what decided it, for the timeline log.
+    private func sendHeldUtterance(trigger: String) {
+        yieldHeldUtterance(trigger: trigger)
+        pauseDetector.reset()
+        updateListeningState()
+        speakNextIfIdle()
+    }
+
     /// Sends what the released hold heard, if anything, and keeps nothing more until the next
     /// hold: what the recognizer reports later for the hold's audio is dropped, as for any
-    /// utterance sent. `trigger` says what decided it, for the timeline log.
-    private func sendHeldUtterance(trigger: String) {
+    /// utterance sent. Nothing else: `tearDown` uses it too.
+    private func yieldHeldUtterance(trigger: String) {
         guard let release else { return }
         endRelease()
         let words = transcript.wordCount
@@ -949,9 +959,6 @@ public final class VoiceLoop {
             )
             utteranceContinuation.yield(utterance)
         }
-        pauseDetector.reset()
-        updateListeningState()
-        speakNextIfIdle()
     }
 
     /// Forgets the released hold, if any, and stops finalizing it.
@@ -984,8 +991,10 @@ public final class VoiceLoop {
             isTalking = false
             microphoneGate.endHold()
         }
-        // A released hold's utterance goes with the transcript, as an utterance in progress does.
-        endRelease()
+        // Adam let go meaning to send it, so a released hold's utterance is sent with what has
+        // been heard so far. A hold still held goes with the transcript, as an utterance in
+        // progress does.
+        yieldHeldUtterance(trigger: "teardown")
         transcript = Transcript()
         if isPushToTalk && !isTalking {
             // Nothing is kept until the next hold.
