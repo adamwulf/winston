@@ -70,6 +70,12 @@ public final class AppModel {
     /// Counts the times voice mode was turned off, so `setVoiceMode(_:)` can tell when a quick off-and-on
     /// cancelled the start it is waiting on.
     @ObservationIgnored private var voiceModeOffCount = 0
+    /// The chat push-to-talk was entered in. While it is set, what voice mode hears is sent there rather
+    /// than to the current chat, so a hold still being sent when another chat opens (a notification
+    /// tapped meanwhile) reaches the bot it was said to. Set by `setPushToTalk(true)`, and kept after
+    /// leaving push-to-talk, so the utterance the loop sends as it stops still goes there. Cleared when
+    /// hands-free voice mode starts, and with the session.
+    @ObservationIgnored private var pushToTalkChat: ChatID?
     /// Seconds the transcript must stay unchanged before voice mode sends it. Persisted.
     public var pauseThreshold: Double {
         didSet {
@@ -434,7 +440,9 @@ public final class AppModel {
         }
         Task {
             for await utterance in voiceLoop.utterances {
-                await sendText(utterance.messageText)
+                // To the chat push-to-talk was entered in, if it was (see `pushToTalkChat`).
+                guard let chat = pushToTalkChat ?? currentChat?.id else { continue }
+                await sendText(utterance.messageText, to: chat)
             }
         }
         Task {
@@ -508,6 +516,7 @@ public final class AppModel {
         pendingNotification = nil
         reloadChatsForNotification = false
         notificationErrorMessage = nil
+        pushToTalkChat = nil
         if isVoiceMode {
             voiceLoop.stop()
             voiceLoop.isPushToTalk = false
@@ -793,12 +802,19 @@ public final class AppModel {
     /// Sends `text` exactly as given to the current chat. Returns false and sets `errorMessage` on failure.
     @discardableResult
     public func sendText(_ text: String) async -> Bool {
-        guard let link, let chat = currentChat else { return false }
+        guard let chat = currentChat else { return false }
+        return await sendText(text, to: chat.id)
+    }
+
+    /// The same, to `chat` whichever chat is shown: for what push-to-talk heard (see `pushToTalkChat`).
+    @discardableResult
+    private func sendText(_ text: String, to chat: ChatID) async -> Bool {
+        guard let link else { return false }
         do {
-            try await link.sendText(text, to: chat.id)
+            try await link.sendText(text, to: chat)
             return true
         } catch {
-            Self.log.error("sending text failed", error.logContext(["chatID": chat.id.description]))
+            Self.log.error("sending text failed", error.logContext(["chatID": chat.description]))
             errorMessage = userMessage(for: error)
             return false
         }
@@ -939,6 +955,10 @@ public final class AppModel {
     /// Turning it on again while already in voice mode resumes a loop that turned itself off.
     public func setVoiceMode(_ on: Bool) async {
         if on {
+            if !voiceLoop.isPushToTalk {
+                // Hands-free, what is heard goes to the chat shown.
+                pushToTalkChat = nil
+            }
             isVoiceMode = true
             // A running loop needs no start. Toggled back on while the first start() is still running: that
             // one owns the flag, and starts again below if a quick off cancelled it.
@@ -975,8 +995,12 @@ public final class AppModel {
     /// hold the button, and sends it after the release. Replies are spoken as in voice mode.
     /// Leaving stops voice mode and returns to text mode. Push-to-talk ends whenever voice mode
     /// does, so a failed start leaves it off.
+    ///
+    /// What it hears goes to the chat shown when it was entered, even once another chat is shown
+    /// (see `pushToTalkChat`).
     public func setPushToTalk(_ on: Bool) async {
         if on {
+            pushToTalkChat = currentChat?.id
             voiceLoop.isPushToTalk = true
             await setVoiceMode(true)
         } else {

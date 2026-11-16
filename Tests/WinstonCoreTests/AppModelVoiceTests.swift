@@ -287,6 +287,53 @@ struct PushToTalkModeTests {
         #expect(await eventually { harness.bed.recognizer.isCancelled })
     }
 
+    @Test func aHoldGoesToTheChatItWasSaidInWhenANotificationOpensAnotherBeforeItIsSent() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        #expect(model.currentChat?.id == ChatID(1))
+        await model.setPushToTalk(true)
+        #expect(await eventually { harness.bed.recognizer.heardFrames > 16_000 })
+        harness.bed.audio.isVoicePresent = true
+        model.voiceLoop.beginTalking()
+        #expect(await eventually { harness.bed.recognizer.soundHeard != nil })
+        let held = try #require(harness.bed.recognizer.soundHeard)
+        harness.bed.recognizer.hear("Mark that read.", over: held, isFinal: true)
+        // The recognizer is slow to finalize, so the release is still waiting...
+        harness.bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+        model.voiceLoop.endTalking()
+        #expect(await eventually { harness.bed.recognizer.finalizations.count == 1 })
+        let requestsBefore = harness.fake.requests.count
+
+        // ...when a notification for the other bot opens its chat, and the sheet closes.
+        model.openNotification(try #require(TelegramNotification(userInfo: ["from_id": "2"])))
+        #expect(await eventually { model.selectedChatID == ChatID(2) })
+        await model.setPushToTalk(false)
+
+        #expect(await eventually {
+            harness.fake.requests.last == .sendText(chatID: 1, text: "🎙️ Mark that read.")
+        })
+        let sent = harness.fake.requests.dropFirst(requestsBefore).filter {
+            if case .sendText = $0 { true } else { false }
+        }
+        #expect(sent == [.sendText(chatID: 1, text: "🎙️ Mark that read.")])
+    }
+
+    @Test func handsFreeVoiceModeSendsToTheChatShownAfterPushToTalkWasUsedInAnother() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.pauseThreshold = 0.05
+        await model.setPushToTalk(true)
+        await model.setPushToTalk(false)
+        model.selectedChatID = ChatID(2)
+
+        await model.setVoiceMode(true)
+        harness.bed.recognizer.hear("Status?", over: 0...1, isFinal: true)
+
+        #expect(await eventually { harness.fake.requests.last == .sendText(chatID: 2, text: "🎙️ Status?") })
+    }
+
     @Test func inPushToTalkTheBotsReplyIsSpoken() async throws {
         let harness = Harness.withTwoBots()
         #expect(await harness.startAndLoadChats())
