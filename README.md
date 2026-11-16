@@ -184,6 +184,8 @@ Scripts/coverage.sh
 ```
 
 runs the tests on macOS and prints line coverage for every file in `Sources/`.
+[docs/coverage](docs/coverage/README.md) has the dated reports, how to make
+one, and the goals for coverage and tests.
 
 Four places stay uncovered on purpose, because they only call into the
 system:
