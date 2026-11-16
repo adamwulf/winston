@@ -31,6 +31,10 @@ package struct TranscriptPiece: Sendable {
 /// audio (late finals, refined volatiles) are ignored, and results that straddle the boundary
 /// keep only the words that start after it. That stops already-sent words from being sent
 /// again or merged into the next utterance.
+///
+/// The audio can also be *closed* at a time (`close(at:)`), for push-to-talk: words starting at
+/// or after it are left out too, so only words inside the window from the consumed audio to
+/// that time are kept, by their audio time, whenever their results arrive.
 struct Transcript {
     private struct Segment {
         var text: String
@@ -44,6 +48,8 @@ struct Transcript {
     private var volatile: Segment?
     /// Audio before this time belongs to an utterance already taken or discarded.
     private(set) var consumedThrough: CMTime = .zero
+    /// Audio from this time on is left out (see `close(at:)`); nil while nothing is closed.
+    private(set) var closedFrom: CMTime?
     /// End of the latest result applied to this transcript.
     private var heardThrough: CMTime = .zero
 
@@ -57,19 +63,21 @@ struct Transcript {
     var wordCount: Int { text.split(separator: " ").count }
 
     /// Adds a result. Returns false, changing nothing, when the result has no words after
-    /// the consumed audio.
+    /// the consumed audio and before the closed audio.
     mutating func apply(_ piece: TranscriptPiece) -> Bool {
+        if let closedFrom, piece.range.start >= closedFrom { return false }
+        let isTrimmed = piece.range.start < consumedThrough || closedFrom.map { piece.range.end > $0 } == true
         let text: String
         let alternatives: [String]
-        if piece.range.start >= consumedThrough {
+        if isTrimmed {
+            text = Self.words(of: piece.text, startingAt: consumedThrough, before: closedFrom)
+            alternatives = piece.alternatives.map { Self.words(of: $0, startingAt: consumedThrough, before: closedFrom) }
+        } else {
             text = String(piece.text.characters)
             alternatives = piece.alternatives.map { String($0.characters) }
-        } else {
-            text = Self.words(of: piece.text, startingAt: consumedThrough)
-            alternatives = piece.alternatives.map { Self.words(of: $0, startingAt: consumedThrough) }
         }
         let line = Utterance.singleLine(text)
-        if piece.range.start < consumedThrough && line.isEmpty { return false }
+        if isTrimmed && line.isEmpty { return false }
 
         let segment = Segment(
             text: line,
@@ -114,6 +122,18 @@ struct Transcript {
         consumedThrough = max(consumedThrough, time)
     }
 
+    /// Leaves out words starting at or after `time` from now on, without touching the text: a
+    /// push-to-talk hold ended there. Closing at the consumed audio or before it keeps nothing
+    /// new. Taking or discarding the utterance doesn't reopen it; `open()` does.
+    mutating func close(at time: CMTime) {
+        closedFrom = time
+    }
+
+    /// Undoes `close(at:)`: words are kept however late their audio is.
+    mutating func open() {
+        closedFrom = nil
+    }
+
     /// Drops the utterance so far, consuming its audio.
     mutating func discard() {
         finalized = []
@@ -121,11 +141,16 @@ struct Transcript {
         consumedThrough = max(consumedThrough, heardThrough)
     }
 
-    /// The part of `text` whose first run starts at or after `time`, judged by the
-    /// `audioTimeRange` attributes. Empty when no run qualifies or the timing is missing.
-    static func words(of text: AttributedString, startingAt time: CMTime) -> String {
+    /// The part of `text` from its first run starting at or after `time`, up to its first run
+    /// starting at or after `end` if there is one, judged by the `audioTimeRange` attributes.
+    /// Empty when no run qualifies or the timing is missing.
+    static func words(of text: AttributedString, startingAt time: CMTime, before end: CMTime? = nil) -> String {
         guard let run = firstRun(of: text, startingAt: time) else { return "" }
-        return String(text[run.range.lowerBound...].characters)
+        let kept = text[run.range.lowerBound...]
+        guard let end, let after = firstRun(of: kept, startingAt: end) else {
+            return String(kept.characters)
+        }
+        return String(text[run.range.lowerBound..<after.range.lowerBound].characters)
     }
 
     /// Where that part of `text` starts on the audio timeline, for the logs. Nil when no run
@@ -134,7 +159,7 @@ struct Transcript {
         firstRun(of: text, startingAt: time)?.audioTimeRange?.start
     }
 
-    private static func firstRun(of text: AttributedString, startingAt time: CMTime) -> AttributedString.Runs.Run? {
+    private static func firstRun(of text: some AttributedStringProtocol, startingAt time: CMTime) -> AttributedString.Runs.Run? {
         text.runs.first { run in
             guard let range = run.audioTimeRange else { return false }
             return range.start >= time

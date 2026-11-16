@@ -528,6 +528,42 @@ import Testing
         #expect(!applied)
     }
 
+    @Test func closedAudioLeavesOutTheWordsStartingFromItWhenTheirResultsArrive() {
+        var transcript = Transcript()
+        transcript.consume(through: time(1))
+        transcript.close(at: time(3))
+        // A result straddling both ends keeps only the words between them.
+        var applied = transcript.apply(piece([("before", 0.5), ("hello", 1.2), ("there", 2), ("mhm", 3.1)], end: 3.5))
+        #expect(applied)
+        #expect(transcript.text == "hello there")
+        // Its final, however late, the same.
+        applied = transcript.apply(piece(
+            [("before", 0.5), ("Hello", 1.2), ("there.", 2), ("Mhm.", 3.1)], end: 3.5, final: true,
+            alternatives: [[("before", 0.5), ("Hello", 1.2), ("their.", 2), ("Mhm.", 3.1)]]
+        ))
+        #expect(applied)
+        // A result wholly after the closed time is left out.
+        applied = transcript.apply(piece([("Yeah.", 4)], end: 4.5, final: true))
+        #expect(!applied)
+        #expect(transcript.take() == Utterance(text: "Hello there.", alternatives: ["Hello their."]))
+    }
+
+    @Test func takingKeepsTheAudioClosedUntilItIsOpened() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("one", 1)], end: 1.5, final: true))
+        _ = transcript.take()
+        transcript.consume(through: time(2))
+        // Closed at the consumed audio: nothing new is kept.
+        var applied = transcript.apply(piece([("two", 2.5)], end: 3, final: true))
+        #expect(!applied)
+
+        transcript.open()
+        applied = transcript.apply(piece([("two", 2.5)], end: 3, final: true))
+        #expect(applied)
+        #expect(transcript.text == "two")
+    }
+
     @Test func wordsWithoutTimingAreDroppedWhenTrimming() {
         #expect(Transcript.words(of: AttributedString("untimed words"), startingAt: time(1)) == "")
     }
