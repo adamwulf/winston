@@ -20,6 +20,10 @@ import UIKit
 /// a pitch shift (see `SpeechOutput`). Sound cues (`SoundCue`) play on a second player node
 /// there, not pitch-shifted: taps when listening starts and stops, and whatever `play(_:)` is
 /// asked for.
+///
+/// With `isPushToTalk` on, all of that keeps running, but the microphone is muted except while
+/// a button is held (`beginTalking()` to `endTalking()`), and what was said during the hold is
+/// sent once it is released, rather than at a pause.
 @MainActor
 @Observable
 public final class VoiceLoop {
@@ -108,6 +112,33 @@ public final class VoiceLoop {
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
     public var bargeInMinimumWords = 1
+    /// Push-to-talk: the microphone is muted except while the push-to-talk button is held, from
+    /// `beginTalking()` to `endTalking()`, and what was said during a hold is sent as one
+    /// utterance after the release, never at a pause. The engine and the recognizer run on as
+    /// in hands-free mode, fed silence of the same length while the microphone is muted, so a
+    /// press needs no start-up time, and the recognizer still reports a hold's last words after
+    /// the release. Replies are spoken as they come, except during a hold and until its
+    /// utterance is sent; a press stops the reply being spoken and drops the queue, and nothing
+    /// heard interrupts a reply.
+    ///
+    /// Turning it on drops the utterance in progress. Turning it off ends any hold and listens
+    /// hands-free again: what the hold heard so far is sent after a pause, as any utterance in
+    /// progress is.
+    public var isPushToTalk = false {
+        didSet {
+            guard isPushToTalk != oldValue else { return }
+            pushToTalkChanged()
+        }
+    }
+    /// Whether the push-to-talk button is held: from `beginTalking()` to `endTalking()`.
+    public private(set) var isTalking = false
+    /// Whether `beginTalking()` would start a hold: push-to-talk is on, and the loop is
+    /// listening. Not while it is off, starting, or rebuilding its engine, when the start cue
+    /// couldn't play and what was said would be lost.
+    public var canTalk: Bool {
+        access(keyPath: \.canTalk)
+        return isPushToTalk && pipeline != nil
+    }
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -130,7 +161,12 @@ public final class VoiceLoop {
 
     /// The running engine and analyzer. Nil while off, while starting, and during a rebuild
     /// or an interruption (when `state` is still `.listening`).
-    @ObservationIgnored private var pipeline: Pipeline?
+    @ObservationIgnored private var pipeline: Pipeline? {
+        didSet {
+            guard (oldValue == nil) != (pipeline == nil) else { return }
+            withMutation(keyPath: \.canTalk) {}
+        }
+    }
     /// The pipeline playing the stop cue after `stop()`: it has stopped listening, and its engine
     /// runs only until the cue has played. Nil otherwise.
     @ObservationIgnored private var closingPipeline: Pipeline?
@@ -150,6 +186,25 @@ public final class VoiceLoop {
 
     @ObservationIgnored private var transcript = Transcript()
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
+    /// Push-to-talk's mute on the microphone, shared with each pipeline's tap.
+    @ObservationIgnored private let microphoneGate = MicrophoneGate()
+
+    /// A push-to-talk hold that has been released, until its utterance is sent.
+    private struct Release {
+        /// When the button was released.
+        let started: ContinuousClock.Instant
+        /// Where the hold ended on the analyzer's timeline, once the microphone tap has reached it.
+        var end: CMTime?
+        /// Asks the recognizer to finalize the audio through `end`.
+        var finalizing: Task<Void, Never>?
+        /// When the recognizer finished finalizing the audio through `end`.
+        var finalized: ContinuousClock.Instant?
+        /// The end of the latest result handled since the release, on the analyzer's timeline.
+        var heardThrough: CMTime?
+    }
+
+    /// The hold last released, until its utterance is sent. Nil otherwise.
+    @ObservationIgnored private var release: Release?
 
     @ObservationIgnored private let synthesizer = AVSpeechSynthesizer()
     /// Renders voice previews when the loop isn't running, for `previewPlayer`. See `preview(_:)`.
@@ -340,8 +395,11 @@ public final class VoiceLoop {
             engineStopped(pipeline, source: "startCheck")
         }
         // Adam can talk now, also after a rebuild or an interruption. Does nothing if the engine
-        // is being rebuilt; the rebuild's start plays it.
-        play(.listeningStarted)
+        // is being rebuilt; the rebuild's start plays it. With push-to-talk, he can talk only
+        // once he presses, which plays it then.
+        if !isPushToTalk {
+            play(.listeningStarted)
+        }
         // Replies carried over a rebuild, or queued while starting. Does nothing if the engine
         // is being rebuilt.
         speakNextIfIdle()
@@ -394,6 +452,7 @@ public final class VoiceLoop {
             voiceProcessing: voiceProcessing,
             ducksOtherAudio: ducksOtherAudio,
             session: session,
+            microphoneGate: microphoneGate,
             environment: environment
         )
         do {
@@ -411,6 +470,67 @@ public final class VoiceLoop {
         tearDown(.stop)
     }
 
+    /// Push-to-talk's button is pressed: unmutes the microphone and plays the start cue. Like a
+    /// barge-in, it stops the reply being spoken and drops the queued ones. Without echo
+    /// cancellation, the microphone stays muted until the start cue has played, so the cue
+    /// isn't heard as speech.
+    ///
+    /// Pressed again before the last hold's utterance was sent, it carries that utterance on
+    /// rather than sending it early, so none of its words still to be reported are lost: both
+    /// holds are sent as one utterance after this one is released. Does nothing unless
+    /// `canTalk`, or while the button is already held.
+    public func beginTalking() {
+        guard canTalk, !isTalking else { return }
+        isTalking = true
+        speechQueue.removeAll()
+        silence(consumingEcho: true, reason: "pushToTalk")
+        var start = TimelineClock.now()
+        if play(.listeningStarted), pipeline?.hasVoiceProcessing == false {
+            // Without echo cancellation the microphone hears the cue as loud as it plays.
+            let wait = SoundCue.listeningStarted.duration / .seconds(1) + Self.halfDuplexEchoMargin.seconds
+            start += AVAudioTime.hostTime(forSeconds: wait)
+        }
+        microphoneGate.open(at: start)
+        if release != nil {
+            endRelease()
+            transcript.open()
+        } else {
+            // Words from before the press, such as late results for earlier audio, aren't
+            // part of it.
+            transcript.discard()
+            transcript.consume(through: pipeline?.fedAudio.time ?? .zero)
+            transcript.open()
+            pauseDetector.reset()
+        }
+        pipeline?.timeline.talkStarted()
+        updateListeningState()
+    }
+
+    /// Push-to-talk's button is released: mutes the microphone at once and plays the stop cue,
+    /// and asks the recognizer to finalize the audio through the release
+    /// (`Recognizer.finalize(through:)`). What the hold heard is sent once the recognizer has
+    /// reported it all, that is once a result reaching the release has been read and nothing in
+    /// the transcript is still volatile; or `finalizeGrace` after finalizing returned, for when
+    /// nothing more comes; or `releaseTimeout` after the release, whichever comes first. Until
+    /// then, results are kept or dropped by their audio time, inside the hold or not, never by
+    /// when they arrive, so the held words it reports after the release still count. If the loop
+    /// stops or rebuilds its engine meanwhile, what has been heard is sent then. Nothing is sent
+    /// if nothing was heard. Does nothing unless the button is held.
+    public func endTalking() {
+        guard isTalking else { return }
+        isTalking = false
+        microphoneGate.close(at: TimelineClock.now())
+        play(.listeningStopped)
+        pipeline?.timeline.talkEnded()
+        if pipeline != nil {
+            release = Release(started: .now)
+        } else {
+            // Released while the engine was being built or rebuilt, which has heard nothing.
+            transcript.close(at: transcript.consumedThrough)
+        }
+        updateListeningState()
+    }
+
     /// Drops the utterance in progress without sending it.
     public func discardCurrentUtterance() {
         pipeline?.timeline.utteranceDiscarded(words: transcript.wordCount)
@@ -426,7 +546,8 @@ public final class VoiceLoop {
     /// Ignored while the loop is off, except that replies still queue while a resume after an
     /// interruption is pending (a failed foreground retry shows `.off`). Also queued while it is
     /// starting or rebuilding. A message waits while an utterance is in progress, so the reply
-    /// doesn't start over the user and get cut off by barge-in.
+    /// doesn't start over the user and get cut off by barge-in, and while a push-to-talk hold is
+    /// held or not yet sent.
     public func speak(_ text: String) {
         guard state != .off || isStarting || resumeAfterInterruption else { return }
         enqueue(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
@@ -540,15 +661,17 @@ public final class VoiceLoop {
     /// Plays `cue` through the loop's engine, mixed with any reply being spoken, so echo
     /// cancellation keeps it out of what is heard. It doesn't change `state`. Plays only while
     /// the loop is listening or speaking: does nothing while off, starting, or rebuilding the
-    /// engine. A cue still playing finishes first.
-    public func play(_ cue: SoundCue) {
-        guard playsSoundCues, let pipeline, pipeline.engine.isRunning else { return }
+    /// engine. A cue still playing finishes first. Returns whether it plays.
+    @discardableResult
+    public func play(_ cue: SoundCue) -> Bool {
+        guard playsSoundCues, let pipeline, pipeline.engine.isRunning else { return false }
         lastCueID += 1
         let id = lastCueID
         unfinishedCues.append((id, cue))
         pipeline.play(cue) { [weak self] in
             Task { @MainActor in self?.cueFinished(id) }
         }
+        return true
     }
 
     /// The voices for `language` (the current one by default), for a settings picker: the
@@ -649,6 +772,20 @@ public final class VoiceLoop {
     }
 
     private func handle(_ piece: TranscriptPiece) {
+        guard isPushToTalk else {
+            apply(piece)
+            return
+        }
+        noteHoldEnd()
+        if let release {
+            self.release?.heardThrough = max(release.heardThrough ?? piece.range.end, piece.range.end)
+        }
+        apply(piece)
+        sendHeldUtteranceIfReported()
+    }
+
+    /// Adds a result to the transcript, interrupting a reply if it is a barge-in.
+    private func apply(_ piece: TranscriptPiece) {
         var candidate = transcript
         guard candidate.apply(piece) else { return }
         if currentSpeech != nil {
@@ -698,6 +835,16 @@ public final class VoiceLoop {
         if pipeline?.voiceActivity.takeHeardVoice() == true {
             pauseDetector.heardVoice(at: .now)
         }
+        if isPushToTalk {
+            // A hold is sent once released and reported, never at a pause.
+            noteHoldEnd()
+            if let release, let finalized = release.finalized, finalized.duration(to: .now) >= Self.finalizeGrace {
+                sendHeldUtterance(trigger: "finalized")
+            } else if let release, release.started.duration(to: .now) >= Self.releaseTimeout {
+                sendHeldUtterance(trigger: "timeout")
+            }
+            return
+        }
         guard pauseDetector.isComplete(at: .now) else { return }
         // For the timeline log, before they are cleared.
         let words = transcript.wordCount
@@ -722,6 +869,116 @@ public final class VoiceLoop {
         state = currentSpeech == nil ? .listening(partial: transcript.text) : .speaking
     }
 
+    // MARK: - Push-to-talk
+
+    /// The longest a released hold waits for the recognizer to report it before it is sent with
+    /// what has been heard. The recognizer has been measured to report a word up to 3.8 s after
+    /// it was spoken (docs/research/voice-barge-in-latency.md), so a hold's last words are in by
+    /// then even if finalizing fails.
+    private static let releaseTimeout: Duration = .seconds(4)
+
+    /// How long after finalizing returned a released hold waits for its results to be reported,
+    /// before it is sent with what has been heard. Finalizing publishes its results before it
+    /// returns, but the listening task may read them later; this is the fallback for when no
+    /// result reaching the release comes, or the volatile text never turns final.
+    private static let finalizeGrace: Duration = .milliseconds(500)
+
+    private func pushToTalkChanged() {
+        Self.log.notice("push to talk changed", ["on": isPushToTalk])
+        microphoneGate.setEnabled(isPushToTalk)
+        isTalking = false
+        endRelease()
+        if isPushToTalk {
+            // Nothing said before is sent, and nothing more is kept until a hold.
+            let fed = pipeline?.fedAudio.time ?? .zero
+            transcript.discard()
+            transcript.consume(through: fed)
+            transcript.close(at: fed)
+            pauseDetector.reset()
+        } else {
+            transcript.open()
+        }
+        updateListeningState()
+        speakNextIfIdle()
+    }
+
+    /// Once the microphone tap has reached the released hold's end: closes the transcript there,
+    /// so only words from inside the hold are kept, and asks the recognizer to finalize the audio
+    /// through it.
+    private func noteHoldEnd() {
+        guard var release, release.end == nil, let end = microphoneGate.takeHeldThrough() else { return }
+        release.end = end
+        transcript.close(at: end)
+        if let recognizer = pipeline?.recognizer {
+            release.finalizing = Task { [weak self] in
+                do {
+                    try await recognizer.finalize(through: end)
+                } catch {
+                    // The release waits for a final result or `releaseTimeout` instead.
+                    if !Task.isCancelled {
+                        Self.log.warning("finalizing a push-to-talk hold failed", error.logContext())
+                    }
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                // Its results may not have been read yet: they send it when they are, or the
+                // pause check does after `finalizeGrace`.
+                self?.release?.finalized = .now
+                self?.sendHeldUtteranceIfReported()
+            }
+        }
+        self.release = release
+    }
+
+    /// Sends the released hold's utterance if the recognizer has reported all of it: a result
+    /// reaching the hold's end has been read, and nothing in the transcript is still volatile.
+    /// Results come in the order of their audio, so every final result for the hold has been
+    /// read by then, however late it came.
+    private func sendHeldUtteranceIfReported() {
+        guard let release, let end = release.end, let heard = release.heardThrough,
+              heard >= end, !transcript.hasVolatileText else { return }
+        sendHeldUtterance(trigger: "reported")
+    }
+
+    /// Sends what the released hold heard, if anything, and listens on: a reply waiting for it
+    /// can play. `trigger` says what decided it, for the timeline log.
+    private func sendHeldUtterance(trigger: String) {
+        yieldHeldUtterance(trigger: trigger)
+        pauseDetector.reset()
+        updateListeningState()
+        speakNextIfIdle()
+    }
+
+    /// Sends what the released hold heard, if anything, and keeps nothing more until the next
+    /// hold: what the recognizer reports later for the hold's audio is dropped, as for any
+    /// utterance sent. Nothing else: `tearDown` uses it too.
+    private func yieldHeldUtterance(trigger: String) {
+        guard let release else { return }
+        endRelease()
+        let words = transcript.wordCount
+        let utterance = transcript.take()
+        // Timed out before the tap reached the end: everything fed so far was the hold's.
+        let end = release.end ?? pipeline?.fedAudio.time ?? .zero
+        transcript.consume(through: end)
+        transcript.close(at: end)
+        if !utterance.text.isEmpty {
+            pipeline?.timeline.utteranceSent(
+                words: words,
+                lastVoice: pauseDetector.lastVoice,
+                lastChange: pauseDetector.lastChange,
+                endsSentence: PauseDetector.endsSentence(utterance.text),
+                release: (started: release.started, trigger: trigger)
+            )
+            utteranceContinuation.yield(utterance)
+        }
+    }
+
+    /// Forgets the released hold, if any, and stops finalizing it.
+    private func endRelease() {
+        release?.finalizing?.cancel()
+        release = nil
+    }
+
     private enum Teardown {
         /// Voice mode ends: the queue is cleared, the iOS session deactivated, no resume is
         /// pending after an interruption, and `state` is `.off`. If the engine is running, it
@@ -742,16 +999,27 @@ public final class VoiceLoop {
         silence(consumingEcho: true, reason: "teardown")
         if kind == .stop {
             speechQueue.removeAll()
+            // A hold ends with voice mode. Through a rebuild it carries on.
+            isTalking = false
+            microphoneGate.endHold()
         }
+        // Adam let go meaning to send it, so a released hold's utterance is sent with what has
+        // been heard so far. A hold still held goes with the transcript, as an utterance in
+        // progress does.
+        yieldHeldUtterance(trigger: "teardown")
         transcript = Transcript()
+        if isPushToTalk && !isTalking {
+            // Nothing is kept until the next hold.
+            transcript.close(at: .zero)
+        }
         pauseDetector.reset()
         // A cue cut off here isn't played again; the next start plays its own.
         unfinishedCues = []
         if let pipeline {
             self.pipeline = nil
-            // No stop cue for a rebuild, or for an engine that has stopped (an interruption, or
-            // one that keeps stopping).
-            if kind == .stop && playsSoundCues && pipeline.engine.isRunning {
+            // No stop cue for a rebuild, for an engine that has stopped (an interruption, or one
+            // that keeps stopping), or with push-to-talk, where it marks a release.
+            if kind == .stop && playsSoundCues && pipeline.engine.isRunning && !isPushToTalk {
                 close(pipeline)
             } else {
                 pipeline.tearDown()
@@ -1000,9 +1268,11 @@ public final class VoiceLoop {
 
     // MARK: - Speaking
 
+    /// Starts the next reply in the queue, unless one is playing, an utterance is in progress, or
+    /// a push-to-talk hold is held or not yet sent.
     private func speakNextIfIdle() {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
-              !speechQueue.isEmpty else { return }
+              !isTalking, release == nil, !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)

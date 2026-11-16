@@ -22,6 +22,8 @@ final class Pipeline {
     private let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
     /// How far along the analyzer's timeline the fed audio reaches.
     let fedAudio: FedAudioClock
+    /// Push-to-talk's mute, the voice loop's own, so a hold carries on into a rebuilt pipeline.
+    private let microphoneGate: MicrophoneGate
     /// Whether the microphone has heard someone talking, from its loudness.
     let voiceActivity = VoiceActivity()
     /// The `voice.timeline` log for this listening session.
@@ -32,17 +34,19 @@ final class Pipeline {
 
     /// `ducksOtherAudio` leaves voice processing's default ducking of other apps' audio in place.
     /// When false, it ducks them as little as it can. `session` names the listening session in
-    /// the timeline log.
+    /// the timeline log. `microphoneGate` decides which microphone audio the analyzer hears.
     init(
         analyzerFormat: AVAudioFormat,
         voiceProcessing: Bool,
         ducksOtherAudio: Bool,
         session: Int,
+        microphoneGate: MicrophoneGate,
         environment: VoiceEnvironment
     ) throws {
         engine = try environment.makeEngine()
         (inputs, inputContinuation) = AsyncStream.makeStream(of: AnalyzerInput.self)
         fedAudio = FedAudioClock(sampleRate: analyzerFormat.sampleRate)
+        self.microphoneGate = microphoneGate
         timeline = VoiceTimeline(session: session, fedAudio: fedAudio)
         hasVoiceProcessing = voiceProcessing
         self.analyzerFormat = analyzerFormat
@@ -113,6 +117,7 @@ final class Pipeline {
                 converter: converter,
                 continuation: inputContinuation,
                 clock: fedAudio,
+                gate: microphoneGate,
                 voiceActivity: voiceActivity,
                 timeline: timeline.microphone
             )
@@ -178,29 +183,50 @@ final class Pipeline {
         engine.stop()
     }
 
-    /// Runs on the audio thread: measures each microphone buffer's loudness, records its times
-    /// for the timeline log, and converts it for the analyzer.
+    /// Runs on the audio thread: mutes what push-to-talk's gate doesn't keep, measures the
+    /// loudness of what it keeps, records each buffer's times for the timeline log, and
+    /// converts it for the analyzer.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
         continuation: AsyncStream<AnalyzerInput>.Continuation,
         clock: FedAudioClock,
+        gate: MicrophoneGate,
         voiceActivity: VoiceActivity,
         timeline: MicrophoneTimeline
     ) -> AVAudioNodeTapBlock {
         { buffer, when in
+            // Where the buffer starts, before the clock moves on past it.
+            let audioStart = clock.time
+            // An engine rendering offline, as in the tests, may give no capture time; the time
+            // the tap is called stands in for it.
+            let captureTime = when.isHostTimeValid ? when.hostTime : TimelineClock.now()
+            let frames = Int(buffer.frameLength)
+            let kept = gate.keptFrames(
+                buffer.frameLength,
+                sampleRate: buffer.format.sampleRate,
+                capturedAt: captureTime,
+                audioStart: audioStart
+            )
             var reading: VoiceActivity.Reading?
-            if let samples = buffer.floatChannelData?[0] {
-                reading = voiceActivity.process(samples, count: Int(buffer.frameLength))
+            if kept.isEmpty {
+                reading = .muted
+            } else if let samples = buffer.floatChannelData?[0] {
+                reading = voiceActivity.process(samples + kept.lowerBound, count: kept.count)
             }
-            // Before the clock moves on, so the buffer is placed where it starts.
             timeline.record(
                 frames: buffer.frameLength,
                 sampleRate: buffer.format.sampleRate,
                 when: when,
-                audioTime: clock.time,
+                audioTime: audioStart,
                 voice: reading
             )
             guard let converted = convert(buffer, with: converter) else { return }
+            if kept.count < frames {
+                let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
+                let first = Int((Double(kept.lowerBound) * ratio).rounded())
+                let last = Int((Double(kept.upperBound) * ratio).rounded())
+                zeroFrames(of: converted, outside: first..<last)
+            }
             clock.add(frames: converted.frameLength)
             continuation.yield(AnalyzerInput(buffer: converted))
         }

@@ -434,19 +434,36 @@ final class VoiceTimeline {
     }
 
     /// An utterance was sent. `lastVoice` and `lastChange` are when the pause detector last
-    /// heard voice and saw the transcript change.
+    /// heard voice and saw the transcript change. For a push-to-talk hold, `release` is when the
+    /// button was released and what sent it then: `reported`, `finalized`, `timeout` or `teardown`.
     func utteranceSent(
         words: Int,
         lastVoice: ContinuousClock.Instant?,
         lastChange: ContinuousClock.Instant?,
-        endsSentence: Bool
+        endsSentence: Bool,
+        release: (started: ContinuousClock.Instant, trigger: String)? = nil
     ) {
         writeRecorded()
         let instant = ContinuousClock.now
         var extra: [String: CustomStringConvertible] = ["words": words, "endsSentence": endsSentence]
         extra["sinceVoiceMs"] = lastVoice.map { Int($0.duration(to: instant) / .milliseconds(1)) }
         extra["sinceChangeMs"] = lastChange.map { Int($0.duration(to: instant) / .milliseconds(1)) }
+        extra["sinceReleaseMs"] = release.map { Int($0.started.duration(to: instant) / .milliseconds(1)) }
+        extra["trigger"] = release?.trigger
         logger.info("utterance sent", metadata(at: now(), audio: fedAudio.time, extra))
+    }
+
+    /// The push-to-talk button was pressed. `audioMs` is how far the fed audio had got, which
+    /// lags the press by a buffer or more.
+    func talkStarted() {
+        writeRecorded()
+        logger.info("talk started", metadata(at: now(), audio: fedAudio.time, [:]))
+    }
+
+    /// The push-to-talk button was released.
+    func talkEnded() {
+        writeRecorded()
+        logger.info("talk ended", metadata(at: now(), audio: fedAudio.time, [:]))
     }
 
     /// The utterance in progress was dropped.

@@ -266,6 +266,13 @@ Inside it:
   after the engine is rebuilt or a call ends), so Adam knows he can talk, and
   falling when it stops. They are synthesized in code and play through the
   loop's engine, so echo cancellation keeps them out of the transcript.
+- **Push-to-talk** (added later): a long press on the mic button in text mode
+  opens a sheet with one big button. Voice mode runs while it is open, with the
+  microphone muted except while the button is held (the recognizer is fed
+  silence instead), and what was said during a hold is sent once the
+  recognizer has reported it, not at a pause. A press plays the rising taps
+  and stops any reply; a release plays the falling ones. See the README's
+  Push-to-talk section.
 
 ### Reactions
 
@@ -402,7 +409,7 @@ never depends on it.
   keeps voice mode listening, speaking and receiving replies with the phone
   locked.
 - **Q4, always listening:** as specified, with the Discard button. No
-  push-to-talk.
+  push-to-talk in v1; it was added later, beside hands-free voice mode.
 - **Q5, Mac:** both iOS and Mac ship to TestFlight.
 - **Q6, minimum OS:** iOS 26 / macOS 26.
 - **Q7, signing team:** Adam will set it up after the first draft build. The

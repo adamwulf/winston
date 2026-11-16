@@ -5,14 +5,29 @@ import Synchronization
 import VoiceLoop
 
 /// A recognizer that reports what the test tells it to, in place of the on-device speech model.
-/// It still reads the microphone audio the pipeline feeds it, and counts the frames.
+/// It still reads the microphone audio the pipeline feeds it, counts the frames, and notes
+/// where it was loud. Asked to finalize, it does what the analyzer does: waits until it has read
+/// that far, then reports the last volatile result again as final.
 package final class ScriptedRecognizer: Recognizer {
     private struct State {
         var startError: (any Error)?
         var isStarted = false
         var isCancelled = false
+        /// The pipeline finished the input.
+        var inputEnded = false
         var heardFrames = 0
+        /// The first and the last loud frame read, counted from the start of the input.
+        var loudFrames: ClosedRange<Int>?
+        /// The latest result reported, if it was volatile.
+        var lastVolatile: TranscriptPiece?
+        var finalizations: [CMTime] = []
+        var finalizationsFinished = 0
+        var reportsFinalOnFinalizing = true
+        var whenFinalizing: (@MainActor @Sendable (CMTime) async -> Void)?
     }
+
+    /// A sample at least this far from zero is loud: about -30 dBFS.
+    private static let loudSample: Int16 = 1000
 
     package let audioFormat: AVAudioFormat
     private let stream: AsyncThrowingStream<TranscriptPiece, any Error>
@@ -62,8 +77,55 @@ package final class ScriptedRecognizer: Recognizer {
         Task {
             for await input in inputs {
                 let frames = Int(input.buffer.frameLength)
-                state.withLock { $0.heardFrames += frames }
+                let loud = Self.loudFrames(in: input.buffer)
+                state.withLock { state in
+                    if let loud {
+                        let first = state.loudFrames?.lowerBound ?? state.heardFrames + loud.lowerBound
+                        state.loudFrames = first...(state.heardFrames + loud.upperBound)
+                    }
+                    state.heardFrames += frames
+                }
             }
+            state.withLock { $0.inputEnded = true }
+        }
+    }
+
+    /// The first and the last loud frame of `buffer`, which is in `audioFormat`; nil if none is.
+    private static func loudFrames(in buffer: AVAudioPCMBuffer) -> ClosedRange<Int>? {
+        guard let samples = buffer.int16ChannelData?[0] else { return nil }
+        let frames = 0..<Int(buffer.frameLength)
+        let isLoud = { (frame: Int) in abs(Int(samples[frame])) >= Int(loudSample) }
+        guard let first = frames.first(where: isLoud), let last = frames.last(where: isLoud) else { return nil }
+        return first...last
+    }
+
+    /// As the analyzer does: waits until it has read the audio through `time`, then reports the
+    /// last volatile result again as final if it starts before `time`, unless
+    /// `reportsFinalOnFinalizing` is off. `whenFinalizing` runs in between. Throws if it is
+    /// cancelled, or the input ends first.
+    package func finalize(through time: CMTime) async throws {
+        defer { state.withLock { $0.finalizationsFinished += 1 } }
+        let frames = Int((time.seconds * audioFormat.sampleRate).rounded(.up))
+        while heardFrames < frames {
+            if state.withLock({ $0.isCancelled || $0.inputEnded }) {
+                throw CancellationError()
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let whenFinalizing = state.withLock { state in
+            state.finalizations.append(time)
+            return state.whenFinalizing
+        }
+        await whenFinalizing?(time)
+        try Task.checkCancellation()
+        let volatile = state.withLock { state -> TranscriptPiece? in
+            guard state.reportsFinalOnFinalizing else { return nil }
+            defer { state.lastVolatile = nil }
+            return state.lastVolatile
+        }
+        if var final = volatile, final.range.start < time {
+            final.isFinal = true
+            continuation.yield(final)
         }
     }
 
@@ -82,7 +144,46 @@ package final class ScriptedRecognizer: Recognizer {
         isFinal: Bool = false,
         alternatives: [String] = []
     ) {
-        continuation.yield(.spoken(text, over: seconds, isFinal: isFinal, alternatives: alternatives))
+        let piece = TranscriptPiece.spoken(text, over: seconds, isFinal: isFinal, alternatives: alternatives)
+        state.withLock { $0.lastVolatile = isFinal ? nil : piece }
+        continuation.yield(piece)
+    }
+
+    /// Runs inside `finalize(through:)` with the time it was given, once it has read that far
+    /// and before the last volatile result is reported as final: for a test to report what the
+    /// analyzer finalizes then, or to hold it up.
+    package var whenFinalizing: (@MainActor @Sendable (CMTime) async -> Void)? {
+        get { state.withLock { $0.whenFinalizing } }
+        set { state.withLock { $0.whenFinalizing = newValue } }
+    }
+
+    /// When off, `finalize(through:)` returns without reporting its last volatile result as final,
+    /// as when the analyzer has published its final result but the loop hasn't read it yet: the
+    /// test reports it when it likes.
+    package var reportsFinalOnFinalizing: Bool {
+        get { state.withLock { $0.reportsFinalOnFinalizing } }
+        set { state.withLock { $0.reportsFinalOnFinalizing = newValue } }
+    }
+
+    /// The times `finalize(through:)` was asked to reach, in seconds, oldest first.
+    package var finalizations: [Double] {
+        state.withLock { $0.finalizations.map(\.seconds) }
+    }
+
+    /// How many times `finalize(through:)` has returned or thrown.
+    package var finalizationsFinished: Int {
+        state.withLock { $0.finalizationsFinished }
+    }
+
+    /// The stretch of the timeline from the first to the last loud sample it has been fed, in
+    /// seconds rounded inwards to whole milliseconds, so words scripted over it fall inside the
+    /// audio that was loud. Nil while all it has been fed is quiet.
+    package var soundHeard: ClosedRange<Double>? {
+        let loud = state.withLock { $0.loudFrames }
+        guard let loud else { return nil }
+        let start = (Double(loud.lowerBound) / audioFormat.sampleRate * 1000).rounded(.up) / 1000
+        let end = (Double(loud.upperBound) / audioFormat.sampleRate * 1000).rounded(.down) / 1000
+        return start <= end ? start...end : nil
     }
 
     /// Ends the results with an error, as when the speech model fails.

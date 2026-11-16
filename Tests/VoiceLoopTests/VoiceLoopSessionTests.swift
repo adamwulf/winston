@@ -1286,6 +1286,436 @@ struct SoundCueTests {
     }
 }
 
+// MARK: - Push-to-talk
+
+// The pretend microphone talks (`isVoicePresent`) for whole tests here: push-to-talk decides
+// what the analyzer hears of it. `ScriptedRecognizer.soundHeard` is where it was loud on the
+// analyzer's timeline, so words scripted over it were said during a hold.
+
+/// A loop in push-to-talk, started, with a pause threshold short enough that any utterance
+/// sent at a pause would be sent at once, and with over a second of audio fed, so audio from
+/// the start of the timeline is older than any press.
+@MainActor
+private func pushToTalkLoop(on bed: VoiceTestBed, soundCues: Bool = false) async throws -> VoiceLoop {
+    let loop = bed.makeLoop(soundCues: soundCues)
+    loop.pauseThreshold = .milliseconds(50)
+    loop.isPushToTalk = true
+    try await loop.start()
+    #expect(await eventually { bed.recognizer.heardFrames > 16_000 })
+    return loop
+}
+
+/// Presses the button with the pretend microphone talking, and waits until the analyzer has been
+/// fed some of it. Returns where it was loud, for words said during the hold.
+@MainActor
+private func press(_ loop: VoiceLoop, talkingOn bed: VoiceTestBed) async throws -> ClosedRange<Double> {
+    bed.audio.isVoicePresent = true
+    loop.beginTalking()
+    #expect(loop.isTalking)
+    #expect(await eventually { bed.recognizer.soundHeard != nil })
+    return try #require(bed.recognizer.soundHeard)
+}
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct PushToTalkTests {
+    @Test func aPressBeforeTheLoopIsListeningDoesNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+        loop.isPushToTalk = true
+        #expect(!loop.canTalk)
+        loop.beginTalking()
+        #expect(!loop.isTalking)
+        // A view showing whether it can talk is told when that changes.
+        let changed = ChangeFlag()
+        withObservationTracking {
+            _ = loop.canTalk
+        } onChange: {
+            MainActor.assumeIsolated { changed.isSet = true }
+        }
+        var couldTalkWhileStarting = true
+        var talkedWhileStarting = true
+        bed.whenRecognizerStarts = {
+            loop.beginTalking()
+            couldTalkWhileStarting = loop.canTalk
+            talkedWhileStarting = loop.isTalking
+        }
+
+        try await loop.start()
+        defer { loop.stop() }
+
+        #expect(!couldTalkWhileStarting)
+        #expect(!talkedWhileStarting)
+        #expect(!loop.isTalking)
+        #expect(loop.canTalk)
+        #expect(changed.isSet)
+        // Without push-to-talk there is nothing to hold.
+        loop.isPushToTalk = false
+        #expect(!loop.canTalk)
+    }
+
+    @Test func whatIsHeardWithoutAHoldIsNotSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        bed.recognizer.hear("Hello.", over: later, isFinal: true)
+        try await settle()
+
+        #expect(sent.texts.isEmpty)
+        #expect(loop.state == .listening(partial: ""))
+        #expect(!loop.isTalking)
+    }
+
+    @Test(arguments: [true, false])
+    func theAnalyzerIsFedSilenceExceptDuringAHold(echoCancellation: Bool) async throws {
+        let bed = VoiceTestBed()
+        bed.hasVoiceProcessing = echoCancellation
+        bed.audio.isVoicePresent = true
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+
+        // The microphone talks, but the analyzer's timeline runs on in silence.
+        let fed = bed.recognizer.heardFrames
+        #expect(await eventually { bed.recognizer.heardFrames > fed + 32_000 })
+        #expect(bed.recognizer.soundHeard == nil)
+
+        let held = try await press(loop, talkingOn: bed)
+        loop.endTalking()
+        #expect(!loop.isTalking)
+
+        // Once the tap is past the release, nothing loud is fed again.
+        let released = bed.recognizer.heardFrames
+        #expect(await eventually { bed.recognizer.heardFrames > released + 16_000 })
+        let heardByThen = try #require(bed.recognizer.soundHeard)
+        #expect(heardByThen.lowerBound == held.lowerBound)
+        #expect(heardByThen.upperBound >= held.upperBound)
+        let later = bed.recognizer.heardFrames
+        #expect(await eventually { bed.recognizer.heardFrames > later + 32_000 })
+        #expect(bed.recognizer.soundHeard == heardByThen)
+    }
+
+    @Test(arguments: [true, false])
+    func whatIsSaidDuringAHoldIsSentOnceAfterTheReleaseAndNotAtAPause(echoCancellation: Bool) async throws {
+        let bed = VoiceTestBed()
+        bed.hasVoiceProcessing = echoCancellation
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello", over: held)
+        #expect(await eventually { loop.state == .listening(partial: "Hello") })
+        bed.recognizer.hear("Hello there.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there.") })
+        // Many times the pause threshold, with nothing more heard: still held, so not sent.
+        try await settle(.milliseconds(500))
+        #expect(sent.texts.isEmpty)
+
+        loop.endTalking()
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        #expect(loop.state == .listening(partial: ""))
+        // Sent once the recognizer finalized the audio through the release, after the words.
+        #expect(bed.recognizer.finalizations.count == 1)
+        #expect(try #require(bed.recognizer.finalizations.first) > held.upperBound)
+        try await settle()
+        #expect(sent.texts == ["Hello there."])
+    }
+
+    @Test func heldWordsTheRecognizerReportsSecondsAfterTheReleaseAreSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        // The recognizer is slow to finalize.
+        bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+
+        loop.endTalking()
+        #expect(await eventually { !bed.recognizer.finalizations.isEmpty })
+        let release = try #require(bed.recognizer.finalizations.first)
+        try await settle(.seconds(2))
+        #expect(sent.texts.isEmpty)
+
+        // Two seconds on, its final result for the hold, through the release, arrives.
+        bed.recognizer.hear("Hello there.", over: held.lowerBound...release, isFinal: true)
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+    }
+
+    @Test func aHoldTheRecognizerNeverFinishesIsSentAfterTheTimeoutWithWhatWasHeard() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+        bed.recognizer.hear("Hello there", over: held)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there") })
+
+        loop.endTalking()
+        try await settle(.seconds(2))
+        #expect(sent.texts.isEmpty)
+
+        #expect(await eventually { sent.texts == ["Hello there"] })
+    }
+
+    @Test func wordsTimedBeforeThePressOrAfterTheReleaseAreLeftOut() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+
+        // A late result for audio from long before the press.
+        bed.recognizer.hear("Earlier.", over: 0...0.5, isFinal: true)
+        bed.recognizer.hear("Hello there.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there.") })
+        // As it finalizes, the recognizer reports a word from the silence after the release.
+        let recognizer = bed.recognizer
+        recognizer.whenFinalizing = { release in
+            recognizer.hear("Mhm.", over: (release.seconds + 0.1)...(release.seconds + 0.5), isFinal: true)
+        }
+        loop.endTalking()
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        try await settle()
+        #expect(sent.texts == ["Hello there."])
+    }
+
+    @Test func aReleaseWithNothingHeardSendsNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        loop.beginTalking()
+        loop.endTalking()
+
+        #expect(await eventually { bed.recognizer.finalizations.count == 1 })
+        try await settle()
+        #expect(sent.texts.isEmpty)
+        #expect(loop.state == .listening(partial: ""))
+        // Once the release is over, a reply plays.
+        loop.speak("Hi.")
+        #expect(await eventually { loop.state == .speaking })
+        #expect(sent.texts.isEmpty)
+    }
+
+    @Test func aFinalResultReadOnlyAfterFinalizingReturnedIsStillSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello", over: held)
+        #expect(await eventually { loop.state == .listening(partial: "Hello") })
+        // Finalizing publishes its final result, but the loop reads it only after it returned.
+        bed.recognizer.reportsFinalOnFinalizing = false
+
+        loop.endTalking()
+        #expect(await eventually { bed.recognizer.finalizationsFinished == 1 })
+        let release = try #require(bed.recognizer.finalizations.first)
+        // Longer than a pause check: the volatile word isn't final yet, so it waits.
+        try await settle(.milliseconds(200))
+        #expect(sent.texts.isEmpty)
+        bed.recognizer.hear("Hello there.", over: held.lowerBound...release, isFinal: true)
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+    }
+
+    /// Presses, says "Hello there." and releases, with the recognizer slow to finalize, so the
+    /// release is still waiting for it.
+    private func releaseWaitingForTheRecognizer(_ loop: VoiceLoop, on bed: VoiceTestBed) async throws {
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello there.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there.") })
+        bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+        loop.endTalking()
+        #expect(await eventually { bed.recognizer.finalizations.count == 1 })
+    }
+
+    @Test func aReleasedHoldIsSentWithWhatWasHeardWhenTheEngineIsRebuiltMeanwhile() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        try await releaseWaitingForTheRecognizer(loop, on: bed)
+        #expect(sent.texts.isEmpty)
+
+        // A settings change rebuilds the engine, as AirPods connecting can.
+        loop.pausesOtherAudio = false
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func aReleasedHoldIsSentWithWhatWasHeardWhenVoiceModeStopsMeanwhile() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        let sent = UtteranceLog(loop)
+        try await releaseWaitingForTheRecognizer(loop, on: bed)
+        #expect(sent.texts.isEmpty)
+
+        // Adam lets go and closes the sheet at once.
+        loop.stop()
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        #expect(loop.state == .off)
+    }
+
+    @Test func aHoldStillHeldWhenTheEngineIsRebuiltIsDroppedButCarriesOn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Never mind.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Never mind.") })
+
+        loop.pausesOtherAudio = false
+
+        // What it heard goes with the old engine, as an utterance in progress does hands-free.
+        #expect(await eventually { bed.recognizers.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.isTalking)
+        #expect(loop.state == .listening(partial: ""))
+        try await settle()
+        #expect(sent.texts.isEmpty)
+        // The hold carries on into the new engine.
+        #expect(await eventually { bed.recognizer.soundHeard != nil })
+        let heard = try #require(bed.recognizer.soundHeard)
+        bed.recognizer.hear("Hello.", over: heard, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello.") })
+        loop.endTalking()
+        #expect(await eventually { sent.texts == ["Hello."] })
+    }
+
+    @Test func aPressStopsTheReplyAndOneArrivingDuringTheHoldWaitsForTheRelease() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        loop.speak(longReply)
+        loop.speak("Two.")
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+
+        loop.beginTalking()
+
+        #expect(loop.state == .listening(partial: ""))
+        // The engine fades a stopped player out over its next render pass or two.
+        try await settle(.milliseconds(50))
+        let playedWhenPressed = bed.audio.playedFrames
+        loop.speak("Hi.")
+        try await settle()
+        #expect(loop.state == .listening(partial: ""))
+        #expect(bed.audio.playedFrames == playedWhenPressed)
+
+        loop.endTalking()
+
+        // Nothing was heard, so once the release is over the reply plays, and only it: the
+        // queued one was dropped.
+        #expect(await eventually { loop.state == .speaking })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(bed.audio.playedFrames > playedWhenPressed)
+        try await settle()
+        #expect(loop.state == .listening(partial: ""))
+    }
+
+    @Test func aSecondPressBeforeTheFirstIsSentKeepsBothHoldsAsOneUtterance() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let first = try await press(loop, talkingOn: bed)
+        bed.recognizer.whenFinalizing = { _ in try? await Task.sleep(for: .seconds(30)) }
+        loop.endTalking()
+        #expect(await eventually { bed.recognizer.finalizations.count == 1 })
+        let firstRelease = try #require(bed.recognizer.finalizations.first)
+        bed.recognizer.whenFinalizing = nil
+
+        loop.beginTalking()
+        // The first hold's words, reported late, still count.
+        bed.recognizer.hear("Hello", over: first, isFinal: true)
+        #expect(await eventually { (bed.recognizer.soundHeard?.upperBound ?? 0) > firstRelease + 0.5 })
+        let second = try #require(bed.recognizer.soundHeard).upperBound
+        bed.recognizer.hear("there.", over: (firstRelease + 0.001)...second, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello there.") })
+        #expect(sent.texts.isEmpty)
+        loop.endTalking()
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
+        try await settle()
+        #expect(sent.texts == ["Hello there."])
+    }
+
+    @Test func turningPushToTalkOffListensHandsFreeAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello.", over: held, isFinal: true)
+        #expect(await eventually { loop.state == .listening(partial: "Hello.") })
+        bed.audio.isVoicePresent = false
+
+        loop.isPushToTalk = false
+
+        // The hold ends, and what it heard is sent at a pause, as hands-free.
+        #expect(!loop.isTalking)
+        #expect(await eventually { sent.texts == ["Hello."] })
+        // Without a press, the microphone is heard, and what it says is sent.
+        bed.audio.isVoicePresent = true
+        let heard = try #require(bed.recognizer.soundHeard)
+        #expect(await eventually { (bed.recognizer.soundHeard?.upperBound ?? 0) > heard.upperBound + 1 })
+        bed.audio.isVoicePresent = false
+        bed.recognizer.hear("Again.", over: later, isFinal: true)
+        #expect(await eventually { sent.texts == ["Hello.", "Again."] })
+        // And a press does nothing.
+        loop.beginTalking()
+        #expect(!loop.isTalking)
+    }
+
+    @Test func aPressAndAReleaseEachPlayTheirCueAndOpeningOrClosingPlaysNone() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed, soundCues: true)
+        try await settle()
+        // Starting isn't a press: Adam can't talk yet.
+        #expect(bed.audio.playedFrames == 0)
+
+        loop.beginTalking()
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        try await settle()
+        let pressCue = bed.audio.playedFrames
+        loop.endTalking()
+        #expect(await eventually { bed.audio.playedFrames > pressCue })
+        try await settle()
+        let releaseCue = bed.audio.playedFrames - pressCue
+
+        // The same taps, in the other order.
+        #expect(abs(releaseCue - pressCue) <= pressCue / 10)
+        loop.stop()
+        try await settle()
+        #expect(bed.audio.playedFrames == pressCue + releaseCue)
+    }
+
+    @Test func withoutEchoCancellationTheMicrophoneOpensOnceTheStartCueHasPlayed() async throws {
+        let bed = VoiceTestBed()
+        bed.hasVoiceProcessing = false
+        let loop = try await pushToTalkLoop(on: bed, soundCues: true)
+        defer { loop.stop() }
+        bed.audio.isVoicePresent = true
+
+        loop.beginTalking()
+
+        // The microphone would hear the cue as loud as it plays, so it stays muted meanwhile.
+        try await settle(.milliseconds(200))
+        #expect(bed.recognizer.soundHeard == nil)
+        #expect(await eventually { bed.recognizer.soundHeard != nil })
+    }
+}
+
 // MARK: - Voices
 
 @Suite struct VoiceOptionTests {

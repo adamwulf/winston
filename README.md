@@ -1,7 +1,8 @@
 # Winston
 
 A personal iOS and Mac app for talking to Claude bots over Telegram, with a text
-mode and a hands-free voice mode. See [PLAN.md](PLAN.md) for the design.
+mode, a hands-free voice mode, and [push-to-talk](#push-to-talk). See
+[PLAN.md](PLAN.md) for the design.
 
 ## Layout
 
@@ -146,7 +147,7 @@ can't see them.
 | A test can't have | Seam | Stand-in, under `Tests/` |
 |---|---|---|
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
-| Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard |
+| Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment`, and the `Recognizer` it makes: `start(inputs:)`, `results`, `finalize(through:)` and `cancel()` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard. Asked to finalize, it waits until it has read that far and reports its last volatile result again as final, as the analyzer does. It notes where the audio it is fed was loud (`soundHeard`) |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
 | The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words the test gives it |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
@@ -244,6 +245,48 @@ files are listed under the bundles that test it (`Sources/VoiceLoop/` under
 `VoiceLoopTests`), and a bundle's total counts its test files too. The test
 action's result bundle, in the build's artifacts, opens in Xcode with the full
 report.
+
+## Push-to-talk
+
+In text mode, a long press on the mic button (or its Push to Talk
+accessibility action) opens a sheet with one big button. What is said while
+it is held is sent as one 🎙️ message after it is let go. Until voice mode is
+listening (`VoiceLoop.canTalk`), the button is disabled and says Starting….
+Close, or swiping
+the sheet away, returns to text mode. Replies are spoken while the sheet is
+open, as in voice mode, but not during a hold or before its message is sent,
+and a press stops the one being spoken.
+
+Turning the microphone on takes a while (the audio session, voice processing
+settling for about 200 ms, the recognizer starting), and the recognizer
+reports words 0.9 to 3.8 s after they are spoken (see
+[the barge-in latency research](docs/research/voice-barge-in-latency.md)). So
+`AppModel.setPushToTalk(_:)` runs the voice loop for as long as the sheet is
+open, with `VoiceLoop.isPushToTalk` on, and a press only unmutes the
+microphone. While the button isn't held, the microphone tap feeds the
+recognizer silence of the same length, so its timeline runs on. The tap
+decides frame by frame from when each buffer was captured, so the words spoken
+right up to the release are kept, although their buffer reaches it a tenth of
+a second or more later.
+
+The release mutes the microphone at once, but results that arrive afterwards
+still count: words are kept by their time in the audio, inside the hold, not
+by when the recognizer reports them. The release asks the recognizer to
+finalize the audio up to it (`SpeechAnalyzer.finalize(through:)`, which the
+research measured reporting about 0.1 s after the call), and the message is
+sent once the recognizer has reported everything up to the release: a result
+reaching the release has been read, and nothing in the transcript is still
+volatile. Finalizing publishes its results before it returns, but the app may
+read them after, so its return alone doesn't send. If that hasn't happened 0.5
+s after it returns, or 4 s after the release, the message is sent with what
+was heard, and so it is if voice mode stops (Close right after letting go) or
+the engine is rebuilt meanwhile. Nothing is sent if nothing was heard. A press
+before then carries on: both holds are sent as one message.
+
+A press plays the rising taps and a release the falling ones; opening and
+closing the sheet play neither. Without echo cancellation the microphone would
+hear the taps, so it stays muted until they have played, plus 0.3 s, as after
+a reply.
 
 ## Kokoro voices
 

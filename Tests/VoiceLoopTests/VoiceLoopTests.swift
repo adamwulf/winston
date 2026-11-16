@@ -320,10 +320,142 @@ import Testing
     }
 }
 
+/// The gate on its own, with buffers of 0.1 s at 48 kHz captured at host times the tests choose,
+/// and an analyzer timeline at 16 kHz.
+@Suite struct MicrophoneGateTests {
+    let frames: AVAudioFrameCount = 4_800
+    let rate = 48_000.0
+    let base = AVAudioTime.hostTime(forSeconds: 1_000)
+
+    /// The host time `seconds` after the test's start.
+    func host(_ seconds: Double) -> UInt64 {
+        base + AVAudioTime.hostTime(forSeconds: seconds)
+    }
+
+    /// The frames `gate` keeps of the buffer captured at `seconds`, which starts `seconds` into
+    /// the analyzer's timeline.
+    func kept(by gate: MicrophoneGate, capturedAt seconds: Double) -> Range<Int> {
+        gate.keptFrames(
+            frames,
+            sampleRate: rate,
+            capturedAt: host(seconds),
+            audioStart: CMTime(value: CMTimeValue(seconds * 16_000), timescale: 16_000)
+        )
+    }
+
+    func audio(_ seconds: Double) -> CMTime {
+        CMTime(value: CMTimeValue(seconds * 16_000), timescale: 16_000)
+    }
+
+    @Test func whilePushToTalkIsOffEverythingIsKept() {
+        let gate = MicrophoneGate()
+        gate.open(at: host(0.15))
+        gate.close(at: host(0.16))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<4_800)
+        #expect(gate.takeHeldThrough() == nil)
+    }
+
+    @Test func onlyTheFramesCapturedDuringAHoldAreKept() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        #expect(kept(by: gate, capturedAt: 0).isEmpty)
+
+        // Pressed halfway through a buffer that reaches the tap later.
+        gate.open(at: host(0.15))
+        #expect(kept(by: gate, capturedAt: 0.1) == 2_400..<4_800)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        // Released a quarter of the way into a buffer still to come.
+        gate.close(at: host(0.325))
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.3) == 0..<1_200)
+        // Where it ended on the analyzer's timeline, once.
+        #expect(gate.takeHeldThrough() == audio(0.325))
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.4).isEmpty)
+    }
+
+    @Test func aHoldWithinOneBufferKeepsJustItsFrames() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.12))
+        gate.close(at: host(0.17))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 960..<3_360)
+        #expect(gate.takeHeldThrough() == audio(0.17))
+    }
+
+    @Test func aPressBeforeTheTapReachesTheLastReleaseStartsANewHoldAfterIt() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.close(at: host(0.15))
+        gate.open(at: host(0.16))
+
+        // The first hold ends as released, and the next begins with the next buffer. The loop
+        // carries the first one's utterance on, so it needs no end.
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        gate.close(at: host(0.35))
+        #expect(kept(by: gate, capturedAt: 0.3) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == audio(0.35))
+    }
+
+    @Test func aPressAndReleaseBeforeTheTapReachesTheLastReleaseAreDropped() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.close(at: host(0.15))
+        gate.open(at: host(0.16))
+        gate.close(at: host(0.17))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == audio(0.15))
+        #expect(kept(by: gate, capturedAt: 0.2).isEmpty)
+    }
+
+    @Test func endingTheHoldMutesAndTurningPushToTalkOffKeepsEverything() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.endHold()
+        #expect(kept(by: gate, capturedAt: 0.2).isEmpty)
+
+        gate.open(at: host(0.1))
+        gate.setEnabled(false)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        gate.setEnabled(true)
+        #expect(kept(by: gate, capturedAt: 0.3).isEmpty)
+    }
+
+    @Test func zeroingFramesSilencesAllButTheKeptOnes() throws {
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8))
+        buffer.frameLength = 8
+        let samples = try #require(buffer.int16ChannelData?[0])
+        for frame in 0..<8 {
+            samples[frame] = 100
+        }
+
+        zeroFrames(of: buffer, outside: 2..<5)
+        #expect((0..<8).map { samples[$0] } == [0, 0, 100, 100, 100, 0, 0, 0])
+        zeroFrames(of: buffer, outside: 3..<3)
+        #expect((0..<8).allSatisfy { samples[$0] == 0 })
+    }
+}
+
 @Suite struct TranscriptTests {
-    /// A result whose runs carry word timings in seconds.
-    func piece(_ words: [(String, Double)], end: Double, final: Bool = false, alternatives: [[(String, Double)]] = []) -> TranscriptPiece {
-        let start = words.first?.1 ?? end
+    /// A result whose runs carry word timings in seconds. Its range starts at `start`, or else at
+    /// its first word.
+    func piece(
+        _ words: [(String, Double)],
+        start: Double? = nil,
+        end: Double,
+        final: Bool = false,
+        alternatives: [[(String, Double)]] = []
+    ) -> TranscriptPiece {
+        let start = start ?? words.first?.1 ?? end
         return TranscriptPiece(
             text: timed(words, end: end),
             alternatives: alternatives.map { timed($0, end: end) },
@@ -526,6 +658,99 @@ import Testing
         transcript.consume(through: clock.time)
         let applied = transcript.apply(piece([("done", 0.7)], end: 1.0, final: true))
         #expect(!applied)
+    }
+
+    @Test func closedAudioLeavesOutTheWordsStartingFromItWhenTheirResultsArrive() {
+        var transcript = Transcript()
+        transcript.consume(through: time(1))
+        transcript.close(at: time(3))
+        // A result straddling both ends keeps only the words between them.
+        var applied = transcript.apply(piece([("before", 0.5), ("hello", 1.2), ("there", 2), ("mhm", 3.1)], end: 3.5))
+        #expect(applied)
+        #expect(transcript.text == "hello there")
+        // Its final, however late, the same.
+        applied = transcript.apply(piece(
+            [("before", 0.5), ("Hello", 1.2), ("there.", 2), ("Mhm.", 3.1)], end: 3.5, final: true,
+            alternatives: [[("before", 0.5), ("Hello", 1.2), ("their.", 2), ("Mhm.", 3.1)]]
+        ))
+        #expect(applied)
+        // A result wholly after the closed time is left out.
+        applied = transcript.apply(piece([("Yeah.", 4)], end: 4.5, final: true))
+        #expect(!applied)
+        #expect(transcript.take() == Utterance(text: "Hello there.", alternatives: ["Hello their."]))
+    }
+
+    @Test func aWordTakenBackPastTheClosedAudioIsDropped() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello.", 0.5)], end: 1, final: true))
+        _ = transcript.apply(piece([("uh", 1.2)], end: 1.8))
+        #expect(transcript.text == "Hello. uh")
+
+        // The transcriber takes the word back, in a result reaching past the closed audio.
+        var applied = transcript.apply(piece([], start: 1.2, end: 2.5))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+        #expect(!transcript.hasVolatileText)
+
+        // A final one does the same.
+        _ = transcript.apply(piece([("uh", 1.2)], end: 1.8))
+        applied = transcript.apply(piece([], start: 1.2, end: 2.5, final: true))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+    }
+
+    @Test func aWordMovedPastTheClosedAudioIsDropped() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello.", 0.5)], end: 1, final: true))
+        _ = transcript.apply(piece([("uh", 1.8)], end: 2))
+        #expect(transcript.text == "Hello. uh")
+        #expect(transcript.hasVolatileText)
+
+        // Its correction times it after the end, from the same start: none of it is kept.
+        let applied = transcript.apply(piece([("uh", 2.1)], start: 1.8, end: 2.4))
+        #expect(applied)
+        #expect(transcript.text == "Hello.")
+    }
+
+    @Test func aResultPastTheClosedAudioLeavesWhatItDoesNotOverlap() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("Hello", 0.5)], end: 1.5))
+
+        // Wholly after the volatile result, so it was finalized without being sent again.
+        let applied = transcript.apply(piece([("Mhm.", 2.5)], end: 3, final: true))
+        #expect(!applied)
+        #expect(transcript.text == "Hello")
+    }
+
+    @Test func outsideClosedAudioAnEmptyLateResultStillChangesNothing() {
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("one", 0)], end: 1, final: true))
+        _ = transcript.take()
+        _ = transcript.apply(piece([("two", 2)], end: 2.5))
+
+        // It covers only taken audio, so as before it doesn't replace the volatile result.
+        let applied = transcript.apply(piece([("one", 0)], start: 0, end: 2.6))
+        #expect(!applied)
+        #expect(transcript.text == "two")
+    }
+
+    @Test func takingKeepsTheAudioClosedUntilItIsOpened() {
+        var transcript = Transcript()
+        transcript.close(at: time(2))
+        _ = transcript.apply(piece([("one", 1)], end: 1.5, final: true))
+        _ = transcript.take()
+        transcript.consume(through: time(2))
+        // Closed at the consumed audio: nothing new is kept.
+        var applied = transcript.apply(piece([("two", 2.5)], end: 3, final: true))
+        #expect(!applied)
+
+        transcript.open()
+        applied = transcript.apply(piece([("two", 2.5)], end: 3, final: true))
+        #expect(applied)
+        #expect(transcript.text == "two")
     }
 
     @Test func wordsWithoutTimingAreDroppedWhenTrimming() {
