@@ -8,14 +8,15 @@ import WinstonCore
 import WinstonLogging
 
 /// The bar under the messages: a text field with a + button for files and photos in text mode, or the
-/// live transcript in voice mode, with the voice/text toggle to their left in both. (Double-tapping a
-/// message toggles 👍 on it.)
+/// live transcript in voice mode, with the voice/text toggle to their left in both. A long press on the
+/// toggle in text mode opens push-to-talk. (Double-tapping a message toggles 👍 on it.)
 struct BottomBar: View {
     private static let log = Logger(label: "app.attach")
     @Environment(AppModel.self) private var model
     @Binding var draft: String
     @State private var isPickingFile = false
     @State private var pickerNotificationCount = 0
+    @State private var isShowingPushToTalk = false
     #if os(iOS)
     @State private var isPickingPhoto = false
     @State private var photoItem: PhotosPickerItem?
@@ -46,10 +47,21 @@ struct BottomBar: View {
         .background(.bar)
         .onChange(of: model.notificationOpenCount) {
             isPickingFile = false
+            isShowingPushToTalk = false
             #if os(iOS)
             isPickingPhoto = false
             photoItem = nil
             #endif
+        }
+        // Closing it, however it closes, leaves push-to-talk for text mode.
+        .sheet(isPresented: $isShowingPushToTalk, onDismiss: leavePushToTalk) {
+            PushToTalkSheet()
+        }
+        // Voice mode ended under it, such as a failed start, whose error then shows.
+        .onChange(of: model.isVoiceMode) {
+            if !model.isVoiceMode {
+                isShowingPushToTalk = false
+            }
         }
     }
 
@@ -241,14 +253,36 @@ struct BottomBar: View {
 
     // MARK: - Both modes
 
+    /// A tap switches modes. In text mode, a long press opens push-to-talk instead.
     private var modeToggle: some View {
         Button(
             model.isVoiceMode ? "Text Mode" : "Voice Mode",
             systemImage: model.isVoiceMode ? "keyboard" : "mic"
         ) {
+            // The touch up that ends a long press would switch modes too.
+            guard !isShowingPushToTalk else { return }
             Task { await model.setVoiceMode(!model.isVoiceMode) }
         }
         .labelStyle(.iconOnly)
+        .simultaneousGesture(
+            LongPressGesture().onEnded { _ in openPushToTalk() },
+            isEnabled: !model.isVoiceMode
+        )
+        .accessibilityActions {
+            if !model.isVoiceMode {
+                Button("Push to Talk", action: openPushToTalk)
+            }
+        }
+    }
+
+    private func openPushToTalk() {
+        guard !model.isVoiceMode, !isShowingPushToTalk else { return }
+        isShowingPushToTalk = true
+        Task { await model.setPushToTalk(true) }
+    }
+
+    private func leavePushToTalk() {
+        Task { await model.setPushToTalk(false) }
     }
 }
 
