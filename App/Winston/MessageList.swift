@@ -34,6 +34,8 @@ struct MessageList: View {
                 .padding()
             }
             .defaultScrollAnchor(.bottom)
+            // Dragging the messages down pulls the keyboard down with the finger, as in Messages.
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: model.currentMessages.last?.id) { oldID, newestID in
                 guard let newestID else { return }
                 // The list appears before the history loads, so going from no messages to some is usually the
