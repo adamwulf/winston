@@ -185,8 +185,10 @@ public final class VoiceLoop {
         var end: CMTime?
         /// Asks the recognizer to finalize the audio through `end`.
         var finalizing: Task<Void, Never>?
-        /// Set once the recognizer has finalized the audio through `end`.
-        var isFinalized = false
+        /// When the recognizer finished finalizing the audio through `end`.
+        var finalized: ContinuousClock.Instant?
+        /// The end of the latest result handled since the release, on the analyzer's timeline.
+        var heardThrough: CMTime?
     }
 
     /// The hold last released, until its utterance is sent. Nil otherwise.
@@ -492,13 +494,15 @@ public final class VoiceLoop {
         updateListeningState()
     }
 
-    /// Push-to-talk's button is released: mutes the microphone at once and plays the stop cue.
-    /// What the hold heard is sent once the recognizer has reported it all: when it has
-    /// finalized the audio through the release (`Recognizer.finalize(through:)`), or reported a
-    /// final result reaching it, or after `releaseTimeout`, whichever comes first. Until then,
-    /// results are kept or dropped by their audio time, inside the hold or not, never by when
-    /// they arrive, so the held words it reports after the release still count. Nothing is sent
-    /// if nothing was heard. Does nothing unless the button is held.
+    /// Push-to-talk's button is released: mutes the microphone at once and plays the stop cue,
+    /// and asks the recognizer to finalize the audio through the release
+    /// (`Recognizer.finalize(through:)`). What the hold heard is sent once the recognizer has
+    /// reported it all, that is once a result reaching the release has been read and nothing in
+    /// the transcript is still volatile; or `finalizeGrace` after finalizing returned, for when
+    /// nothing more comes; or `releaseTimeout` after the release, whichever comes first. Until
+    /// then, results are kept or dropped by their audio time, inside the hold or not, never by
+    /// when they arrive, so the held words it reports after the release still count. Nothing is
+    /// sent if nothing was heard. Does nothing unless the button is held.
     public func endTalking() {
         guard isTalking else { return }
         isTalking = false
@@ -760,11 +764,11 @@ public final class VoiceLoop {
             return
         }
         noteHoldEnd()
-        apply(piece)
-        // A final result through the hold's end: the recognizer has reported all of the hold.
-        if let end = release?.end, piece.isFinal, piece.range.end >= end {
-            sendHeldUtterance(trigger: "finalResult")
+        if let release {
+            self.release?.heardThrough = max(release.heardThrough ?? piece.range.end, piece.range.end)
         }
+        apply(piece)
+        sendHeldUtteranceIfReported()
     }
 
     /// Adds a result to the transcript, interrupting a reply if it is a barge-in.
@@ -821,7 +825,7 @@ public final class VoiceLoop {
         if isPushToTalk {
             // A hold is sent once released and reported, never at a pause.
             noteHoldEnd()
-            if let release, release.isFinalized {
+            if let release, let finalized = release.finalized, finalized.duration(to: .now) >= Self.finalizeGrace {
                 sendHeldUtterance(trigger: "finalized")
             } else if let release, release.started.duration(to: .now) >= Self.releaseTimeout {
                 sendHeldUtterance(trigger: "timeout")
@@ -859,6 +863,12 @@ public final class VoiceLoop {
     /// it was spoken (docs/research/voice-barge-in-latency.md), so a hold's last words are in by
     /// then even if finalizing fails.
     private static let releaseTimeout: Duration = .seconds(4)
+
+    /// How long after finalizing returned a released hold waits for its results to be reported,
+    /// before it is sent with what has been heard. Finalizing publishes its results before it
+    /// returns, but the listening task may read them later; this is the fallback for when no
+    /// result reaching the release comes, or the volatile text never turns final.
+    private static let finalizeGrace: Duration = .milliseconds(500)
 
     private func pushToTalkChanged() {
         Self.log.notice("push to talk changed", ["on": isPushToTalk])
@@ -898,17 +908,28 @@ public final class VoiceLoop {
                     return
                 }
                 guard !Task.isCancelled else { return }
-                self?.release?.isFinalized = true
+                // Its results may not have been read yet: they send it when they are, or the
+                // pause check does after `finalizeGrace`.
+                self?.release?.finalized = .now
+                self?.sendHeldUtteranceIfReported()
             }
         }
         self.release = release
     }
 
+    /// Sends the released hold's utterance if the recognizer has reported all of it: a result
+    /// reaching the hold's end has been read, and nothing in the transcript is still volatile.
+    /// Results come in the order of their audio, so every final result for the hold has been
+    /// read by then, however late it came.
+    private func sendHeldUtteranceIfReported() {
+        guard let release, let end = release.end, let heard = release.heardThrough,
+              heard >= end, !transcript.hasVolatileText else { return }
+        sendHeldUtterance(trigger: "reported")
+    }
+
     /// Sends what the released hold heard, if anything, and keeps nothing more until the next
     /// hold: what the recognizer reports later for the hold's audio is dropped, as for any
-    /// utterance sent. `trigger` says what decided it, for the timeline log. The next pause
-    /// check, not the finalize task itself, sends after finalizing, so the listening task has
-    /// read the results finalizing published by then.
+    /// utterance sent. `trigger` says what decided it, for the timeline log.
     private func sendHeldUtterance(trigger: String) {
         guard let release else { return }
         endRelease()

@@ -1463,9 +1463,32 @@ struct PushToTalkTests {
         try await settle()
         #expect(sent.texts.isEmpty)
         #expect(loop.state == .listening(partial: ""))
-        // The release is over: a reply plays.
+        // Once the release is over, a reply plays.
         loop.speak("Hi.")
-        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .speaking })
+        #expect(sent.texts.isEmpty)
+    }
+
+    @Test func aFinalResultReadOnlyAfterFinalizingReturnedIsStillSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let held = try await press(loop, talkingOn: bed)
+        bed.recognizer.hear("Hello", over: held)
+        #expect(await eventually { loop.state == .listening(partial: "Hello") })
+        // Finalizing publishes its final result, but the loop reads it only after it returned.
+        bed.recognizer.reportsFinalOnFinalizing = false
+
+        loop.endTalking()
+        #expect(await eventually { bed.recognizer.finalizationsFinished == 1 })
+        let release = try #require(bed.recognizer.finalizations.first)
+        // Longer than a pause check: the volatile word isn't final yet, so it waits.
+        try await settle(.milliseconds(200))
+        #expect(sent.texts.isEmpty)
+        bed.recognizer.hear("Hello there.", over: held.lowerBound...release, isFinal: true)
+
+        #expect(await eventually { sent.texts == ["Hello there."] })
     }
 
     @Test func aPressStopsTheReplyAndOneArrivingDuringTheHoldWaitsForTheRelease() async throws {

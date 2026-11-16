@@ -269,12 +269,16 @@ a second or more later.
 
 The release mutes the microphone at once, but results that arrive afterwards
 still count: words are kept by their time in the audio, inside the hold, not
-by when the recognizer reports them. The message is sent once the recognizer
-has reported everything up to the release: when `SpeechAnalyzer.finalize(through:)`
-returns (measured at about 0.1 s after the call), when a final result reaches
-the release, or 4 s after it, whichever comes first. Nothing is sent if
-nothing was heard. A press before then carries on: both holds are sent as one
-message.
+by when the recognizer reports them. The release asks the recognizer to
+finalize the audio up to it (`SpeechAnalyzer.finalize(through:)`, which the
+research measured reporting about 0.1 s after the call), and the message is
+sent once the recognizer has reported everything up to the release: a result
+reaching the release has been read, and nothing in the transcript is still
+volatile. Finalizing publishes its results before it returns, but the app may
+read them after, so its return alone doesn't send. If that hasn't happened 0.5
+s after it returns, or 4 s after the release, the message is sent with what
+was heard. Nothing is sent if nothing was heard. A press before then carries
+on: both holds are sent as one message.
 
 A press plays the rising taps and a release the falling ones; opening and
 closing the sheet play neither. Without echo cancellation the microphone would

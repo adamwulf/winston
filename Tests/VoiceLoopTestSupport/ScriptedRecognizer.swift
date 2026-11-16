@@ -21,6 +21,8 @@ package final class ScriptedRecognizer: Recognizer {
         /// The latest result reported, if it was volatile.
         var lastVolatile: TranscriptPiece?
         var finalizations: [CMTime] = []
+        var finalizationsFinished = 0
+        var reportsFinalOnFinalizing = true
         var whenFinalizing: (@MainActor @Sendable (CMTime) async -> Void)?
     }
 
@@ -98,9 +100,11 @@ package final class ScriptedRecognizer: Recognizer {
     }
 
     /// As the analyzer does: waits until it has read the audio through `time`, then reports the
-    /// last volatile result again as final if it starts before `time`. `whenFinalizing` runs in
-    /// between. Throws if it is cancelled, or the input ends first.
+    /// last volatile result again as final if it starts before `time`, unless
+    /// `reportsFinalOnFinalizing` is off. `whenFinalizing` runs in between. Throws if it is
+    /// cancelled, or the input ends first.
     package func finalize(through time: CMTime) async throws {
+        defer { state.withLock { $0.finalizationsFinished += 1 } }
         let frames = Int((time.seconds * audioFormat.sampleRate).rounded(.up))
         while heardFrames < frames {
             if state.withLock({ $0.isCancelled || $0.inputEnded }) {
@@ -114,7 +118,8 @@ package final class ScriptedRecognizer: Recognizer {
         }
         await whenFinalizing?(time)
         try Task.checkCancellation()
-        let volatile = state.withLock { state in
+        let volatile = state.withLock { state -> TranscriptPiece? in
+            guard state.reportsFinalOnFinalizing else { return nil }
             defer { state.lastVolatile = nil }
             return state.lastVolatile
         }
@@ -152,9 +157,22 @@ package final class ScriptedRecognizer: Recognizer {
         set { state.withLock { $0.whenFinalizing = newValue } }
     }
 
+    /// When off, `finalize(through:)` returns without reporting its last volatile result as final,
+    /// as when the analyzer has published its final result but the loop hasn't read it yet: the
+    /// test reports it when it likes.
+    package var reportsFinalOnFinalizing: Bool {
+        get { state.withLock { $0.reportsFinalOnFinalizing } }
+        set { state.withLock { $0.reportsFinalOnFinalizing = newValue } }
+    }
+
     /// The times `finalize(through:)` was asked to reach, in seconds, oldest first.
     package var finalizations: [Double] {
         state.withLock { $0.finalizations.map(\.seconds) }
+    }
+
+    /// How many times `finalize(through:)` has returned or thrown.
+    package var finalizationsFinished: Int {
+        state.withLock { $0.finalizationsFinished }
     }
 
     /// The stretch of the timeline from the first to the last loud sample it has been fed, in
