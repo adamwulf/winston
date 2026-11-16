@@ -45,6 +45,10 @@ private struct LiveRecognizer: Recognizer {
         try await analyzer.start(inputSequence: inputs)
     }
 
+    func finalize(through time: CMTime) async throws {
+        try await analyzer.finalize(through: time)
+    }
+
     func cancel() async {
         await analyzer.cancelAndFinishNow()
     }

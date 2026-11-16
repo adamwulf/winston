@@ -12,6 +12,11 @@ package protocol Recognizer: Sendable {
     var results: any AsyncSequence<TranscriptPiece, any Error> { get }
     /// Starts reading microphone audio from `inputs`.
     func start(inputs: AsyncStream<AnalyzerInput>) async throws
+    /// Reports the audio up to `time` (on the timeline of `inputs`) now, rather than once more
+    /// audio has come: when it returns, its results for that audio are final and in `results`,
+    /// though maybe not read yet. Waits until it has read that far. Throws if it is cancelled
+    /// or stops first.
+    func finalize(through time: CMTime) async throws
     /// Stops at once.
     func cancel() async
 }
