@@ -320,6 +320,131 @@ import Testing
     }
 }
 
+/// The gate on its own, with buffers of 0.1 s at 48 kHz captured at host times the tests choose,
+/// and an analyzer timeline at 16 kHz.
+@Suite struct MicrophoneGateTests {
+    let frames: AVAudioFrameCount = 4_800
+    let rate = 48_000.0
+    let base = AVAudioTime.hostTime(forSeconds: 1_000)
+
+    /// The host time `seconds` after the test's start.
+    func host(_ seconds: Double) -> UInt64 {
+        base + AVAudioTime.hostTime(forSeconds: seconds)
+    }
+
+    /// The frames `gate` keeps of the buffer captured at `seconds`, which starts `seconds` into
+    /// the analyzer's timeline.
+    func kept(by gate: MicrophoneGate, capturedAt seconds: Double) -> Range<Int> {
+        gate.keptFrames(
+            frames,
+            sampleRate: rate,
+            capturedAt: host(seconds),
+            audioStart: CMTime(value: CMTimeValue(seconds * 16_000), timescale: 16_000)
+        )
+    }
+
+    func audio(_ seconds: Double) -> CMTime {
+        CMTime(value: CMTimeValue(seconds * 16_000), timescale: 16_000)
+    }
+
+    @Test func whilePushToTalkIsOffEverythingIsKept() {
+        let gate = MicrophoneGate()
+        gate.open(at: host(0.15))
+        gate.close(at: host(0.16))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<4_800)
+        #expect(gate.takeHeldThrough() == nil)
+    }
+
+    @Test func onlyTheFramesCapturedDuringAHoldAreKept() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        #expect(kept(by: gate, capturedAt: 0).isEmpty)
+
+        // Pressed halfway through a buffer that reaches the tap later.
+        gate.open(at: host(0.15))
+        #expect(kept(by: gate, capturedAt: 0.1) == 2_400..<4_800)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        // Released a quarter of the way into a buffer still to come.
+        gate.close(at: host(0.325))
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.3) == 0..<1_200)
+        // Where it ended on the analyzer's timeline, once.
+        #expect(gate.takeHeldThrough() == audio(0.325))
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.4).isEmpty)
+    }
+
+    @Test func aHoldWithinOneBufferKeepsJustItsFrames() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.12))
+        gate.close(at: host(0.17))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 960..<3_360)
+        #expect(gate.takeHeldThrough() == audio(0.17))
+    }
+
+    @Test func aPressBeforeTheTapReachesTheLastReleaseStartsANewHoldAfterIt() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.close(at: host(0.15))
+        gate.open(at: host(0.16))
+
+        // The first hold ends as released, and the next begins with the next buffer. The loop
+        // carries the first one's utterance on, so it needs no end.
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == nil)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        gate.close(at: host(0.35))
+        #expect(kept(by: gate, capturedAt: 0.3) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == audio(0.35))
+    }
+
+    @Test func aPressAndReleaseBeforeTheTapReachesTheLastReleaseAreDropped() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.close(at: host(0.15))
+        gate.open(at: host(0.16))
+        gate.close(at: host(0.17))
+
+        #expect(kept(by: gate, capturedAt: 0.1) == 0..<2_400)
+        #expect(gate.takeHeldThrough() == audio(0.15))
+        #expect(kept(by: gate, capturedAt: 0.2).isEmpty)
+    }
+
+    @Test func endingTheHoldMutesAndTurningPushToTalkOffKeepsEverything() {
+        let gate = MicrophoneGate()
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.endHold()
+        #expect(kept(by: gate, capturedAt: 0.2).isEmpty)
+
+        gate.open(at: host(0.1))
+        gate.setEnabled(false)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+        gate.setEnabled(true)
+        #expect(kept(by: gate, capturedAt: 0.3).isEmpty)
+    }
+
+    @Test func zeroingFramesSilencesAllButTheKeptOnes() throws {
+        let format = try #require(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8))
+        buffer.frameLength = 8
+        let samples = try #require(buffer.int16ChannelData?[0])
+        for frame in 0..<8 {
+            samples[frame] = 100
+        }
+
+        zeroFrames(of: buffer, outside: 2..<5)
+        #expect((0..<8).map { samples[$0] } == [0, 0, 100, 100, 100, 0, 0, 0])
+        zeroFrames(of: buffer, outside: 3..<3)
+        #expect((0..<8).allSatisfy { samples[$0] == 0 })
+    }
+}
+
 @Suite struct TranscriptTests {
     /// A result whose runs carry word timings in seconds.
     func piece(_ words: [(String, Double)], end: Double, final: Bool = false, alternatives: [[(String, Double)]] = []) -> TranscriptPiece {

@@ -16,6 +16,7 @@ private func makePlayingPipeline(on bed: VoiceTestBed) throws -> Pipeline {
         voiceProcessing: false,
         ducksOtherAudio: true,
         session: 0,
+        microphoneGate: MicrophoneGate(),
         environment: bed.environment
     )
     try pipeline.engine.start()

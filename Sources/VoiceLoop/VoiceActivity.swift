@@ -46,6 +46,9 @@ final class VoiceActivity: Sendable {
         /// The noise floor it was judged against; nil for the first buffer, which sets it.
         let noiseFloor: Float?
         let isVoice: Bool
+
+        /// A buffer push-to-talk muted, which the detector isn't given: silence, for the log.
+        static let muted = Reading(level: 0, noiseFloor: nil, isVoice: false)
     }
 
     private let detector = Mutex(VoiceActivityDetector())
