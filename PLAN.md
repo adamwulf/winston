@@ -277,10 +277,11 @@ Inside it:
   microphone would hear it at full volume, and the recognizer and pause
   detection would take it for Adam talking.
 - **Push-to-talk** (added later): a long press on the mic button in text mode
-  opens a sheet with one big button. Voice mode runs while it is open, with the
-  microphone muted except while the button is held (the recognizer is fed
-  silence instead), and what was said during a hold is sent once the
-  recognizer has reported it, not at a pause. A press plays the rising taps
+  opens a sheet with one big button, held by a hold anywhere on the sheet but a
+  strip at its top, left for pulling the sheet down. Voice mode runs while it
+  is open, with the microphone muted except while the button is held (the
+  recognizer is fed silence instead), and what was said during a hold is sent
+  once the recognizer has reported it, not at a pause. A press plays the rising taps
   and stops any reply; a release plays the falling ones. See the README's
   Push-to-talk section.
 
