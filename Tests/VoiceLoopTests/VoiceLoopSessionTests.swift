@@ -839,6 +839,27 @@ struct EngineStopTests {
         #expect(bed.audio.engines.count == 1)
     }
 
+    @Test func aReplyAfterTheEngineIsStartedAgainFollowingOneThatPlayedToItsEndIsSpoken() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        let reply = "Hi there, how are you doing today?"
+        loop.speak(reply)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let wholeReply = bed.audio.playedFrames
+
+        // Nothing is being said when the engine stops.
+        stopByItself(engine)
+        #expect(await eventually { engine.isRunning })
+
+        loop.speak(reply)
+        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(bed.audio.playedFrames > wholeReply + wholeReply / 2)
+        #expect(bed.audio.engines.count == 1)
+    }
+
     @Test func aConfigurationChangeThatLeavesTheEngineRunningChangesNothing() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
