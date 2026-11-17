@@ -1,7 +1,13 @@
 # Voice mode: stop the reply's echo coming back as Adam's message
 
-Status: plan only, 2026-11-15. Nothing here is implemented. Adam asked for the
-recommendation to be written down and picked up later.
+Status: written 2026-11-15; "Dropping transcripts that match the reply" was
+built 2026-11-16 (`ReplyEcho`, and `VoiceLoop.apply` and `isEchoAfterReply`).
+It differs from the design below where the design said to judge the whole
+candidate and to consume through a result's end; those sections now say what
+was built, and "Limits" says what that changes. Echo matching applies to
+hands-free listening only: push-to-talk, added after this plan, is unchanged.
+The iPhone's logs have since been read
+(`docs/research/echo-cancellation-regression.md`).
 
 ## The report
 
@@ -124,9 +130,10 @@ A small pure type, for example `ReplyEcho` in a new
 `Sources/VoiceLoop/ReplyEcho.swift`, built from a reply's text:
 
 - **Words:** lowercased, split on anything that isn't a letter or digit, with
-  apostrophes dropped ("I'm" becomes "im"). The reply is matched as it was
-  spoken: the text `SpeechPlayback.text` holds, after markdown stripping and
-  pronunciations.
+  apostrophes dropped ("I'm" becomes "im"). As built, these are
+  `Utterance.words(of:)`, which also drops filler words ("uh", "um") and reads
+  "okay" as "ok". The reply is matched as it was spoken: the text
+  `SpeechPlayback.text` holds, after markdown stripping and pronunciations.
 - **Rule:** align the heard words with the reply's words in order (longest
   common subsequence, exact word equality). The heard text is echo when at
   least half its words align. A one-word result must match a reply word
@@ -134,11 +141,15 @@ A small pure type, for example `ReplyEcho` in a new
 - **Readings:** check the result's text and each of its alternatives
   (`TranscriptPiece.alternatives`). It's echo if any reading is. That is what
   catches "Hey" for "Hi": the recognizer often lists the other reading.
-- **Judge the whole candidate, not each new increment.** During a reply the
-  transcript stays empty (a reply only starts when it is empty, and ignored
-  results don't change it), so the candidate is everything heard since the
-  reply started. More words give a steadier ratio. Judging each ~1 s increment
-  on its own would trip on single misheard words.
+- **What is judged (as built).** The design said to judge everything heard
+  since the reply started. The code didn't hold that: ignored results are
+  never applied to the transcript, so the candidate was only the current
+  result. Judging everything heard would also mean Adam's words had to
+  outnumber the echo before he could interrupt. As built, each result is
+  judged on the words it adds after the echo already judged: a result judged
+  echo has its audio consumed through its last word, so the next result,
+  which repeats those words, is trimmed to what follows them. A single
+  misheard word is still echo when one of its alternatives matches.
 
 Example: "Hey Adam, I can hear you loud and clear" against "Hi Adam, I can
 hear you loud and clear..." aligns 8 of 9 words. "Wait, stop" aligns none.
@@ -151,6 +162,13 @@ cancellation on, before the word-count check: if the candidate is echo of
 `timeline.resultIgnored(reason: "echo", ...)`, `ignoredWhileSpeaking = true`
 and `ignoredResultsThisReply += 1`. `consumeEcho()` then consumes the audio fed
 so far when the reply ends, so the echo's late final results aren't sent.
+
+As built, the echo's audio is also consumed at once, through the end of its
+last word by the words' `audioTimeRange`, not through the result's range: a
+volatile result's range runs on to the audio fed so far, which can hold the
+start of a word Adam begins after the echo. Later results for the echo, its
+final among them, then can't bring it back, during the reply or after a
+barge-in, and a barge-in keeps only the words after it.
 
 Without echo cancellation nothing changes: every result is already ignored
 while a reply plays, and the half-duplex margin is consumed afterwards.
@@ -173,6 +191,12 @@ the last reply; no more echo can come from it.
 
 Log the drop as `resultIgnored(reason: "echoAfterReply", ...)`. Counts only,
 never text, as the logging rules require.
+
+As built, the drop consumes through the end of the result's last word, as
+during a reply, not through the result's end. It applies only in hands-free
+listening with echo cancellation: without echo cancellation the half-duplex
+margin already covers it, and in push-to-talk a press consumes all the audio
+fed up to it, so what a hold hears is Adam's.
 
 ### Docs to update with it
 
@@ -199,7 +223,10 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
 - The echo of a short reply, first reported after it ended, isn't sent; words
   heard later still are.
 - A reply cut off by one misheard word ("Hey") whose echo follows: the echo
-  isn't sent.
+  isn't sent. (Not built as a test. Built instead: a misheard echo word whose
+  alternative matches doesn't cut the reply off, and Adam talking over a reply
+  after its echo was ignored interrupts it with only his words sent, also when
+  the echo's volatile result ran past its last word into his first.)
 - These existing tests still pass unchanged:
   `talkingOverAReplyStopsItAndBecomesTheNextUtterance`,
   `wordsSpokenAsAReplyEndsAreKept` ("Thanks." isn't in "Hi."), and the two
@@ -215,16 +242,35 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
 - **Adam repeating the reply's words.** Words that repeat the reply in order
   won't count as interrupting while it plays, and won't be sent if they start
   within the margin after it ends.
-- **Common short words.** A one-word interruption that happens to be in the
-  reply ("no", "yes") is ignored. Saying more tips the ratio and interrupts,
-  with all the words kept, because nothing is consumed during the reply.
+- **Common words (as built).** Each result is judged on the words it adds,
+  often one or two, against the whole reply, and a long reply holds most
+  common words ("I", "you", "the", "that", "no", "okay"). Words Adam says
+  over a reply are judged echo, and consumed, while at least half of each
+  result's new words are the reply's: one word in the reply, or "stop that"
+  with "that" in it, is dropped for good. He interrupts with the first result
+  whose new words are mostly not the reply's, and his message starts there.
+  Requiring more than half would keep more of his words but let more misheard
+  echo through; not tried.
+- **Right after a barge-in (as built).** A barge-in ends the reply like any
+  other ending, so for a moment after it Adam's own words are judged against
+  the reply too: everything he said in a result whose first word starts within
+  0.5 s of the barge-in, including the words that interrupted. If at least half
+  of those, in order, are the reply's words ("Wait, can you say that again"
+  against a reply with "can", "you" and "that" in that order), his barge-in is
+  dropped as echo. The check after a barge-in is there for the barge-in that
+  is itself echo (a misheard first word); without it his words would be kept,
+  but that echo would be sent.
 - **Numbers and acronyms.** The reply's text keeps digits and acronyms as
   written; Kokoro spells them out when it speaks, and the transcriber may write
   them either way. A mismatch there counts as a word that doesn't align.
-- **Echo mixed with real speech.** If the echo leaks while Adam talks over the
-  reply, the candidate holds both. His words have to outnumber the echo's
-  before it counts as an interruption, and his message then includes the
-  echoed words.
+- **Echo mixed with real speech (as built).** Echo judged in earlier results
+  is consumed, so it neither holds back Adam's words nor ends up in his
+  message. Only echo first reported in the same result as his words is mixed
+  with them: that result interrupts if his words are the majority, and the
+  echoed words are sent with his.
+- **The previous reply's tail.** A reply that starts as soon as the last one
+  ends judges what it hears against itself only, so the last reply's echo,
+  reported late, can still interrupt it. That was so before as well.
 
 ## The start-cue experiment
 

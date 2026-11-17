@@ -497,7 +497,7 @@ session in time order, sort its lines by `tMs`.
 | 5 | "voice ended" | same | `voicedMs` |
 | 6 | "first result" | `VoiceLoop.handle`, when a result gives an empty transcript its first word[^1] | `rangeStartMs`, `rangeEndMs`, `wordStartMs`, `lagMs` (`audioMs` minus `wordStartMs`), `words`, `final`, `speaking`, `sinceVoiceMs` |
 | 7 | "result" | `VoiceLoop.handle`, every other result applied[^1] | `rangeEndMs`, `words`, `final` |
-| 8 | "result ignored" | `VoiceLoop.handle`, the branch that ignores results while speaking[^1] | `reason` (`noEchoCancellation` or `tooFewWords`), `words` |
+| 8 | "result ignored" | `VoiceLoop.handle`, the branches that ignore results while speaking, and the one that drops a reply's echo reported just after it ended[^1] | `reason` (`noEchoCancellation`, `tooFewWords` or `echo` while a reply plays; `echoAfterReply` after it), `words` |
 | 9 | "barge-in decided" | `VoiceLoop.handle`, the barge-in branch[^1] | `trigger` (`words`; later also `voice`), `words`, `sinceVoiceMs`, `replyMs` |
 | 10 | "speech stop requested" | `VoiceLoop.silence`, once it has a reply to stop[^9] | `reason`, `reply` |
 | 11 | "speech stopped" | `VoiceLoop.silence`, after `player.stop()` returns[^9] | `reply`, `stopMs`, `outputLatencyMs` |
