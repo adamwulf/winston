@@ -652,6 +652,45 @@ import Testing
         #expect(transcript.text == "this")
     }
 
+    @Test func discardingThroughATimeKeepsWordsStartingAfterIt() throws {
+        var transcript = Transcript()
+        // A volatile result covers the audio fed so far, past its last word.
+        let words = timed([("hi", 0), ("there", 0.3)], end: 0.6)
+        _ = transcript.apply(TranscriptPiece(
+            text: words,
+            alternatives: [],
+            range: CMTimeRange(start: time(0), end: time(1)),
+            isFinal: false
+        ))
+        transcript.discard(through: try #require(Transcript.end(of: words)))
+        #expect(transcript.isEmpty)
+        #expect(transcript.consumedThrough == time(0.6))
+
+        // A word starting in the rest of that audio is kept; the dropped ones don't come back.
+        let applied = transcript.apply(piece([("Hi", 0), ("there.", 0.3), ("Wait.", 0.8)], end: 1.2, final: true))
+        #expect(applied)
+        #expect(transcript.text == "Wait.")
+    }
+
+    @Test func readingsAreTheTextWithAResultAndWithEachOfItsAlternativesInItsPlace() {
+        let next = piece(
+            [("hey", 1), ("adam", 1.3)], end: 1.8,
+            alternatives: [[("hi", 1), ("adam", 1.3)], [("hey", 1), ("adams", 1.3)]]
+        )
+        var transcript = Transcript()
+        _ = transcript.apply(piece([("Well.", 0)], end: 0.5, final: true))
+        #expect(transcript.readings(with: next) == ["Well. hey adam", "Well. hi adam", "Well. hey adams"])
+        // It changes nothing.
+        #expect(transcript.text == "Well.")
+
+        // Words in consumed audio are left out of every reading.
+        var consumed = Transcript()
+        consumed.consume(through: time(1.2))
+        #expect(consumed.readings(with: next) == ["adam", "adam", "adams"])
+        consumed.consume(through: time(2))
+        #expect(consumed.readings(with: next).isEmpty)
+    }
+
     @Test func volatileFinalizedWithoutResendIsKept() {
         var transcript = Transcript()
         _ = transcript.apply(piece([("hello", 0)], end: 1))
@@ -817,5 +856,10 @@ import Testing
         #expect(Transcript.start(of: text, startingAt: time(0.3)) == time(0.4))
         #expect(Transcript.start(of: text, startingAt: time(1)) == nil)
         #expect(Transcript.start(of: AttributedString("untimed words"), startingAt: .zero) == nil)
+    }
+
+    @Test func whereTheLastWordEndsIsReadFromItsTiming() {
+        #expect(Transcript.end(of: timed([("mark", 0), ("that", 0.4), ("red", 0.8)], end: 1.2)) == time(1.2))
+        #expect(Transcript.end(of: AttributedString("untimed words")) == nil)
     }
 }
