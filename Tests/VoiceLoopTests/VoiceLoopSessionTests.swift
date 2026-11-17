@@ -2273,24 +2273,25 @@ struct PushToTalkTests {
         #expect(await eventually { bed.audio.playedFrames > 0 })
 
         // The press stops the reply and consumes all the audio fed up to it, so what the hold
-        // hears is Adam, however soon after the reply and whatever he says. The recognizer has
-        // read no further than the audio fed by the press, so the hold's first word starts
-        // less than half a second after it, where hands-free listening looks for the reply's
-        // echo.
-        let pressed = heardSeconds(bed)
+        // hears is Adam, however soon after the reply and whatever he says. Read right after
+        // the press, the audio fed is at or just past where the press consumed through and the
+        // reply ended, so the hold's first word, a tenth of a second later, is inside the hold
+        // and starts well within half a second of the reply's end, where hands-free listening
+        // looks for the reply's echo.
         loop.beginTalking()
         #expect(loop.isTalking)
+        let pressed = loop.fedAudioSeconds
         bed.recognizer.hear(
             timed: [
-                ("This", pressed + 0.4), ("is", pressed + 0.6), ("a", pressed + 0.8),
-                ("long", pressed + 0.9), ("reply.", pressed + 1.2),
+                ("This", pressed + 0.1), ("is", pressed + 0.3), ("a", pressed + 0.5),
+                ("long", pressed + 0.6), ("reply.", pressed + 0.9),
             ],
-            through: pressed + 1.5,
+            through: pressed + 1.2,
             isFinal: true
         )
         #expect(await eventually { loop.state == .listening(partial: "This is a long reply.") })
         // Released after the words.
-        #expect(await eventually { heardSeconds(bed) > pressed + 1.5 })
+        #expect(await eventually { heardSeconds(bed) > pressed + 1.2 })
         loop.endTalking()
 
         #expect(await eventually { sent.texts == ["This is a long reply."] })
