@@ -236,7 +236,8 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
 - The echo of a short reply, first reported after it ended, isn't sent; words
   heard later still are.
 - A reply cut off by one misheard word ("Hey") whose echo follows: the echo
-  isn't sent. (Not built as a test. Built instead: a misheard echo word whose
+  isn't sent. (Built with an echo that meets the two-thirds rule, "Hey Adam I
+  can hear you"; see "Limits". Also built: a misheard echo word whose
   alternative matches doesn't cut the reply off, and Adam talking over a reply
   after its echo was ignored interrupts it with only his words sent, also when
   the echo's volatile result ran past its last word into his first. Also
