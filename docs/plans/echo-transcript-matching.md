@@ -4,9 +4,10 @@ Status: written 2026-11-15; "Dropping transcripts that match the reply" was
 built 2026-11-16 (`ReplyEcho`, and `VoiceLoop.apply` and `isEchoAfterReply`).
 It differs from the design below in its matching rule, and where the design
 said to judge the whole candidate and to consume through a result's end; those
-sections now say what was built, and "Limits" says what that changes. Echo
-matching applies to hands-free listening only: push-to-talk, added after this
-plan, is unchanged.
+sections now say what was built, and "Limits" says what that changes. Since
+2026-11-17 the last reply's echo is also looked for while the next one plays.
+Echo matching applies to hands-free listening only: push-to-talk, added after
+this plan, is unchanged.
 The iPhone's logs have since been read
 (`docs/research/echo-cancellation-regression.md`).
 
@@ -169,6 +170,8 @@ In `VoiceLoop.handle(_:)`, in the branch for `currentSpeech != nil` with echo
 cancellation on, before the word-count check: if the candidate is echo of
 `currentSpeech.text`, ignore it. That means
 `timeline.resultIgnored(reason: "echo", ...)` and `ignoredResultsThisReply += 1`.
+As built, echo of the last reply, reported late, is ignored the same way (see
+"After a reply ends or is cut off").
 
 As built, it doesn't set `ignoredWhileSpeaking`, as the plan first said it
 should. That flag makes `consumeEcho()` consume all the audio fed so far when
@@ -190,7 +193,8 @@ while a reply plays, and the half-duplex margin is consumed afterwards.
 
 Keep the last reply's matcher and the fed-audio time it ended
 (`pipeline.fedAudio.time`). Set it on every ending: finished, stopped, and
-barge-in. Clear it when the next reply starts and on teardown.
+barge-in. Clear it on teardown. The design also cleared it when the next reply
+started; as built, it is kept then, and replaced when that reply ends (below).
 
 In `handle(_:)` with no reply playing: if a result's first new word starts
 before that end time plus a margin, and the candidate is echo of the last
@@ -210,6 +214,15 @@ during a reply, not through the result's end. It applies only in hands-free
 listening with echo cancellation: without echo cancellation the half-duplex
 margin already covers it, and in push-to-talk a press consumes all the audio
 fed up to it, so what a hold hears is Adam's.
+
+The same check runs while the next reply plays (as built). Results lag their
+audio by about a second, so the echo of a reply's last words can be reported
+after a queued reply, or a preview played through the loop, has started in
+its place. Judged against the new reply alone, it would cut that reply off.
+So while a reply plays, a result is ignored if it is echo of that reply, or
+echo of the last one by the same window and match. Both are handled alike:
+reason `echo`, consumed through the result's last word, and
+`ignoredWhileSpeaking` left unset.
 
 ### Docs to update with it
 
@@ -235,6 +248,9 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
   end, and neither those results nor their late final is sent.
 - The echo of a short reply, first reported after it ended, isn't sent; words
   heard later still are.
+- (Built since.) A reply's echo reported once the next reply plays, a queued
+  one or a preview that replaced it, doesn't interrupt that reply and isn't
+  sent.
 - A reply cut off by one misheard word ("Hey") whose echo follows: the echo
   isn't sent. (Built with an echo that meets the two-thirds rule, "Hey Adam I
   can hear you"; see "Limits". Also built: a misheard echo word whose
@@ -289,9 +305,10 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
   message. Only echo first reported in the same result as his words is mixed
   with them: that result interrupts unless two thirds of it is a stretch of
   the reply, and the echoed words are then sent with his.
-- **The previous reply's tail.** A reply that starts as soon as the last one
-  ends judges what it hears against itself only, so the last reply's echo,
-  reported late, can still interrupt it. That was so before as well.
+- **Echo from two replies back.** Only the reply that last ended is kept. If
+  a reply shorter than the recognizer's delay plays and ends between two
+  others, the echo of the one before it, reported after that, is judged
+  against the short reply only.
 
 ## The start-cue experiment
 
