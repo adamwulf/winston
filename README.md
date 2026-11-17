@@ -206,7 +206,12 @@ when listening starts and stops, a chime for any reaction from the bot, and low
 taps when the bot starts typing) would add to `playedFrames`, so
 `VoiceTestBed.makeLoop()` and `Harness` leave them off, and the tests of the
 cues pass `soundCues: true`. `VoiceLoop.hasPlayedWorkingCue` says whether the
-typing taps have played since the bot started typing.
+typing taps have played since the bot started typing. With
+`OfflineAudio.recordsOutput` on, `OfflineAudio.output` keeps every sample that
+came out of the speaker, so a test can tell which sounds played together: the
+working cue tests check that the taps never sound with a reply. The offline
+engine resamples its output, so they tell the quiet taps from the much louder
+replies and cues by level rather than sample for sample.
 
 Rules for new tests:
 

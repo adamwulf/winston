@@ -158,12 +158,17 @@ final class Pipeline {
         return context
     }
 
-    /// Plays `cue` on the cue player, after any cue it is still playing. `onPlayed` is called, on
-    /// an arbitrary thread, once the cue has played or the player was stopped. Only while the
-    /// engine is running: a player can't play in a stopped engine.
-    func play(_ cue: SoundCue, onPlayed: @escaping @Sendable () -> Void) {
-        // Making the buffer only fails for a format the pipeline doesn't use.
+    /// Plays `cue` on the cue player, after any cue it is still playing and `leadIn` seconds of
+    /// silence. `onPlayed` is called, on an arbitrary thread, once the cue has played or the
+    /// player was stopped. Only while the engine is running: a player can't play in a stopped
+    /// engine.
+    func play(_ cue: SoundCue, leadIn: Double = 0, onPlayed: @escaping @Sendable () -> Void) {
+        // Making the buffers only fails for a format the pipeline doesn't use.
         guard let buffer = cue.buffer(in: speech.format) else { return }
+        let leadInFrames = AVAudioFrameCount(leadIn * speech.format.sampleRate)
+        if let silence = silentBuffer(frames: leadInFrames, in: speech.format) {
+            cuePlayer.scheduleBuffer(silence)
+        }
         cuePlayer.scheduleBuffer(buffer, completionCallbackType: speech.completion) { _ in onPlayed() }
         cuePlayer.play()
     }

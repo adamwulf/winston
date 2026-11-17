@@ -155,12 +155,13 @@ public final class VoiceLoop {
     @ObservationIgnored package var playsSoundCues = true
     /// Whether the bot is working on a reply, for the app to set while it shows the bot typing.
     /// Each time it turns on, the loop plays `SoundCue.agentWorking`, three low taps, once, so
-    /// Adam hears that a reply is on its way without looking. If a reply is being said, the taps
-    /// wait until it ends, and they wait while the loop is off, starting, or rebuilding its
-    /// engine. They play through the loop's engine, so echo cancellation takes them out of what
-    /// the microphone hears, and only with echo cancellation on: without it, the microphone would
-    /// hear them as loud as they play, and the recognizer and the pause detector would take them
-    /// for Adam talking.
+    /// Adam hears that a reply is on its way without looking. They never sound with a reply: if
+    /// one is being said, the taps wait until its sound has ended, and one that starts while they
+    /// play cuts them off, to play again in full after it if the bot is still working. They also
+    /// wait while the loop is off, starting, or rebuilding its engine. They play through the
+    /// loop's engine, so echo cancellation takes them out of what the microphone hears, and only
+    /// with echo cancellation on: without it, the microphone would hear them as loud as they
+    /// play, and the recognizer and the pause detector would take them for Adam talking.
     public var isAgentWorking = false {
         didSet {
             guard isAgentWorking != oldValue else { return }
@@ -170,7 +171,8 @@ public final class VoiceLoop {
             updateWorkingCue()
         }
     }
-    /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on.
+    /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on. A play
+    /// that was cut off before it finished, by a reply or by the engine stopping, doesn't count.
     @ObservationIgnored package private(set) var hasPlayedWorkingCue = false
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
@@ -698,7 +700,12 @@ public final class VoiceLoop {
         lastCueID += 1
         let id = lastCueID
         unfinishedCues.append((id, cue))
-        pipeline.play(cue) { [weak self] in
+        // The working cue can follow a reply that has just ended or been cut off: some of it can
+        // still be on its way out of the pitch shift then, which keeps sounding as it empties,
+        // and offline it holds a render pass of it (see `SpeechOutput.completion`). The taps
+        // start after that.
+        let leadIn = cue == .agentWorking ? SpeechOutput.pitchShiftTail : 0
+        pipeline.play(cue, leadIn: leadIn) { [weak self] in
             Task { @MainActor in self?.cueFinished(id) }
         }
         return true
@@ -1142,10 +1149,15 @@ public final class VoiceLoop {
         let interruptedCues = unfinishedCues.map(\.cue)
         unfinishedCues = []
         pipeline.cuePlayer.stop()
+        // Working taps that were cut off play again as the others do, but only once nothing is
+        // said: the reply cut off with them starts over first.
+        if interruptedCues.contains(.agentWorking) {
+            hasPlayedWorkingCue = false
+        }
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
-            for cue in interruptedCues {
+            for cue in interruptedCues where cue != .agentWorking {
                 play(cue)
             }
             speakNextIfIdle()
@@ -1310,6 +1322,7 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !isTalking, release == nil, !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
+        cutOffWorkingCue(on: pipeline)
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)
         let playback = pipeline.speech.makePlayback(text: text) { [weak self] playback in
@@ -1525,6 +1538,9 @@ public final class VoiceLoop {
     /// cues on. Call it whenever one of those may have changed while the loop listens on. Not from
     /// `silence`, which a teardown uses too: it would play the cue just before the teardown cuts
     /// it off.
+    ///
+    /// The taps never sound with a reply: they wait while one is said, start a moment after it
+    /// ends (see `play(_:)`), and a reply that starts cuts them off (`cutOffWorkingCue(on:)`).
     private func updateWorkingCue() {
         guard isAgentWorking, !hasPlayedWorkingCue, let pipeline else { return }
         if let reason = reasonWorkingCueWaits(on: pipeline) {
@@ -1545,6 +1561,23 @@ public final class VoiceLoop {
         if !pipeline.hasVoiceProcessing { return "noEchoCancellation" }
         if !playsSoundCues { return "soundCuesOff" }
         return nil
+    }
+
+    /// For a reply about to start: stops `SoundCue.agentWorking` at once if it is playing or
+    /// waiting on the cue player, so the taps never sound with a reply. Stopping the player
+    /// stops every cue on it, so the others that hadn't finished play again from the start, as
+    /// after the engine stops by itself. The taps wait to play again in full once nothing is
+    /// said, if the agent is still working.
+    private func cutOffWorkingCue(on pipeline: Pipeline) {
+        guard unfinishedCues.contains(where: { $0.cue == .agentWorking }) else { return }
+        let otherCues = unfinishedCues.map(\.cue).filter { $0 != .agentWorking }
+        unfinishedCues = []
+        pipeline.cuePlayer.stop()
+        hasPlayedWorkingCue = false
+        Self.log.info("working cue cut off", ["reason": "speaking"])
+        for cue in otherCues {
+            play(cue)
+        }
     }
 }
 

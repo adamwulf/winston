@@ -1338,6 +1338,100 @@ private func listeningLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLo
     return loop
 }
 
+/// A loop as `listeningLoopWithCues(on:)` gives, speaking with a Kokoro voice, with what comes out
+/// of the speaker recorded in `OfflineAudio.output`. `FakeKokoro` renders every sentence as the
+/// same tone, so a reply sounds the same each time it is said, and a test can find it there.
+@MainActor
+private func recordingKokoroLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLoop {
+    bed.audio.recordsOutput = true
+    let loop = try await listeningLoopWithCues(on: bed)
+    loop.voiceIdentifier = "kokoro.af_heart"
+    #expect(await eventually { loop.kokoroModelState == .ready })
+    return loop
+}
+
+/// A stretch of sound out of the speaker, in `OfflineAudio.output`, with no silence longer than
+/// 5 ms in it.
+private struct Sound {
+    /// Where its first and last sounding samples are, in the output looked at.
+    var first: Int
+    var last: Int
+    /// How many of its samples the speaker's meter counts as sound (`OfflineAudio.playedFrames`).
+    var frames: Int
+    /// Its loudest sample.
+    var peak: Float
+
+    /// Whether it is no louder than the working taps, which peak at about 0.03. Everything else
+    /// these tests play is far louder: `FakeKokoro`'s tone at 0.25, the other cues at 0.15 and up.
+    /// So a quiet sound is the taps, or part of them, alone.
+    var isQuiet: Bool { peak <= 0.05 }
+}
+
+/// The sounds in `output`, oldest first.
+private func sounds(in output: some Collection<Float>) -> [Sound] {
+    let gap = 240
+    var found: [Sound] = []
+    for (index, sample) in Array(output).enumerated() where abs(sample) >= 0.001 {
+        if var current = found.last, index - current.last <= gap {
+            current.last = index
+            current.frames += 1
+            current.peak = max(current.peak, abs(sample))
+            found[found.count - 1] = current
+        } else {
+            found.append(Sound(first: index, last: index, frames: 1, peak: abs(sample)))
+        }
+    }
+    return found
+}
+
+/// The taps as `sounds(in:)` finds them: one sound per tap.
+private let soundOfTheTaps = sounds(in: SoundCue.agentWorking.samples(sampleRate: 48_000))
+
+/// Where the taps came out whole in `output`, with nothing else sounding over them: the first
+/// sample of each run of quiet sounds, one per tap, together as much sound as the taps make.
+private func tapsAlone(in output: [Float]) -> [Int] {
+    let all = sounds(in: output)
+    let taps = soundOfTheTaps.count
+    let tapFrames = soundOfTheTaps.reduce(0) { $0 + $1.frames }
+    guard all.count >= taps else { return [] }
+    return (0...(all.count - taps)).compactMap { index in
+        let run = all[index..<(index + taps)]
+        let frames = run.reduce(0) { $0 + $1.frames }
+        guard run.allSatisfy(\.isQuiet), abs(frames - tapFrames) <= tapFrames / 20 else { return nil }
+        return run.first?.first
+    }
+}
+
+/// How much sound the loud sounds in `output` make together, and the loudest of them: what a
+/// reply said in `FakeKokoro`'s tone sounds like.
+private func loudness(of output: some Collection<Float>) -> (frames: Int, peak: Float) {
+    let loud = sounds(in: output).filter { !$0.isQuiet }
+    return (loud.reduce(0) { $0 + $1.frames }, loud.map(\.peak).max() ?? 0)
+}
+
+/// Where the last loud sound in `output` ends, before `index`. Nil if there is none.
+private func endOfLastLoudSound(in output: [Float], before index: Int) -> Int? {
+    sounds(in: output[..<index]).last { !$0.isQuiet }?.last
+}
+
+/// How loud `text` is said on its own by `loop` now, as `loudness(of:)` measures it. Waits until
+/// it has been said, and a moment after.
+@MainActor
+private func loudnessAlone(of text: String, by loop: VoiceLoop, on bed: VoiceTestBed) async -> (frames: Int, peak: Float) {
+    let start = bed.audio.output.count
+    loop.speak(text)
+    #expect(await eventually { loop.state == .listening(partial: "") })
+    #expect(await audioGoesBy(0.5, on: bed))
+    return loudness(of: bed.audio.output[start...])
+}
+
+/// Whether `output` holds a reply said as loud as `alone`, with nothing over it: as much loud
+/// sound, within a hundredth, and no louder.
+private func holdsReplyAlone(_ output: [Float], saidAlone alone: (frames: Int, peak: Float)) -> Bool {
+    let heard = loudness(of: output)
+    return abs(heard.frames - alone.frames) <= alone.frames / 100 && heard.peak <= alone.peak * 1.02
+}
+
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct WorkingCueTests {
@@ -1502,6 +1596,151 @@ struct WorkingCueTests {
         let startCue = soundingFrames(of: .listeningStarted)
         #expect(abs(bed.audio.playedFrames - played - startCue) <= startCue / 10)
         #expect(loop.hasPlayedWorkingCue)
+    }
+
+    @Test func tapsAskedForDuringAReplyPlayOnlyOnceItsSoundHasEnded() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "Done.", by: loop, on: bed)
+        let start = bed.audio.output.count
+
+        loop.speak("Done.")
+        loop.isAgentWorking = true
+
+        #expect(!loop.hasPlayedWorkingCue)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // Each whole, with nothing sounding over it, the taps after the reply's last sound.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+    }
+
+    @Test(arguments: [Float(1), 2])
+    func tapsAfterAReplyIsCutOffDoNotSoundOverItsLastSound(pitch: Float) async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        // A shifted reply runs on after its player stops, as the pitch shift empties.
+        loop.speechPitch = pitch
+        let start = bed.audio.output.count
+        let before = bed.audio.playedFrames
+        loop.speak("One. Two. Three. Four.")
+        loop.isAgentWorking = true
+        #expect(await eventually { bed.audio.playedFrames > before })
+
+        loop.stopSpeaking()
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await audioGoesBy(on: bed))
+        // Whole and alone, after the cut-off reply's last sound.
+        let output = Array(bed.audio.output[start...])
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+    }
+
+    @Test func aReplyThatStartsWhileTheTapsPlayCutsThemOffAndTheyPlayAfterIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        let start = bed.audio.output.count
+
+        loop.isAgentWorking = true
+        #expect(loop.hasPlayedWorkingCue)
+        loop.speak("One. Two. Three.")
+
+        #expect(loop.state == .speaking)
+        #expect(!loop.hasPlayedWorkingCue)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // The reply with nothing over it, then, the agent still working, the taps again in full.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+        #expect(loop.hasPlayedWorkingCue)
+    }
+
+    @Test func aReplyThatStartsPartWayThroughTheTapsCutsOffTheRest() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        let start = bed.audio.output.count
+        let before = bed.audio.playedFrames
+
+        loop.isAgentWorking = true
+        // Some of the taps have played.
+        #expect(await eventually { bed.audio.playedFrames > before })
+        loop.speak("One. Two. Three.")
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // What the taps played first is quiet sound before the reply, and nothing sounds with the
+        // reply. The taps play in full after it, unless they had all played before it started.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let replyStart = try #require(sounds(in: output).first { !$0.isQuiet }?.first)
+        let replyEnd = try #require(endOfLastLoudSound(in: output, before: output.count))
+        #expect(!sounds(in: output).contains { $0.isQuiet && $0.last >= replyStart && $0.first <= replyEnd })
+        let tapsBefore = tapsAlone(in: Array(output[..<replyStart]))
+        let tapsAfter = tapsAlone(in: Array(output[replyEnd...]))
+        #expect(tapsBefore.count == 1 || tapsAfter.count == 1)
+    }
+
+    @Test func tapsWaitingBehindAnotherCueDoNotPlayWithAReplyThatStarts() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let start = bed.audio.output.count
+
+        // The taps would start once the chime has played, with the reply well under way.
+        loop.play(.reaction)
+        loop.isAgentWorking = true
+        loop.speak("One. Two. Three. Four.")
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // The chime plays with the reply, as cues do, but the taps wait until it has ended.
+        let output = Array(bed.audio.output[start...])
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        let replyEnd = taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) }
+        let replyLength = Int(4 * FakeKokoro.secondsPerSentence * 48_000)
+        #expect((replyEnd ?? 0) >= replyLength)
+    }
+
+    @Test func tapsCutOffWhenTheEngineStopsByItselfWaitForTheReplyItStartsAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        let start = bed.audio.output.count
+        loop.isAgentWorking = true
+
+        // The engine stops by itself before the taps have played, and a reply arrives before the
+        // loop hears of it: it waits for the engine.
+        engine.stop()
+        loop.speak("One. Two. Three.")
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { engine.isRunning })
+        #expect(await eventually { bed.kokoro.requests.count == 3 })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        let output = Array(bed.audio.output[start...])
+        // The same reply said alone afterwards, for comparison.
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
     }
 
     @Test func stoppingCutsTheTapsOffAndTheStopCuePlaysAlone() async throws {

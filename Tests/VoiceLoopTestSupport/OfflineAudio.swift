@@ -17,6 +17,12 @@ package final class OfflineAudio {
     /// How many times the sound out of the speaker crossed zero. A tone crosses twice per
     /// cycle, so per second of `playedFrames` this says how high the sound is.
     package private(set) var playedZeroCrossings = 0
+    /// Whether `output` keeps what comes out of the speaker. Off unless a test turns it on, since
+    /// it grows with every render pass.
+    package var recordsOutput = false
+    /// Every sample that came out of the speaker while `recordsOutput` was on, silent ones too, in
+    /// the order they were rendered, at 48 kHz: for tests that check which sounds played together.
+    package private(set) var output: [Float] = []
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
     private let microphone = Microphone()
@@ -117,6 +123,9 @@ package final class OfflineAudio {
                   let samples = output.floatChannelData?[0] else { continue }
             let frames = Int(output.frameLength)
             playedFrames += (0..<frames).count { abs(samples[$0]) >= 0.001 }
+            if recordsOutput {
+                self.output += UnsafeBufferPointer(start: samples, count: frames)
+            }
             // Within each pass; a crossing between two passes is missed, one per 4096 frames.
             playedZeroCrossings += (0..<max(frames - 1, 0)).count { index in
                 let sample = samples[index], next = samples[index + 1]
