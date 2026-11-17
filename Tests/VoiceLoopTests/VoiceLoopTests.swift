@@ -179,12 +179,12 @@ import Testing
         zip(samples, samples.dropFirst()).count { ($0 < 0) != ($1 < 0) && $0 != 0 && $1 != 0 }
     }
 
-    /// The pitch of `samples` in Hz, from how often they cross zero while they sound. A tone
-    /// crosses twice per cycle.
+    /// The pitch of `samples` in Hz, from how often they cross zero while a note plays: a tone
+    /// crosses twice per cycle. A note's samples are only exactly 0 at its ends, and between notes,
+    /// so the nonzero samples are the time notes play, however quiet they get.
     private func pitch(_ samples: [Float]) -> Double {
-        let crossings = zip(samples, samples.dropFirst()).count { ($0 < 0) != ($1 < 0) && max(abs($0), abs($1)) >= 0.001 }
-        let sounding = samples.count { abs($0) >= 0.001 }
-        return Double(crossings) / 2 / (Double(sounding) / sampleRate)
+        let playing = samples.count { $0 != 0 }
+        return Double(zeroCrossings(samples[...])) / 2 / (Double(playing) / sampleRate)
     }
 
     /// How many separate sounds `samples` holds: runs of sound with at least 20 ms of silence
@@ -238,7 +238,8 @@ import Testing
         let working = SoundCue.agentWorking.samples(sampleRate: sampleRate)
         let peak = working.map(abs).max() ?? 0
 
-        #expect(pitch(working) < 400)
+        // Its taps are at 310 to 330 Hz.
+        #expect((300...340).contains(pitch(working)))
         #expect(peak > 0.02)
         for cue in SoundCue.allCases where cue != .agentWorking {
             let samples = cue.samples(sampleRate: sampleRate)

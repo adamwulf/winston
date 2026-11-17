@@ -1455,6 +1455,27 @@ struct WorkingCueTests {
         #expect(await staysSilent(on: bed))
     }
 
+    @Test func tapsCutOffWhenTheEngineStopsByItselfPlayAgainInFullOnce() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        loop.isAgentWorking = true
+
+        // As on the iPhone, the engine stops by itself before the taps have played: at once, and
+        // the engine renders on the main actor, so none of them have.
+        engine.stop()
+        let played = bed.audio.playedFrames
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { engine.isRunning })
+        // Played again as a cut-off cue is, and not a second time for still working.
+        #expect(await audioGoesBy(on: bed))
+        let taps = soundingFrames(of: .agentWorking)
+        #expect(abs(bed.audio.playedFrames - played - taps) <= taps / 10)
+        #expect(loop.hasPlayedWorkingCue)
+    }
+
     @Test func theyDoNotPlayAgainWhenTheEngineRestartsOrIsRebuilt() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)

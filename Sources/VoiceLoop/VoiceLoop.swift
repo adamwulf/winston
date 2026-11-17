@@ -1149,8 +1149,11 @@ public final class VoiceLoop {
                 play(cue)
             }
             speakNextIfIdle()
-            // Taps that waited for the engine, or for the reply it cut off.
-            updateWorkingCue()
+            // Taps that waited for the engine, or for the reply it cut off. Not during a start,
+            // which plays them itself, after its start cue.
+            if !isStarting {
+                updateWorkingCue()
+            }
         } catch {
             Self.log.warning("restarting the audio engine failed; rebuilding", error.logContext(pipeline.formatContext))
             restart()
