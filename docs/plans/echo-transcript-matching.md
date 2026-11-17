@@ -254,8 +254,13 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
   one word that matches neither the reply nor an alternative, it still
   interrupts. So does a two-word echo with one misheard word and no matching
   alternative, since two heard words must both match. The echo that follows
-  won't be sent, but the rest of the reply is lost. Resuming a reply after a
-  false barge-in, as LiveKit Agents does, would be a separate change.
+  is dropped, with the words that cut the reply off, only if a later result
+  whose first new word starts no later than 0.5 s after the cut-off, read
+  with the utterance so far, meets the two-thirds rule. "Hi Adam" heard first
+  as "Hey", then finally as "Hey Adam" with no matching alternative, is only
+  1 of 2 and is sent. Either way the rest of the reply is lost. Resuming a
+  reply after a false barge-in, as LiveKit Agents does, would be a separate
+  change.
 - **Adam repeating the reply's words.** Words that repeat the reply in order
   won't count as interrupting while it plays, and won't be sent if they start
   within the margin after it ends.
