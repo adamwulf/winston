@@ -850,6 +850,78 @@ struct BargeInTests {
         #expect(await eventually { sent.texts == ["Hi there."] })
     }
 
+    // Echo is looked for after a reply only in words starting less than half a second after it
+    // ended, at the audio fed by then. The recognizer has read that far once the loop is
+    // listening again, so words starting 0.6 s after what it has read start later than that.
+
+    @Test func theReplysOwnWordsStartingOverHalfASecondAfterItEndedAreSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        loop.speak(longReply)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // Fed while the reply plays.
+        let playing = heardSeconds(bed)
+        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let ended = heardSeconds(bed)
+
+        // Its words starting while it played, reported once it ended, are its echo.
+        bed.recognizer.hear(
+            timed: [
+                ("This", playing), ("is", playing + 0.3), ("a", playing + 0.5),
+                ("long", playing + 0.6), ("reply.", playing + 0.9),
+            ],
+            through: playing + 1.2,
+            isFinal: true
+        )
+        try await settle()
+        #expect(loop.state == .listening(partial: ""))
+        #expect(sent.texts.isEmpty)
+
+        bed.recognizer.hear(
+            timed: [
+                ("This", ended + 0.6), ("is", ended + 0.9), ("a", ended + 1.1),
+                ("long", ended + 1.2), ("reply.", ended + 1.5),
+            ],
+            through: ended + 1.8,
+            isFinal: true
+        )
+        #expect(await eventually { sent.texts == ["This is a long reply."] })
+    }
+
+    @Test func aResultRepeatingEchoAlreadyConsumedIsTimedFromItsFirstNewWord() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        loop.speak(longReply)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // Fed as the reply started playing.
+        let playing = heardSeconds(bed)
+        bed.recognizer.hear(timed: [("This", playing), ("is", playing + 0.3)], through: playing + 0.5)
+        try await settle(.milliseconds(100))
+        #expect(loop.state == .speaking)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let ended = heardSeconds(bed)
+
+        // It starts with the echo already consumed, from while the reply played, but its first
+        // new word starts more than half a second after the reply ended. That is where it is
+        // timed from, so the reply's words that follow are sent.
+        bed.recognizer.hear(
+            timed: [
+                ("This", playing), ("is", playing + 0.3),
+                ("a", ended + 0.6), ("long", ended + 0.8), ("reply.", ended + 1),
+            ],
+            through: ended + 1.3,
+            isFinal: true
+        )
+        #expect(await eventually { sent.texts == ["a long reply."] })
+    }
+
     @Test func aMisheardEchoWordWhoseAlternativeMatchesDoesNotCutTheReplyOff() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
