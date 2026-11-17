@@ -852,6 +852,53 @@ struct BargeInTests {
         #expect(sent.texts == ["Wait, stop."])
     }
 
+    @Test func aShortInterruptionWithAWordTheReplySaysElsewhereStopsItAndIsSent() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        loop.speak("This is a long reply that goes on and on, with enough words to still be playing.")
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // "on" is in the reply, but "hold on" isn't.
+        bed.recognizer.hear(timed: [("Hold", 0.5), ("on.", 0.8)], through: 1, isFinal: true)
+
+        #expect(await eventually { sent.texts == ["Hold on."] })
+        // By now the engine has faded the stopped player out.
+        let playedWhenInterrupted = bed.audio.playedFrames
+        try await settle()
+        #expect(bed.audio.playedFrames == playedWhenInterrupted)
+    }
+
+    @Test func aBargeInInWordsTheReplyHasFarApartIsSentNotDroppedAsItsEcho() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        // Until the final result is in, so the utterance isn't sent with the volatile one.
+        loop.pauseThreshold = .seconds(30)
+        let sent = UtteranceLog(loop)
+
+        // It has "can", "you" and "that", in that order but far apart.
+        loop.speak(
+            "I can look up the weather for the week ahead, and when the forecast is ready "
+                + "I will send it to you, along with a note about that storm on Friday."
+        )
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        bed.recognizer.hear(timed: [("wait", 0.5)], through: 0.8)
+        #expect(await eventually { loop.state == .listening(partial: "wait") })
+        // Reported after the barge-in, but starting before the reply was cut off, so it is
+        // checked for the reply's echo, and isn't.
+        bed.recognizer.hear(
+            timed: [("Wait,", 0.5), ("can", 0.8), ("you", 1), ("say", 1.2), ("that", 1.4), ("again?", 1.6)],
+            through: 2,
+            isFinal: true
+        )
+        #expect(await eventually { loop.state == .listening(partial: "Wait, can you say that again?") })
+        loop.pauseThreshold = .milliseconds(50)
+
+        #expect(await eventually { sent.texts == ["Wait, can you say that again?"] })
+    }
+
     @Test func withoutEchoCancellationTalkingOverAReplyDoesNotInterruptIt() async throws {
         let bed = VoiceTestBed()
         bed.hasVoiceProcessing = false
