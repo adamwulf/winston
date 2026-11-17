@@ -120,7 +120,7 @@ struct SpeechPlaybackTests {
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
 
-    @Test func aBufferThatArrivesAfterSynthesisFinishedIsStillPlayed() async throws {
+    @Test func aBufferThatArrivesAfterSynthesisFinishedIsStillPlayedAndEndsTheMessage() async throws {
         let bed = VoiceTestBed()
         let pipeline = try makePlayingPipeline(on: bed)
         defer { pipeline.tearDown() }
@@ -131,12 +131,15 @@ struct SpeechPlaybackTests {
         playback.synthesisFinished()
         playback.receive(try speechBuffer(seconds: 0.1))
 
-        // Each of the two ends the message as far as the playback knows; the loop ignores
-        // the second report.
-        #expect(await eventually { finished.count == 2 })
+        // The message isn't over while the late buffer plays: only its end finishes it, once.
+        // The loop would otherwise take the first buffer's end for the reply's, with the late
+        // one still to play.
+        #expect(await eventually { finished.count == 1 })
         try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(finished.count == 1)
     }
 
     @Test func aMessageWithNoSoundFinishesAsSoonAsSynthesisDoes() async throws {

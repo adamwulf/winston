@@ -256,6 +256,18 @@ final class FedAudioClock: Sendable {
 /// The microphone or speech audio format can't be converted for the engine.
 struct AudioFormatError: Error {}
 
+/// `frames` of silence in `format`, which is deinterleaved float. Nil for none.
+func silentBuffer(frames: AVAudioFrameCount, in format: AVAudioFormat) -> AVAudioPCMBuffer? {
+    guard frames > 0,
+          let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
+          let channels = buffer.floatChannelData else { return nil }
+    buffer.frameLength = frames
+    for channel in 0..<Int(format.channelCount) {
+        channels[channel].update(repeating: 0, count: Int(frames))
+    }
+    return buffer
+}
+
 /// Plays one spoken message: converts the synthesizer's buffers to the player's format and
 /// schedules them. `receive(_:)` runs on the synthesizer's callback thread; the lock keeps it
 /// from racing `cancel()` on the main actor.
@@ -291,6 +303,11 @@ final class SpeechPlayback: Sendable {
     /// Frames of silence played after the last buffer, before the message counts as finished.
     private let trailingSilence: AVAudioFrameCount
     private let onFinished: @Sendable (SpeechPlayback) -> Void
+    /// How many times a buffer has been scheduled as the message's last. A buffer that arrives
+    /// after the synthesizer said it was done becomes the last one, and only the completion of
+    /// the latest one finishes the message. An atomic rather than part of `state`: the
+    /// completion reads it on the player's thread, without the lock.
+    private let lastBuffersScheduled = Atomic<Int>(0)
 
     /// `format` is the player's connection format. `trailingSilence` frames of silence follow
     /// the last buffer, for an effect after the player whose sound runs on past its input (see
@@ -358,27 +375,19 @@ final class SpeechPlayback: Sendable {
     }
 
     /// Schedules the message's last buffer, then the trailing silence if there is any. The
-    /// message finishes when whichever comes last has played.
+    /// message finishes when whichever comes last has played, unless another buffer has been
+    /// scheduled as the last one since: the message isn't over while that one plays.
     private func scheduleLast(_ buffer: AVAudioPCMBuffer, on player: AVAudioPlayerNode, format: AVAudioFormat) {
+        let scheduled = lastBuffersScheduled.add(1, ordering: .relaxed).newValue
         var last = buffer
-        if trailingSilence > 0, let silence = Self.silence(frames: trailingSilence, format: format) {
+        if let silence = silentBuffer(frames: trailingSilence, in: format) {
             player.scheduleBuffer(buffer)
             last = silence
         }
         player.scheduleBuffer(last, completionCallbackType: completion) { [self] _ in
+            guard lastBuffersScheduled.load(ordering: .relaxed) == scheduled else { return }
             onFinished(self)
         }
-    }
-
-    /// `frames` of silence in `format`, which is deinterleaved float.
-    private static func silence(frames: AVAudioFrameCount, format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames),
-              let channels = buffer.floatChannelData else { return nil }
-        buffer.frameLength = frames
-        for channel in 0..<Int(format.channelCount) {
-            channels[channel].update(repeating: 0, count: Int(frames))
-        }
-        return buffer
     }
 
     /// Ignores any further buffers. The caller stops the player.
