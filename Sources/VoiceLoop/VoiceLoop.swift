@@ -250,14 +250,17 @@ public final class VoiceLoop {
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
-    /// Set when a result was ignored while speaking: as the reply's own echo, or as too short
-    /// (possibly echo too). When speaking ends, all audio fed so far is consumed if this is set,
-    /// `bargeInMinimumWords` is above 1, or echo cancellation is off (echo is expected then,
-    /// and a short reply's echo may only arrive after playback). That also covers the echo of
-    /// the last words, whose results lag behind the audio. With echo cancellation at the
-    /// default of 1 and nothing ignored, nothing is consumed, so words spoken right as a reply
-    /// ends are kept unless they are its echo (see `lastReply`); without echo cancellation
-    /// everything fed so far, plus a short margin, is consumed.
+    /// Set when a result was ignored while speaking as too short (possibly echo). When speaking
+    /// ends, all audio fed so far is consumed if this is set, `bargeInMinimumWords` is above 1,
+    /// or echo cancellation is off (echo is expected then, and a short reply's echo may only
+    /// arrive after playback). That also covers the echo of the last words, whose results lag
+    /// behind the audio. A result ignored as the reply's own echo doesn't set it: its audio is
+    /// consumed through its last word as it is heard, and `lastReply` catches the echo reported
+    /// after the reply ends, so words Adam says near the end of a reply whose echo leaked aren't
+    /// consumed before they are reported. With echo cancellation at the default of 1 and nothing
+    /// ignored as too short, nothing is consumed, so words spoken right as a reply ends are kept
+    /// unless they are its echo; without echo cancellation everything fed so far, plus a short
+    /// margin, is consumed.
     @ObservationIgnored private var ignoredWhileSpeaking = false
     /// Results ignored while the current reply plays, for the logs.
     @ObservationIgnored private var ignoredResultsThisReply = 0
@@ -842,9 +845,10 @@ public final class VoiceLoop {
                currentReplyEcho.isEcho(anyOf: transcript.readings(with: piece)) {
                 // The reply's own voice, past echo cancellation. Its audio is consumed through
                 // its last word, so later results for it, its final among them, don't bring it
-                // back, and the words after it are judged on their own.
+                // back, and the words after it are judged on their own. Not
+                // `ignoredWhileSpeaking`: consuming everything fed when the reply ends would
+                // also drop words Adam says near its end that haven't been reported yet.
                 pipeline?.timeline.resultIgnored(reason: "echo", words: candidate.wordCount)
-                ignoredWhileSpeaking = true
                 ignoredResultsThisReply += 1
                 transcript.consume(through: Self.wordsEnd(of: piece))
                 return

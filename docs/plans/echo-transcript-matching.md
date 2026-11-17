@@ -167,12 +167,16 @@ of 2, not echo. "Wait, can you say that again" against a reply that says
 
 In `VoiceLoop.handle(_:)`, in the branch for `currentSpeech != nil` with echo
 cancellation on, before the word-count check: if the candidate is echo of
-`currentSpeech.text`, ignore it as the too-few-words case does. That means
-`timeline.resultIgnored(reason: "echo", ...)`, `ignoredWhileSpeaking = true`
-and `ignoredResultsThisReply += 1`. `consumeEcho()` then consumes the audio fed
-so far when the reply ends, so the echo's late final results aren't sent.
+`currentSpeech.text`, ignore it. That means
+`timeline.resultIgnored(reason: "echo", ...)` and `ignoredResultsThisReply += 1`.
 
-As built, the echo's audio is also consumed at once, through the end of its
+As built, it doesn't set `ignoredWhileSpeaking`, as the plan first said it
+should. That flag makes `consumeEcho()` consume all the audio fed so far when
+the reply ends, which would also drop words Adam says near the end of the reply
+before the recognizer reports them. Late results for the echo are dropped by
+the check after the reply instead (below).
+
+The echo's audio is consumed at once, through the end of its
 last word by the words' `audioTimeRange`, not through the result's range: a
 volatile result's range runs on to the audio fed so far, which can hold the
 start of a word Adam begins after the echo. Later results for the echo, its

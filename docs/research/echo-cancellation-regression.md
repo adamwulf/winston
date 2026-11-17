@@ -27,7 +27,7 @@ What changed is how replies end. Replies by build, on every route:
 In builds 41 and 43 each cut-off reply was stopped 2.0 to 2.8 s after it
 started: about 1 s for Kokoro to render the first sentence, then about 1 s for
 the recognizer to report the reply's own first one or two words, whose audio
-starts right at the reply's first sound. The microphone peaked at -19 to
+starts right at the reply's first sound. The microphone peaked at -10 to
 -27 dBFS during those replies. In build 36, replies that played to the end on
 the speaker mostly peaked between -50 and -60 dBFS.
 
