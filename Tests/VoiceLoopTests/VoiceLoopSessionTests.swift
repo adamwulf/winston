@@ -925,8 +925,9 @@ struct BargeInTests {
     }
 
     // Echo is looked for after a reply only in words starting less than half a second after it
-    // ended, at the audio fed by then. The recognizer has read that far once the loop is
-    // listening again, so words starting 0.6 s after what it has read start later than that.
+    // ended, at the audio fed by then. The audio fed, read once the loop is listening again, is
+    // at or past that end, so words starting 0.6 s after it start later than that. What the
+    // recognizer has read lags the audio fed by whatever is still queued, so it can be earlier.
 
     @Test func theReplysOwnWordsStartingOverHalfASecondAfterItEndedAreSent() async throws {
         let bed = VoiceTestBed()
@@ -937,10 +938,10 @@ struct BargeInTests {
         loop.speak(longReply)
         #expect(await eventually { bed.audio.playedFrames > 0 })
         // Fed while the reply plays.
-        let playing = heardSeconds(bed)
+        let playing = loop.fedAudioSeconds
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
-        let ended = heardSeconds(bed)
+        let ended = loop.fedAudioSeconds
 
         // Its words starting while it played, reported once it ended, are its echo.
         bed.recognizer.hear(
@@ -975,12 +976,12 @@ struct BargeInTests {
         loop.speak(longReply)
         #expect(await eventually { bed.audio.playedFrames > 0 })
         // Fed as the reply started playing.
-        let playing = heardSeconds(bed)
+        let playing = loop.fedAudioSeconds
         bed.recognizer.hear(timed: [("This", playing), ("is", playing + 0.3)], through: playing + 0.5)
         try await settle(.milliseconds(100))
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
-        let ended = heardSeconds(bed)
+        let ended = loop.fedAudioSeconds
 
         // It starts with the echo already consumed, from while the reply played, but its first
         // new word starts more than half a second after the reply ended. That is where it is
