@@ -1286,10 +1286,10 @@ struct SoundCueTests {
     }
 }
 
-// MARK: - Working sound
+// MARK: - Working cue
 
-// The soft ticking that loops while the bot works on a reply. Its ticks are short and far
-// apart, so these tests measure it over seconds of audio, by the microphone audio the
+// The low taps that play once when the bot starts working on a reply. These tests check that
+// they don't repeat by letting seconds of audio go by, measured by the microphone audio the
 // recognizer has been fed: the offline engine renders far faster than real time.
 
 /// Seconds of microphone audio the current recognizer has been fed: how far the engine has run.
@@ -1298,23 +1298,34 @@ private func heardSeconds(_ bed: VoiceTestBed) -> Double {
     Double(bed.recognizer.heardFrames) / bed.recognizer.audioFormat.sampleRate
 }
 
-/// Whether the loop still makes sound once `seconds` more audio have gone by: long after a cue,
-/// or one pass of the working sound (about a second), would have ended.
-@MainActor
-private func stillSounds(on bed: VoiceTestBed, after seconds: Double = 3) async -> Bool {
-    let start = heardSeconds(bed)
-    guard await eventually({ heardSeconds(bed) > start + seconds }) else { return false }
-    let played = bed.audio.playedFrames
-    return await eventually { bed.audio.playedFrames > played }
+/// How much sound one whole `cue` adds to `OfflineAudio.playedFrames`: the engine renders at the
+/// cues' own 48 kHz.
+private func soundingFrames(of cue: SoundCue) -> Int {
+    cue.samples(sampleRate: 48_000).count { abs($0) >= 0.001 }
 }
 
-/// Whether the loop makes no sound while `seconds` of audio go by, longer than the working
-/// sound's gaps.
+/// Waits while `seconds` of audio go by, long after a cue would have ended. Whether they did.
+@MainActor
+private func audioGoesBy(_ seconds: Double = 2, on bed: VoiceTestBed) async -> Bool {
+    let start = heardSeconds(bed)
+    return await eventually { heardSeconds(bed) > start + seconds }
+}
+
+/// Whether the loop makes as much sound as `cue` once, and no more, while `seconds` of audio go
+/// by.
+@MainActor
+private func playsOnce(_ cue: SoundCue, on bed: VoiceTestBed, within seconds: Double = 3) async -> Bool {
+    let played = bed.audio.playedFrames
+    guard await audioGoesBy(seconds, on: bed) else { return false }
+    let expected = soundingFrames(of: cue)
+    return abs(bed.audio.playedFrames - played - expected) <= expected / 10
+}
+
+/// Whether the loop makes no sound while `seconds` of audio go by.
 @MainActor
 private func staysSilent(on bed: VoiceTestBed, for seconds: Double = 2) async -> Bool {
-    let start = heardSeconds(bed)
     let played = bed.audio.playedFrames
-    guard await eventually({ heardSeconds(bed) > start + seconds }) else { return false }
+    guard await audioGoesBy(seconds, on: bed) else { return false }
     return bed.audio.playedFrames == played
 }
 
@@ -1329,8 +1340,8 @@ private func listeningLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLo
 
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
-struct WorkingSoundTests {
-    @Test func whileTheAgentWorksASoftTickingLoopsUntilItIsDone() async throws {
+struct WorkingCueTests {
+    @Test func whenTheAgentStartsWorkingTheTapsPlayOnceAndAgainOnlyWhenItStartsAgain() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)
         defer { loop.stop() }
@@ -1338,79 +1349,88 @@ struct WorkingSoundTests {
 
         loop.isAgentWorking = true
 
-        #expect(loop.isPlayingWorkingSound)
-        // Seconds later, past several passes, it still ticks.
-        #expect(await stillSounds(on: bed, after: 5))
-        #expect(loop.isPlayingWorkingSound)
+        #expect(loop.hasPlayedWorkingCue)
+        // Seconds later, it has played once and not again.
+        #expect(await playsOnce(.agentWorking, on: bed))
         #expect(loop.state == .listening(partial: ""))
 
         loop.isAgentWorking = false
 
-        #expect(!loop.isPlayingWorkingSound)
+        #expect(!loop.hasPlayedWorkingCue)
         #expect(await staysSilent(on: bed))
-        #expect(loop.state == .listening(partial: ""))
+
+        loop.isAgentWorking = true
+
+        #expect(await playsOnce(.agentWorking, on: bed))
     }
 
-    @Test func nothingPlaysWhileTheLoopIsOffAndItPlaysOnceListeningStarts() async throws {
+    @Test func nothingPlaysWhileTheLoopIsOffAndTheTapsFollowTheStartCue() async throws {
         let bed = VoiceTestBed()
         let loop = bed.makeLoop(soundCues: true)
 
         loop.isAgentWorking = true
         try await settle()
 
-        #expect(!loop.isPlayingWorkingSound)
+        #expect(!loop.hasPlayedWorkingCue)
         #expect(bed.audio.engines.isEmpty)
         #expect(bed.audio.playedFrames == 0)
 
         try await loop.start()
         defer { loop.stop() }
 
-        #expect(loop.isPlayingWorkingSound)
-        #expect(await stillSounds(on: bed))
+        #expect(loop.hasPlayedWorkingCue)
+        #expect(await audioGoesBy(on: bed))
+        let expected = soundingFrames(of: .listeningStarted) + soundingFrames(of: .agentWorking)
+        #expect(abs(bed.audio.playedFrames - expected) <= expected / 10)
     }
 
-    @Test func aReplyStopsItAndItPlaysOnAfterwardsOnlyIfTheAgentIsStillWorking() async throws {
+    @Test func theTapsWaitForTheReplyBeingSaidAndDoNotFollowLaterReplies() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)
         defer { loop.stop() }
-        loop.isAgentWorking = true
-        #expect(loop.isPlayingWorkingSound)
-
+        // How much sound the reply makes alone, for comparison.
+        let beforeAlone = bed.audio.playedFrames
         loop.speak("Done.")
-
-        #expect(loop.state == .speaking)
-        #expect(!loop.isPlayingWorkingSound)
         #expect(await eventually { loop.state == .listening(partial: "") })
-        // Still working, as on a reply that comes in parts: it plays on.
-        #expect(loop.isPlayingWorkingSound)
-        #expect(await stillSounds(on: bed))
-
-        loop.speak("Done.")
-        #expect(!loop.isPlayingWorkingSound)
-        // Done while the reply is said: it stays off after it.
-        loop.isAgentWorking = false
-        #expect(await eventually { loop.state == .listening(partial: "") })
-
-        #expect(!loop.isPlayingWorkingSound)
         #expect(await staysSilent(on: bed))
+        let reply = bed.audio.playedFrames - beforeAlone
+        let taps = soundingFrames(of: .agentWorking)
+
+        let beforeWorking = bed.audio.playedFrames
+        loop.speak("Done.")
+        loop.isAgentWorking = true
+
+        #expect(!loop.hasPlayedWorkingCue)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(loop.hasPlayedWorkingCue)
+        #expect(await audioGoesBy(on: bed))
+        #expect(abs(bed.audio.playedFrames - beforeWorking - reply - taps) <= taps / 4)
+
+        // Still working, as on a reply that comes in parts: no taps after the next one.
+        let beforeNext = bed.audio.playedFrames
+        loop.speak("Done.")
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        #expect(abs(bed.audio.playedFrames - beforeNext - reply) <= taps / 4)
     }
 
-    @Test func aReplyCutOffLetsItPlayOnAtOnce() async throws {
+    @Test func aReplyCutOffLetsTheTapsPlayAtOnce() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)
         defer { loop.stop() }
-        loop.isAgentWorking = true
         loop.speak(longReply)
-        #expect(!loop.isPlayingWorkingSound)
+        loop.isAgentWorking = true
+        #expect(!loop.hasPlayedWorkingCue)
 
         loop.stopSpeaking()
 
         #expect(loop.state == .listening(partial: ""))
-        #expect(loop.isPlayingWorkingSound)
-        #expect(await stillSounds(on: bed))
+        #expect(loop.hasPlayedWorkingCue)
+        let played = bed.audio.playedFrames
+        #expect(await eventually { bed.audio.playedFrames > played })
     }
 
-    @Test func withoutEchoCancellationItNeverPlays() async throws {
+    @Test func withoutEchoCancellationTheyNeverPlay() async throws {
         let bed = VoiceTestBed()
         bed.hasVoiceProcessing = false
         let loop = try await listeningLoopWithCues(on: bed)
@@ -1418,67 +1438,88 @@ struct WorkingSoundTests {
 
         loop.isAgentWorking = true
 
-        // The microphone would hear it as loud as it plays.
-        #expect(!loop.isPlayingWorkingSound)
+        // The microphone would hear them as loud as they play.
+        #expect(!loop.hasPlayedWorkingCue)
         #expect(await staysSilent(on: bed))
         #expect(loop.state == .listening(partial: ""))
     }
 
-    @Test func withTheSoundCuesOffItNeverPlays() async throws {
+    @Test func withTheSoundCuesOffTheyNeverPlay() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
 
         loop.isAgentWorking = true
 
-        #expect(!loop.isPlayingWorkingSound)
+        #expect(!loop.hasPlayedWorkingCue)
         #expect(await staysSilent(on: bed))
     }
 
-    @Test func itPlaysOnAfterTheEngineStopsByItselfAndOnARebuiltEngine() async throws {
+    @Test func tapsCutOffWhenTheEngineStopsByItselfPlayAgainInFullOnce() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        loop.isAgentWorking = true
+
+        // As on the iPhone, the engine stops by itself before the taps have played: at once, and
+        // the engine renders on the main actor, so none of them have.
+        engine.stop()
+        let played = bed.audio.playedFrames
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { engine.isRunning })
+        // Played again as a cut-off cue is, and not a second time for still working.
+        #expect(await audioGoesBy(on: bed))
+        let taps = soundingFrames(of: .agentWorking)
+        #expect(abs(bed.audio.playedFrames - played - taps) <= taps / 10)
+        #expect(loop.hasPlayedWorkingCue)
+    }
+
+    @Test func theyDoNotPlayAgainWhenTheEngineRestartsOrIsRebuilt() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)
         defer { loop.stop() }
         let first = try #require(bed.audio.engines.last)
         loop.isAgentWorking = true
+        #expect(await playsOnce(.agentWorking, on: bed))
 
         // The audio hardware changed: the engine stops itself, and is started again.
         first.stop()
         postConfigurationChange(for: first)
 
         #expect(await eventually { first.isRunning })
-        #expect(loop.isPlayingWorkingSound)
-        #expect(await stillSounds(on: bed))
+        #expect(await staysSilent(on: bed))
         #expect(bed.audio.engines.count == 1)
 
-        // A settings change builds a new engine.
+        // A settings change builds a new engine, which plays only its start cue.
+        let played = bed.audio.playedFrames
         loop.pausesOtherAudio = false
 
         #expect(!first.isRunning)
-        #expect(await eventually { bed.audio.engines.count == 2 && loop.isPlayingWorkingSound })
-        #expect(await stillSounds(on: bed))
+        #expect(await eventually { bed.audio.engines.count == 2 && bed.recognizer.isStarted })
+        #expect(await audioGoesBy(on: bed))
+        let startCue = soundingFrames(of: .listeningStarted)
+        #expect(abs(bed.audio.playedFrames - played - startCue) <= startCue / 10)
+        #expect(loop.hasPlayedWorkingCue)
     }
 
-    @Test func stoppingEndsItAtOnceAndTheStopCuePlaysAlone() async throws {
+    @Test func stoppingCutsTheTapsOffAndTheStopCuePlaysAlone() async throws {
         let bed = VoiceTestBed()
         let loop = try await listeningLoopWithCues(on: bed)
         let engine = try #require(bed.audio.engines.last)
-        let startCue = bed.audio.playedFrames
-        #expect(startCue > 0)
-        loop.isAgentWorking = true
-        #expect(await stillSounds(on: bed))
         let played = bed.audio.playedFrames
+        loop.isAgentWorking = true
+        #expect(loop.hasPlayedWorkingCue)
 
+        // At once: the engine renders on the main actor, so none of the taps have played yet.
         loop.stop()
 
         #expect(loop.state == .off)
-        #expect(!loop.isPlayingWorkingSound)
         #expect(engine.isRunning)
         #expect(await eventually { !engine.isRunning })
-        // Only the stop cue played after the stop: the same taps as the start cue, in the other
-        // order. Seconds of audio rendered meanwhile, so ticks would have added many more.
-        let stopCue = bed.audio.playedFrames - played
-        #expect(abs(stopCue - startCue) <= startCue / 10)
+        let stopCue = soundingFrames(of: .listeningStopped)
+        #expect(abs(bed.audio.playedFrames - played - stopCue) <= stopCue / 10)
     }
 }
 

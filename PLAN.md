@@ -266,16 +266,16 @@ Inside it:
   after the engine is rebuilt or a call ends), so Adam knows he can talk, and
   falling when it stops. They are synthesized in code and play through the
   loop's engine, so echo cancellation keeps them out of the transcript.
-- **Working sound** (added later): while the bot in the current chat is typing,
-  a soft, quiet ticking loops, a few irregular ticks a second like someone
-  typing nearby, so Adam hears a reply is on its way. It stops when the bot
-  stops typing (its message arrives, typing ends, or typing times out) and
-  while a reply is spoken, and plays on after a reply if the bot is still
-  typing. Like the cues, it is synthesized in code and plays through the
-  loop's own engine, so echo cancellation removes it from the microphone. It
-  never plays without echo cancellation (the half-duplex fallback): the
-  microphone would hear it at full volume, and the recognizer and pause
-  detection would take it for Adam talking.
+- **Working cue** (added later): when the bot in the current chat starts
+  typing, three low, quiet taps play once, like fingers on a desk, so Adam
+  hears a reply is on its way. They play again only after the bot stops typing
+  (its message arrives, typing ends, or typing times out) and starts again. If
+  a reply is being spoken, they wait until it ends. Like the other cues, they
+  are synthesized in code and play through the loop's own engine, so echo
+  cancellation removes them from the microphone. They never play without echo
+  cancellation (the half-duplex fallback): the microphone would hear them at
+  full volume, and the recognizer and pause detection would take them for Adam
+  talking.
 - **Push-to-talk** (added later): a long press on the mic button in text mode
   opens a sheet with one big button, held by a hold anywhere on the sheet but a
   strip at its top, left for pulling the sheet down. Voice mode runs while it

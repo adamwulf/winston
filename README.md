@@ -202,11 +202,11 @@ otherwise it is skipped. Running `LiveKokoro(directory:)` on that folder once
 downloads it.
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
-when listening starts and stops, a chime for any reaction from the bot) and the
-working sound (a soft ticking while the bot is typing) would add to
-`playedFrames`, so `VoiceTestBed.makeLoop()` and `Harness` leave them off, and
-the tests of the cues and the working sound pass `soundCues: true`.
-`VoiceLoop.isPlayingWorkingSound` says whether the working sound is playing.
+when listening starts and stops, a chime for any reaction from the bot, and low
+taps when the bot starts typing) would add to `playedFrames`, so
+`VoiceTestBed.makeLoop()` and `Harness` leave them off, and the tests of the
+cues pass `soundCues: true`. `VoiceLoop.hasPlayedWorkingCue` says whether the
+typing taps have played since the bot started typing.
 
 Rules for new tests:
 

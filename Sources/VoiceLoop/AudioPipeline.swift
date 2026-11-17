@@ -3,8 +3,8 @@ import Speech
 import Synchronization
 
 /// The audio engine for one listening session: the microphone, normally with voice processing
-/// on, feeding converted buffers to the analyzer, and player nodes for speech, sound cues and the
-/// working sound in the same engine.
+/// on, feeding converted buffers to the analyzer, and player nodes for speech and sound cues in
+/// the same engine.
 @MainActor
 final class Pipeline {
     let engine: AVAudioEngine
@@ -14,14 +14,6 @@ final class Pipeline {
     /// so stopping speech leaves a cue alone, and not behind the pitch shift, so cues always
     /// sound the same.
     let cuePlayer = AVAudioPlayerNode()
-    /// Plays the working sound (`WorkingSound`) over and over, like `cuePlayer` does a cue. A
-    /// player of its own, so stopping it leaves a cue alone, and a cue never waits behind it.
-    private let workingPlayer = AVAudioPlayerNode()
-    /// One pass of the working sound in the speech player's format, made the first time it plays.
-    private lazy var workingBuffer = WorkingSound.buffer(in: speech.format)
-    /// Whether the working sound is playing: from `startWorkingSound()` to `stopWorkingSound()`,
-    /// or until listening stops.
-    private(set) var isPlayingWorkingSound = false
     /// Whether voice processing (echo cancellation) is on. Without it the microphone also hears
     /// the speech the player plays.
     let hasVoiceProcessing: Bool
@@ -76,11 +68,9 @@ final class Pipeline {
         try installMicrophoneTap()
 
         speech.connect()
-        for player in [cuePlayer, workingPlayer] {
-            engine.attach(player)
-            // Mono into the mixer, which spreads it to every output channel.
-            engine.connect(player, to: engine.mainMixerNode, format: speech.format)
-        }
+        engine.attach(cuePlayer)
+        // Mono into the mixer, which spreads it to every output channel.
+        engine.connect(cuePlayer, to: engine.mainMixerNode, format: speech.format)
         engine.prepare()
     }
 
@@ -178,30 +168,12 @@ final class Pipeline {
         cuePlayer.play()
     }
 
-    /// Plays the working sound over and over until `stopWorkingSound()`. Does nothing if it is
-    /// already playing. Only while the engine is running: a player can't play in a stopped engine.
-    func startWorkingSound() {
-        // Making the buffer only fails for a format the pipeline doesn't use.
-        guard !isPlayingWorkingSound, let workingBuffer else { return }
-        workingPlayer.scheduleBuffer(workingBuffer, at: nil, options: .loops)
-        workingPlayer.play()
-        isPlayingWorkingSound = true
-    }
-
-    /// Stops the working sound at once.
-    func stopWorkingSound() {
-        workingPlayer.stop()
-        isPlayingWorkingSound = false
-    }
-
-    /// Stops listening, speaking and the working sound, but leaves the engine running so a cue
-    /// can still play, and play alone.
+    /// Stops listening and speaking, but leaves the engine running so a cue can still play.
     func stopListening() {
         for task in tasks { task.cancel() }
         tasks = []
         engine.inputNode.removeTap(onBus: 0)
         speech.player.stop()
-        stopWorkingSound()
         inputContinuation.finish()
     }
 
