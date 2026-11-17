@@ -774,6 +774,60 @@ struct BargeInTests {
         #expect(await eventually { sent.texts == ["Thanks."] })
     }
 
+    /// Speaks `longReply`, has its first words heard back and ignored as its echo, and waits
+    /// until two more seconds of audio have been fed with the reply still playing. Returns
+    /// where the echo starts, which was fed as the reply started playing: words timed in the
+    /// second after the echo were said while the reply played.
+    private func replyWithItsEchoIgnored(by loop: VoiceLoop, on bed: VoiceTestBed) async throws -> Double {
+        loop.speak(longReply)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        let playing = heardSeconds(bed)
+        bed.recognizer.hear(timed: [("This", playing), ("is", playing + 0.3)], through: playing + 0.5)
+        try await settle(.milliseconds(100))
+        #expect(loop.state == .speaking)
+        #expect(await eventually { heardSeconds(bed) > playing + 2 })
+        #expect(loop.state == .speaking)
+        return playing
+    }
+
+    @Test func wordsSaidDuringAReplyWhoseEchoWasIgnoredAreSentWhenReportedAfterItEnds() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let echo = try await replyWithItsEchoIgnored(by: loop, on: bed)
+
+        // It plays to the end. Only then does the recognizer report what Adam said meanwhile,
+        // after the echo: the end of the reply didn't consume it.
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        bed.recognizer.hear(
+            timed: [("Actually,", echo + 1), ("hold", echo + 1.3), ("that", echo + 1.5), ("thought.", echo + 1.7)],
+            through: echo + 1.9,
+            isFinal: true
+        )
+
+        #expect(await eventually { sent.texts == ["Actually, hold that thought."] })
+    }
+
+    @Test func wordsSaidDuringAReplyWhoseEchoWasIgnoredAreSentWhenReportedAfterItIsStopped() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let echo = try await replyWithItsEchoIgnored(by: loop, on: bed)
+
+        loop.stopSpeaking()
+        #expect(loop.state == .listening(partial: ""))
+        // Only then does the recognizer report what Adam said meanwhile, after the echo.
+        bed.recognizer.hear(
+            timed: [("Actually,", echo + 1), ("hold", echo + 1.3), ("that", echo + 1.5), ("thought.", echo + 1.7)],
+            through: echo + 1.9,
+            isFinal: true
+        )
+
+        #expect(await eventually { sent.texts == ["Actually, hold that thought."] })
+    }
+
     @Test func theEchoOfAShortReplyReportedAfterItEndedIsNotSent() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
