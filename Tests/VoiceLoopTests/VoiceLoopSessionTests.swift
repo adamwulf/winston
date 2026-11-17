@@ -1371,15 +1371,23 @@ private struct Sound {
 private func sounds(in output: some Collection<Float>) -> [Sound] {
     let gap = 240
     var found: [Sound] = []
-    for (index, sample) in Array(output).enumerated() where abs(sample) >= 0.001 {
-        if var current = found.last, index - current.last <= gap {
-            current.last = index
-            current.frames += 1
-            current.peak = max(current.peak, abs(sample))
-            found[found.count - 1] = current
+    var current: Sound?
+    for (index, sample) in output.enumerated() {
+        let level = abs(sample)
+        guard level >= 0.001 else { continue }
+        if let sound = current, index - sound.last <= gap {
+            current?.last = index
+            current?.frames += 1
+            current?.peak = max(sound.peak, level)
         } else {
-            found.append(Sound(first: index, last: index, frames: 1, peak: abs(sample)))
+            if let sound = current {
+                found.append(sound)
+            }
+            current = Sound(first: index, last: index, frames: 1, peak: level)
         }
+    }
+    if let current {
+        found.append(current)
     }
     return found
 }
@@ -1673,25 +1681,25 @@ struct WorkingCueTests {
         defer { loop.stop() }
         let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
         let start = bed.audio.output.count
-        let before = bed.audio.playedFrames
 
         loop.isAgentWorking = true
-        // Some of the taps have played.
-        #expect(await eventually { bed.audio.playedFrames > before })
+        // Two render passes, with no await before the reply: the lead-in and most of the first
+        // tap play, and the rest is still to come when the reply starts.
+        bed.audio.render(passes: 2)
+        let partial = sounds(in: bed.audio.output[start...])
+        #expect(!partial.isEmpty && partial.allSatisfy(\.isQuiet))
+        #expect(tapsAlone(in: Array(bed.audio.output[start...])).isEmpty)
         loop.speak("One. Two. Three.")
 
         #expect(await eventually { loop.state == .listening(partial: "") })
         #expect(await audioGoesBy(on: bed))
-        // What the taps played first is quiet sound before the reply, and nothing sounds with the
-        // reply. The taps play in full after it, unless they had all played before it started.
+        // Nothing of the taps sounds with the reply, and they play in full after it.
         let output = Array(bed.audio.output[start...])
         #expect(holdsReplyAlone(output, saidAlone: alone))
         let replyStart = try #require(sounds(in: output).first { !$0.isQuiet }?.first)
         let replyEnd = try #require(endOfLastLoudSound(in: output, before: output.count))
         #expect(!sounds(in: output).contains { $0.isQuiet && $0.last >= replyStart && $0.first <= replyEnd })
-        let tapsBefore = tapsAlone(in: Array(output[..<replyStart]))
-        let tapsAfter = tapsAlone(in: Array(output[replyEnd...]))
-        #expect(tapsBefore.count == 1 || tapsAfter.count == 1)
+        #expect(tapsAlone(in: Array(output[replyEnd...])).count == 1)
     }
 
     @Test func tapsWaitingBehindAnotherCueDoNotPlayWithAReplyThatStarts() async throws {

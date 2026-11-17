@@ -110,6 +110,15 @@ package final class OfflineAudio {
         }
     }
 
+    /// Renders `passes` passes on each running engine at once, as the timer would, for a test that
+    /// needs to know how far the audio has got: say, part-way through a cue. Called without an
+    /// `await` before the next step, nothing else renders in between.
+    package func render(passes: Int) {
+        for _ in 0..<passes {
+            _ = renderOnce()
+        }
+    }
+
     /// Renders one pass on each running engine. Returns false when none is running.
     private func renderOnce() -> Bool {
         let running = engines.filter { $0.isRunning && $0.isInManualRenderingMode }
