@@ -77,6 +77,14 @@ import Testing
         #expect(counting.isEcho("two one four"))
     }
 
+    @Test func aStretchCanHaveTwoWordsTheRecognizerMissedButNotThree() {
+        // Two heard words are matched against four of the reply's, so both line up across two
+        // that weren't heard.
+        #expect(ReplyEcho(reply: "one two three four").isEcho("one four"))
+        // Across three, no four of the reply's words hold both.
+        #expect(!ReplyEcho(reply: "one two three five four").isEcho("one four"))
+    }
+
     @Test func anAlternativeReadingThatIsEchoMakesTheResultEcho() {
         #expect(reply.isEcho(anyOf: ["Hey", "Hi"]))
         #expect(reply.isEcho(anyOf: ["Hey Adam", "Hi Adam"]))
