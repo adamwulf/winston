@@ -269,9 +269,11 @@ public final class VoiceLoop {
     /// The words of the reply that last ended and where it ended on the analyzer's timeline (the
     /// audio fed by then), to drop its echo reported after it ended, in hands-free listening with
     /// echo cancellation. Set however a reply ends: played to the end, stopped, or cut off by a
-    /// barge-in, which may have been echo itself. Cleared when the next reply starts, on
-    /// teardown, and by the first result starting more than `echoAfterReplyMargin` after that
-    /// end, since results come in the order of their audio and no more echo can follow.
+    /// barge-in, which may have been echo itself. Kept when the next reply starts, since results
+    /// lag their audio and its echo can still be reported while that one plays, and replaced
+    /// when that one ends. Cleared on teardown, and by the first result starting more than
+    /// `echoAfterReplyMargin` after that end, since results come in the order of their audio and
+    /// no more echo can follow.
     @ObservationIgnored private var lastReply: (echo: ReplyEcho, end: CMTime)?
     /// Cues scheduled on the current pipeline that haven't finished playing, oldest first, with
     /// the ID their completion reports. If the engine stops itself, they play again from the
@@ -832,8 +834,9 @@ public final class VoiceLoop {
     }
 
     /// Adds a result to the transcript, interrupting a reply if it is a barge-in. In hands-free
-    /// listening with echo cancellation, a result that is the reply's own echo is dropped
-    /// instead, while the reply plays or just after it ends (see `ReplyEcho`).
+    /// listening with echo cancellation, a result that is a reply's own echo is dropped
+    /// instead, while the reply plays or just after it ends, also while the next reply plays
+    /// (see `ReplyEcho`).
     private func apply(_ piece: TranscriptPiece) {
         var candidate = transcript
         guard candidate.apply(piece) else { return }
@@ -841,13 +844,14 @@ public final class VoiceLoop {
             // Without echo cancellation the microphone hears the reply itself, so nothing
             // spoken interrupts it (the app's stop button still does).
             let echoCancelled = pipeline?.hasVoiceProcessing ?? false
-            if echoCancelled, !isPushToTalk, let currentReplyEcho,
-               currentReplyEcho.isEcho(anyOf: transcript.readings(with: piece)) {
-                // The reply's own voice, past echo cancellation. Its audio is consumed through
-                // its last word, so later results for it, its final among them, don't bring it
-                // back, and the words after it are judged on their own. Not
-                // `ignoredWhileSpeaking`: consuming everything fed when the reply ends would
-                // also drop words Adam says near its end that haven't been reported yet.
+            if echoCancelled, !isPushToTalk, isEchoOfCurrentReply(piece) || isEchoAfterReply(piece) {
+                // The reply's own voice, past echo cancellation, or the last one's, reported
+                // late: results lag their audio, so the echo of a reply's last words can arrive
+                // after the next reply has started. Its audio is consumed through its last
+                // word, so later results for it, its final among them, don't bring it back,
+                // and the words after it are judged on their own. Not `ignoredWhileSpeaking`:
+                // consuming everything fed when the reply ends would also drop words Adam says
+                // near its end that haven't been reported yet.
                 pipeline?.timeline.resultIgnored(reason: "echo", words: candidate.wordCount)
                 ignoredResultsThisReply += 1
                 transcript.consume(through: Self.wordsEnd(of: piece))
@@ -899,10 +903,17 @@ public final class VoiceLoop {
         )
     }
 
-    /// Whether `piece`, heard with no reply playing, is the echo of the reply that last ended:
-    /// its first new word starts less than `echoAfterReplyMargin` after that reply's end, and the
-    /// utterance with it in is echo of the reply, in any reading. Only in hands-free listening
-    /// with echo cancellation. Forgets the last reply once a result starts later than that.
+    /// Whether `piece` is the echo of the reply being spoken: the utterance with it in is echo of
+    /// the reply, in any reading.
+    private func isEchoOfCurrentReply(_ piece: TranscriptPiece) -> Bool {
+        currentReplyEcho?.isEcho(anyOf: transcript.readings(with: piece)) ?? false
+    }
+
+    /// Whether `piece` is the echo of the reply that last ended, heard after it or while the next
+    /// reply plays: its first new word starts less than `echoAfterReplyMargin` after that reply's
+    /// end, and the utterance with it in is echo of the reply, in any reading. Only in hands-free
+    /// listening with echo cancellation. Forgets the last reply once a result starts later than
+    /// that.
     private func isEchoAfterReply(_ piece: TranscriptPiece) -> Bool {
         guard let lastReply, !isPushToTalk, pipeline?.hasVoiceProcessing == true else { return false }
         let start = Transcript.start(of: piece.text, startingAt: transcript.consumedThrough) ?? piece.range.start
@@ -1384,9 +1395,8 @@ public final class VoiceLoop {
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
+        // `lastReply` is kept: the echo of its last words can still be reported.
         currentReplyEcho = ReplyEcho(reply: text)
-        // What is heard from now on is matched against this reply instead.
-        lastReply = nil
         state = .speaking
         // The reply's log reports what the microphone heard while it played.
         _ = pipeline.voiceActivity.takePeakDecibels()
