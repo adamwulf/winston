@@ -868,6 +868,44 @@ struct BargeInTests {
         #expect(await eventually { bed.audio.playedFrames > playedSoFar })
     }
 
+    @Test func theEchoAfterAMisheardWordCutTheReplyOffIsDroppedWithThatWord() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        // So the word that cut the reply off isn't sent before the echo after it is reported.
+        loop.pauseThreshold = .seconds(30)
+        let sent = UtteranceLog(loop)
+
+        loop.speak(
+            "Hi Adam, I can hear you loud and clear, and this reply goes on long enough "
+                + "to still be playing when the test checks it."
+        )
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // Fed as the reply started playing.
+        let playing = heardSeconds(bed)
+        // "Hi" heard as "Hey", with no other reading: not the reply's, so it cuts it off.
+        bed.recognizer.hear(timed: [("Hey", playing)], through: playing + 0.3)
+        #expect(await eventually { loop.state == .listening(partial: "Hey") })
+
+        // The same audio and more, starting before the reply was cut off, is mostly its words.
+        bed.recognizer.hear(
+            timed: [
+                ("Hey", playing), ("Adam", playing + 0.3), ("I", playing + 0.5),
+                ("can", playing + 0.6), ("hear", playing + 0.8), ("you", playing + 1),
+            ],
+            through: playing + 1.2
+        )
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        loop.pauseThreshold = .milliseconds(50)
+        try await settle()
+        #expect(loop.state == .listening(partial: ""))
+        #expect(sent.texts.isEmpty)
+
+        // Words heard later are sent on their own.
+        bed.recognizer.hear("Thanks.", over: later, isFinal: true)
+        #expect(await eventually { sent.texts == ["Thanks."] })
+    }
+
     @Test func talkingOverAReplyAfterItsEchoWasIgnoredInterruptsItWithOnlyTheNewWords() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)
