@@ -2,10 +2,11 @@
 
 Status: written 2026-11-15; "Dropping transcripts that match the reply" was
 built 2026-11-16 (`ReplyEcho`, and `VoiceLoop.apply` and `isEchoAfterReply`).
-It differs from the design below where the design said to judge the whole
-candidate and to consume through a result's end; those sections now say what
-was built, and "Limits" says what that changes. Echo matching applies to
-hands-free listening only: push-to-talk, added after this plan, is unchanged.
+It differs from the design below in its matching rule, and where the design
+said to judge the whole candidate and to consume through a result's end; those
+sections now say what was built, and "Limits" says what that changes. Echo
+matching applies to hands-free listening only: push-to-talk, added after this
+plan, is unchanged.
 The iPhone's logs have since been read
 (`docs/research/echo-cancellation-regression.md`).
 
@@ -134,10 +135,15 @@ A small pure type, for example `ReplyEcho` in a new
   `Utterance.words(of:)`, which also drops filler words ("uh", "um") and reads
   "okay" as "ok". The reply is matched as it was spoken: the text
   `SpeechPlayback.text` holds, after markdown stripping and pronunciations.
-- **Rule:** align the heard words with the reply's words in order (longest
-  common subsequence, exact word equality). The heard text is echo when at
-  least half its words align. A one-word result must match a reply word
-  exactly. Empty text is never echo.
+- **Rule (as built):** echo is a stretch of the reply, in order, and usually
+  recognized clearly. Heard text of `n` words is aligned (longest common
+  subsequence, exact word equality) with every run of `n + 2` consecutive
+  reply words, and the best run counts. It is echo when at least two thirds
+  of its words, rounded up, align: one word must be a reply word, two must
+  both be, near each other in the reply, and 6 need 4. Empty text is never
+  echo. The design's rule, at least half aligned anywhere in the reply, was
+  built first and replaced: a long reply holds most common words, so short
+  interruptions ("hold on", "wait what") counted as echo and were dropped.
 - **Readings:** check the result's text and each of its alternatives
   (`TranscriptPiece.alternatives`). It's echo if any reading is. That is what
   catches "Hey" for "Hi": the recognizer often lists the other reading.
@@ -152,7 +158,10 @@ A small pure type, for example `ReplyEcho` in a new
   misheard word is still echo when one of its alternatives matches.
 
 Example: "Hey Adam, I can hear you loud and clear" against "Hi Adam, I can
-hear you loud and clear..." aligns 8 of 9 words. "Wait, stop" aligns none.
+hear you loud and clear..." aligns 8 of 9 words, at least the 6 needed.
+"Wait, stop" aligns none. "Hold on" against a reply that says "on" aligns 1
+of 2, not echo. "Wait, can you say that again" against a reply that says
+"can", "you" and "that" far apart aligns at most 2 of 6 in any run of 8.
 
 ### While a reply plays
 
@@ -226,7 +235,10 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
   isn't sent. (Not built as a test. Built instead: a misheard echo word whose
   alternative matches doesn't cut the reply off, and Adam talking over a reply
   after its echo was ignored interrupts it with only his words sent, also when
-  the echo's volatile result ran past its last word into his first.)
+  the echo's volatile result ran past its last word into his first. Also
+  built: "hold on" over a reply that says "on" interrupts it and is sent, and
+  a barge-in like "wait, can you say that again" over a reply with "can",
+  "you" and "that" far apart is sent, not dropped as its echo.)
 - These existing tests still pass unchanged:
   `talkingOverAReplyStopsItAndBecomesTheNextUtterance`,
   `wordsSpokenAsAReplyEndsAreKept` ("Thanks." isn't in "Hi."), and the two
@@ -236,38 +248,37 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
 
 - **A misheard first word can still cut a reply off.** If the first result is
   one word that matches neither the reply nor an alternative, it still
-  interrupts. The echo that follows won't be sent, but the rest of the reply is
-  lost. Resuming a reply after a false barge-in, as LiveKit Agents does, would
-  be a separate change.
+  interrupts. So does a two-word echo with one misheard word and no matching
+  alternative, since two heard words must both match. The echo that follows
+  won't be sent, but the rest of the reply is lost. Resuming a reply after a
+  false barge-in, as LiveKit Agents does, would be a separate change.
 - **Adam repeating the reply's words.** Words that repeat the reply in order
   won't count as interrupting while it plays, and won't be sent if they start
   within the margin after it ends.
-- **Common words (as built).** Each result is judged on the words it adds,
-  often one or two, against the whole reply, and a long reply holds most
-  common words ("I", "you", "the", "that", "no", "okay"). Words Adam says
-  over a reply are judged echo, and consumed, while at least half of each
-  result's new words are the reply's: one word in the reply, or "stop that"
-  with "that" in it, is dropped for good. He interrupts with the first result
-  whose new words are mostly not the reply's, and his message starts there.
-  Requiring more than half would keep more of his words but let more misheard
-  echo through; not tried.
+- **A one-word interjection in the reply (as built).** Each result is judged
+  on the words it adds, often one or two, and a long reply holds most common
+  words. A result that adds only "no", "yes" or "okay" while the reply says
+  that word is ignored as echo, and its audio is consumed, so the word is
+  dropped for good; Adam interrupts with the next result whose new words
+  aren't a stretch of the reply, and his message starts there. Two words must
+  both be in the reply, near each other, so "hold on" or "stop that" over a
+  reply that says "on" or "that" somewhere interrupts.
 - **Right after a barge-in (as built).** A barge-in ends the reply like any
   other ending, so for a moment after it Adam's own words are judged against
   the reply too: everything he said in a result whose first word starts within
-  0.5 s of the barge-in, including the words that interrupted. If at least half
-  of those, in order, are the reply's words ("Wait, can you say that again"
-  against a reply with "can", "you" and "that" in that order), his barge-in is
-  dropped as echo. The check after a barge-in is there for the barge-in that
-  is itself echo (a misheard first word); without it his words would be kept,
-  but that echo would be sent.
+  0.5 s of the barge-in, including the words that interrupted. They are
+  dropped as echo only if two thirds of them are a stretch of the reply, which
+  his own words rarely are unless he repeats it. The check is there for the
+  barge-in that is itself echo (a misheard first word): the echo that follows
+  it is a stretch of the reply, and is dropped with it.
 - **Numbers and acronyms.** The reply's text keeps digits and acronyms as
   written; Kokoro spells them out when it speaks, and the transcriber may write
   them either way. A mismatch there counts as a word that doesn't align.
 - **Echo mixed with real speech (as built).** Echo judged in earlier results
   is consumed, so it neither holds back Adam's words nor ends up in his
   message. Only echo first reported in the same result as his words is mixed
-  with them: that result interrupts if his words are the majority, and the
-  echoed words are sent with his.
+  with them: that result interrupts unless two thirds of it is a stretch of
+  the reply, and the echoed words are then sent with his.
 - **The previous reply's tail.** A reply that starts as soon as the last one
   ends judges what it hears against itself only, so the last reply's echo,
   reported late, can still interrupt it. That was so before as well.
