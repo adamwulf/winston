@@ -110,12 +110,8 @@ public final class VoiceLoop {
     }
     @ObservationIgnored private var pronunciationReplacer = PronunciationReplacer([])
     /// While speaking, transcripts with fewer words than this are ignored instead of
-    /// interrupting. Whatever this is, the reply's own words heard back through echo
-    /// cancellation don't interrupt it (see `ReplyEcho`): a result interrupts when the words it
-    /// adds after the echo already heard aren't a stretch of the reply. Raise this if the app's
-    /// voice still interrupts, say with words the recognizer mishears. Without echo cancellation
-    /// (if it couldn't start), speech never interrupts a reply, and with push-to-talk nothing
-    /// heard does.
+    /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
+    /// echo cancellation (if it couldn't start), speech never interrupts a reply.
     public var bargeInMinimumWords = 1
     /// Push-to-talk: the microphone is muted except while the push-to-talk button is held, from
     /// `beginTalking()` to `endTalking()`, and what was said during a hold is sent as one
@@ -157,21 +153,15 @@ public final class VoiceLoop {
     /// Whether `play(_:)`, the start and stop of listening, and the working cue make a sound.
     /// Most tests turn it off, since they measure what was spoken by how much sound came out.
     @ObservationIgnored package var playsSoundCues = true
-    /// Seconds of microphone audio fed to the recognizer so far: where its timeline is now, and
-    /// what a reply's end, a press and consuming are measured on. Zero while off. For tests: the
-    /// recognizer reads what is fed on a task of its own, so what it has read lags this by
-    /// whatever is still queued.
-    package var fedAudioSeconds: Double {
-        pipeline?.fedAudio.time.seconds ?? 0
-    }
     /// Whether the bot is working on a reply, for the app to set while it shows the bot typing.
     /// Each time it turns on, the loop plays `SoundCue.agentWorking`, three low taps, once, so
-    /// Adam hears that a reply is on its way without looking. If a reply is being said, the taps
-    /// wait until it ends, and they wait while the loop is off, starting, or rebuilding its
-    /// engine. They play through the loop's engine, so echo cancellation takes them out of what
-    /// the microphone hears, and only with echo cancellation on: without it, the microphone would
-    /// hear them as loud as they play, and the recognizer and the pause detector would take them
-    /// for Adam talking.
+    /// Adam hears that a reply is on its way without looking. They never sound with a reply: if
+    /// one is being said, the taps wait until its sound has ended, and one that starts while they
+    /// play cuts them off, to play again in full after it if the bot is still working. They also
+    /// wait while the loop is off, starting, or rebuilding its engine. They play through the
+    /// loop's engine, so echo cancellation takes them out of what the microphone hears, and only
+    /// with echo cancellation on: without it, the microphone would hear them as loud as they
+    /// play, and the recognizer and the pause detector would take them for Adam talking.
     public var isAgentWorking = false {
         didSet {
             guard isAgentWorking != oldValue else { return }
@@ -181,7 +171,8 @@ public final class VoiceLoop {
             updateWorkingCue()
         }
     }
-    /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on.
+    /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on. A play
+    /// that was cut off before it finished, by a reply or by the engine stopping, doesn't count.
     @ObservationIgnored package private(set) var hasPlayedWorkingCue = false
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
@@ -257,31 +248,16 @@ public final class VoiceLoop {
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
-    /// Set when a result was ignored while speaking as too short (possibly echo). When speaking
-    /// ends, all audio fed so far is consumed if this is set, `bargeInMinimumWords` is above 1,
-    /// or echo cancellation is off (echo is expected then, and a short reply's echo may only
-    /// arrive after playback). That also covers the echo of the last words, whose results lag
-    /// behind the audio. A result ignored as the reply's own echo doesn't set it: its audio is
-    /// consumed through its last word as it is heard, and `lastReply` catches the echo reported
-    /// after the reply ends, so words Adam says near the end of a reply whose echo leaked aren't
-    /// consumed before they are reported. With echo cancellation at the default of 1 and nothing
-    /// ignored as too short, nothing is consumed, so words spoken right as a reply ends are kept
-    /// unless they are its echo; without echo cancellation everything fed so far, plus a short
-    /// margin, is consumed.
+    /// Set when a result was ignored as too short while speaking (possibly the reply's own
+    /// echo). When speaking ends, all audio fed so far is consumed if this is set,
+    /// `bargeInMinimumWords` is above 1, or echo cancellation is off (echo is expected then,
+    /// and a short reply's echo may only arrive after playback). That also covers the echo of the last words, whose results
+    /// lag behind the audio. With echo cancellation at the default of 1 nothing is consumed,
+    /// so words spoken right as a reply ends are kept; without it everything fed so far, plus
+    /// a short margin, is consumed.
     @ObservationIgnored private var ignoredWhileSpeaking = false
     /// Results ignored while the current reply plays, for the logs.
     @ObservationIgnored private var ignoredResultsThisReply = 0
-    /// The words of the reply being spoken, to tell its echo from Adam. Nil when not speaking.
-    @ObservationIgnored private var currentReplyEcho: ReplyEcho?
-    /// The words of the reply that last ended and where it ended on the analyzer's timeline (the
-    /// audio fed by then), to drop its echo reported after it ended, in hands-free listening with
-    /// echo cancellation. Set however a reply ends: played to the end, stopped, or cut off by a
-    /// barge-in, which may have been echo itself. Kept when the next reply starts, since results
-    /// lag their audio and its echo can still be reported while that one plays, and replaced
-    /// when that one ends. Cleared on teardown, and by the first result starting more than
-    /// `echoAfterReplyMargin` after that end, since results come in the order of their audio and
-    /// no more echo can follow.
-    @ObservationIgnored private var lastReply: (echo: ReplyEcho, end: CMTime)?
     /// Cues scheduled on the current pipeline that haven't finished playing, oldest first, with
     /// the ID their completion reports. If the engine stops itself, they play again from the
     /// start once it is running again.
@@ -724,7 +700,12 @@ public final class VoiceLoop {
         lastCueID += 1
         let id = lastCueID
         unfinishedCues.append((id, cue))
-        pipeline.play(cue) { [weak self] in
+        // The working cue can follow a reply that has just ended or been cut off: some of it can
+        // still be on its way out of the pitch shift then, which keeps sounding as it empties,
+        // and offline it holds a render pass of it (see `SpeechOutput.completion`). The taps
+        // start after that.
+        let leadIn = cue == .agentWorking ? SpeechOutput.pitchShiftTail : 0
+        pipeline.play(cue, leadIn: leadIn) { [weak self] in
             Task { @MainActor in self?.cueFinished(id) }
         }
         return true
@@ -840,10 +821,7 @@ public final class VoiceLoop {
         sendHeldUtteranceIfReported()
     }
 
-    /// Adds a result to the transcript, interrupting a reply if it is a barge-in. In hands-free
-    /// listening with echo cancellation, a result that is a reply's own echo is dropped
-    /// instead, while the reply plays or just after it ends, also while the next reply plays
-    /// (see `ReplyEcho`).
+    /// Adds a result to the transcript, interrupting a reply if it is a barge-in.
     private func apply(_ piece: TranscriptPiece) {
         var candidate = transcript
         guard candidate.apply(piece) else { return }
@@ -851,19 +829,6 @@ public final class VoiceLoop {
             // Without echo cancellation the microphone hears the reply itself, so nothing
             // spoken interrupts it (the app's stop button still does).
             let echoCancelled = pipeline?.hasVoiceProcessing ?? false
-            if echoCancelled, !isPushToTalk, isEchoOfCurrentReply(piece) || isEchoAfterReply(piece) {
-                // The reply's own voice, past echo cancellation, or the last one's, reported
-                // late: results lag their audio, so the echo of a reply's last words can arrive
-                // after the next reply has started. Its audio is consumed through its last
-                // word, so later results for it, its final among them, don't bring it back,
-                // and the words after it are judged on their own. Not `ignoredWhileSpeaking`:
-                // consuming everything fed when the reply ends would also drop words Adam says
-                // near its end that haven't been reported yet.
-                pipeline?.timeline.resultIgnored(reason: "echo", words: candidate.wordCount)
-                ignoredResultsThisReply += 1
-                transcript.consume(through: Self.wordsEnd(of: piece))
-                return
-            }
             guard echoCancelled, candidate.wordCount >= max(1, bargeInMinimumWords) else {
                 pipeline?.timeline.resultIgnored(
                     reason: echoCancelled ? "tooFewWords" : "noEchoCancellation",
@@ -875,21 +840,12 @@ public final class VoiceLoop {
             }
             logResult(piece, applied: candidate)
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
-            // ignored as too short may be this utterance's first words, so nothing more is
-            // consumed; the echo was consumed as it was heard.
+            // ignored so far may be this utterance's first words, so no audio is consumed.
             Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
             pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
             updateWorkingCue()
-        } else if isEchoAfterReply(piece) {
-            pipeline?.timeline.resultIgnored(reason: "echoAfterReply", words: candidate.wordCount)
-            // With the words of a barge-in that was echo itself, if that is what ended the reply.
-            transcript.discard(through: Self.wordsEnd(of: piece))
-            pauseDetector.reset()
-            updateListeningState()
-            speakNextIfIdle()
-            return
         } else {
             logResult(piece, applied: candidate)
         }
@@ -908,39 +864,6 @@ public final class VoiceLoop {
             isFirst: transcript.isEmpty && !candidate.isEmpty,
             firstWordStart: Transcript.start(of: piece.text, startingAt: transcript.consumedThrough)
         )
-    }
-
-    /// Whether `piece` is the echo of the reply being spoken: the utterance with it in is echo of
-    /// the reply, in any reading.
-    private func isEchoOfCurrentReply(_ piece: TranscriptPiece) -> Bool {
-        currentReplyEcho?.isEcho(anyOf: transcript.readings(with: piece)) ?? false
-    }
-
-    /// Whether `piece` is the echo of the reply that last ended, heard after it or while the next
-    /// reply plays: its first new word starts less than `echoAfterReplyMargin` after that reply's
-    /// end, and the utterance with it in is echo of the reply, in any reading. Only in hands-free
-    /// listening with echo cancellation. Forgets the last reply once a result starts later than
-    /// that.
-    private func isEchoAfterReply(_ piece: TranscriptPiece) -> Bool {
-        guard let lastReply, !isPushToTalk, pipeline?.hasVoiceProcessing == true else { return false }
-        let start = Transcript.start(of: piece.text, startingAt: transcript.consumedThrough) ?? piece.range.start
-        guard start < lastReply.end + Self.echoAfterReplyMargin else {
-            self.lastReply = nil
-            return false
-        }
-        return lastReply.echo.isEcho(anyOf: transcript.readings(with: piece))
-    }
-
-    /// How long after a reply ends, on the analyzer's timeline, a word can start and still be
-    /// its echo: echo reaches the microphone tap a buffer and the output latency after it plays.
-    /// The words must match the reply as well.
-    private static let echoAfterReplyMargin = CMTime(value: 5, timescale: 10)
-
-    /// Where `piece`'s last word ends on the analyzer's timeline, or where its audio ends when it
-    /// has no word timings. A volatile result's audio runs on to the audio fed so far, which can
-    /// hold the start of a word after it.
-    private static func wordsEnd(of piece: TranscriptPiece) -> CMTime {
-        Transcript.end(of: piece.text) ?? piece.range.end
     }
 
     private func checkForPause() {
@@ -1112,8 +1035,6 @@ public final class VoiceLoop {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
         silence(consumingEcho: true, reason: "teardown")
-        // The next pipeline's timeline starts again from zero.
-        lastReply = nil
         if kind == .stop {
             speechQueue.removeAll()
             // A hold ends with voice mode. Through a rebuild it carries on.
@@ -1228,10 +1149,15 @@ public final class VoiceLoop {
         let interruptedCues = unfinishedCues.map(\.cue)
         unfinishedCues = []
         pipeline.cuePlayer.stop()
+        // Working taps that were cut off play again as the others do, but only once nothing is
+        // said: the reply cut off with them starts over first.
+        if interruptedCues.contains(.agentWorking) {
+            hasPlayedWorkingCue = false
+        }
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
-            for cue in interruptedCues {
+            for cue in interruptedCues where cue != .agentWorking {
                 play(cue)
             }
             speakNextIfIdle()
@@ -1396,14 +1322,13 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !isTalking, release == nil, !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
+        cutOffWorkingCue(on: pipeline)
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)
         let playback = pipeline.speech.makePlayback(text: text) { [weak self] playback in
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
-        // `lastReply` is kept: the echo of its last words can still be reported.
-        currentReplyEcho = ReplyEcho(reply: text)
         state = .speaking
         // The reply's log reports what the microphone heard while it played.
         _ = pipeline.voiceActivity.takePeakDecibels()
@@ -1512,7 +1437,6 @@ public final class VoiceLoop {
         let replyEnded = logReplyEnded(playback, reason: "finished")
         pipeline?.timeline.speechFinished(replyEnded)
         currentSpeech = nil
-        rememberEndedReply()
         kokoroSynthesis = nil
         consumeEcho()
         updateListeningState()
@@ -1537,7 +1461,6 @@ public final class VoiceLoop {
         pipeline?.timeline.speechStopRequested(reason: reason)
         logReplyEnded(currentSpeech, reason: reason)
         self.currentSpeech = nil
-        rememberEndedReply()
         currentSpeech.cancel()
         kokoroSynthesis?.cancel()
         kokoroSynthesis = nil
@@ -1571,15 +1494,6 @@ public final class VoiceLoop {
         ]
         Self.log.info("reply ended", fields)
         return fields
-    }
-
-    /// The reply being spoken has ended, however it ended. Its echo may still be reported, so
-    /// its words are kept with where it ended (see `lastReply`).
-    private func rememberEndedReply() {
-        if let currentReplyEcho, let pipeline {
-            lastReply = (currentReplyEcho, pipeline.fedAudio.time)
-        }
-        currentReplyEcho = nil
     }
 
     /// Once speaking ends, its echo must not be sent later. See `ignoredWhileSpeaking` for
@@ -1624,6 +1538,9 @@ public final class VoiceLoop {
     /// cues on. Call it whenever one of those may have changed while the loop listens on. Not from
     /// `silence`, which a teardown uses too: it would play the cue just before the teardown cuts
     /// it off.
+    ///
+    /// The taps never sound with a reply: they wait while one is said, start a moment after it
+    /// ends (see `play(_:)`), and a reply that starts cuts them off (`cutOffWorkingCue(on:)`).
     private func updateWorkingCue() {
         guard isAgentWorking, !hasPlayedWorkingCue, let pipeline else { return }
         if let reason = reasonWorkingCueWaits(on: pipeline) {
@@ -1644,6 +1561,23 @@ public final class VoiceLoop {
         if !pipeline.hasVoiceProcessing { return "noEchoCancellation" }
         if !playsSoundCues { return "soundCuesOff" }
         return nil
+    }
+
+    /// For a reply about to start: stops `SoundCue.agentWorking` at once if it is playing or
+    /// waiting on the cue player, so the taps never sound with a reply. Stopping the player
+    /// stops every cue on it, so the others that hadn't finished play again from the start, as
+    /// after the engine stops by itself. The taps wait to play again in full once nothing is
+    /// said, if the agent is still working.
+    private func cutOffWorkingCue(on pipeline: Pipeline) {
+        guard unfinishedCues.contains(where: { $0.cue == .agentWorking }) else { return }
+        let otherCues = unfinishedCues.map(\.cue).filter { $0 != .agentWorking }
+        unfinishedCues = []
+        pipeline.cuePlayer.stop()
+        hasPlayedWorkingCue = false
+        Self.log.info("working cue cut off", ["reason": "speaking"])
+        for cue in otherCues {
+            play(cue)
+        }
     }
 }
 

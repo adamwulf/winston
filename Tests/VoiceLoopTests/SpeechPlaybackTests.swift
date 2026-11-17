@@ -131,12 +131,45 @@ struct SpeechPlaybackTests {
         playback.synthesisFinished()
         playback.receive(try speechBuffer(seconds: 0.1))
 
-        // Each of the two ends the message as far as the playback knows; the loop ignores
-        // the second report.
-        #expect(await eventually { finished.count == 2 })
+        #expect(await eventually { finished.count == 1 })
         try await letTheLastPassPlay()
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
+    }
+
+    @Test func aBufferThatArrivesAfterSynthesisFinishedEndsTheMessageOnceItHasPlayed() async throws {
+        // An engine rendered a pass at a time by the test, so it knows how far playback has got.
+        let engine = AVAudioEngine()
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
+        try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 1024)
+        let output = try SpeechOutput(engine: engine)
+        output.connect()
+        try engine.start()
+        defer { engine.stop() }
+        output.player.play()
+        let finished = FinishCounter()
+        let playback = output.makePlayback(text: "Hello.") { _ in finished.increment() }
+        let rendered = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 1024))
+        func render(seconds: Double) throws {
+            for _ in 0..<Int(seconds * 48_000 / 1024) {
+                _ = try engine.renderOffline(1024, to: rendered)
+            }
+        }
+
+        playback.receive(try speechBuffer(seconds: 0.1))
+        playback.synthesisFinished()
+        playback.receive(try speechBuffer(seconds: 0.5))
+
+        // Well past the first buffer, with most of the late one still to play: not over yet.
+        try render(seconds: 0.3)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(finished.count == 0)
+
+        // Once the late one has played, it is, once.
+        try render(seconds: 0.5)
+        #expect(await eventually { finished.count == 1 })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(finished.count == 1)
     }
 
     @Test func aMessageWithNoSoundFinishesAsSoonAsSynthesisDoes() async throws {

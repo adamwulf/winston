@@ -354,10 +354,7 @@ final class VoiceTimeline {
         logger.info("first result", metadata(at: time, audio: audio, extra))
     }
 
-    /// A result ignored rather than applied. While a reply plays, `reason` is
-    /// `noEchoCancellation`, `tooFewWords`, or `echo` (the reply's own words, or the last reply's
-    /// reported late); just after a reply ended, it is `echoAfterReply`, and the utterance in
-    /// progress is dropped with it. `words` counts the utterance's words with the result in.
+    /// A result ignored while a reply plays. `reason` is `noEchoCancellation` or `tooFewWords`.
     func resultIgnored(reason: String, words: Int) {
         writeRecorded()
         logger.info("result ignored", metadata(at: now(), audio: fedAudio.time, [

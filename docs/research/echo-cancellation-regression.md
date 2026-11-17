@@ -1,6 +1,7 @@
 # Echo cancellation stopped working in builds 41 and 43
 
-Status: findings, 2026-11-16. From the iPhone's own logs (iPhone 16e, iOS 27.3,
+Status: findings, 2026-11-16; the echo matching tried for them was removed on
+2026-11-17 (see the end). From the iPhone's own logs (iPhone 16e, iOS 27.3,
 built-in microphone and speaker), copied off the phone with `xcrun devicectl
 device copy from ... --domain-type appDataContainer` (`Library/Logs/Winston`).
 Times below are the logs' UTC.
@@ -73,8 +74,31 @@ played every later reply to the end. That is the canceller not yet converged
 on its first playback, as Apple's thread describes. Builds 12 to 22 faded each
 reply in over 200 ms (`a4bff61`), which hid it. The fade was removed in
 `1b0a6f5` because it clipped the start of speech, and nothing may clip or
-attenuate it. That is the leak `docs/plans/echo-transcript-matching.md` was
-written for ("Hi Adam, I can hear you loud and clear").
+attenuate it. That is the leak the echo matching below was built for ("Hi
+Adam, I can hear you loud and clear").
+
+## Echo matching: tried and removed
+
+`0233697` to `53a92be` (merged in `29b1107`) dropped recognizer results that
+were the reply's own words heard back. `ReplyEcho` counted heard text as echo
+when two thirds of its words, rounded up, lined up in order with a stretch of
+the reply two words longer, and the loop also dropped the last reply's echo up
+to half a second after it ended, while the next reply played.
+
+It was reverted in full (`55bbcb2`). The two-thirds rule, the two-word slack
+and the half-second margin are guesses, not measurements, and they decide
+whether Adam's words are sent or dropped. When one guesses wrong, a real
+interruption is lost or echo still cuts a reply off, and the logs, which keep
+no words, can't show whether what was dropped was echo or Adam: those bugs
+would be very hard to track down.
+Nothing else in the merge stood on its own, so the code went back to `7cc0e21`.
+
+The working cue stays the likely cause of builds 41 and 43. The loop now never
+plays it with a reply: it waits until a reply's sound has ended, starting a
+tenth of a second after it, and a reply that starts while it plays stops it at
+once. Whether that, or dropping the cue entirely, keeps the canceller converged
+has to be checked on the phone. Echo cancellation itself (voice processing, the
+voice chat mode, one engine for the microphone, speech and cues) is unchanged.
 
 ## Trying it on the Mac
 

@@ -269,8 +269,11 @@ Inside it:
 - **Working cue** (added later): when the bot in the current chat starts
   typing, three low, quiet taps play once, like fingers on a desk, so Adam
   hears a reply is on its way. They play again only after the bot stops typing
-  (its message arrives, typing ends, or typing times out) and starts again. If
-  a reply is being spoken, they wait until it ends. Like the other cues, they
+  (its message arrives, typing ends, or typing times out) and starts again.
+  They never sound with a reply: if one is being spoken, they wait until its
+  sound has ended, starting a tenth of a second after it, and a reply that
+  starts while they play cuts them off at once; they then play in full after
+  it if the bot is still typing. Like the other cues, they
   are synthesized in code and play through the loop's own engine, so echo
   cancellation removes them from the microphone. They never play without echo
   cancellation (the half-duplex fallback): the microphone would hear them at

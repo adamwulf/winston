@@ -734,410 +734,6 @@ struct BargeInTests {
         #expect(await nextUtterance(of: loop)?.text == "Thanks.")
     }
 
-    // The reply's own voice can get past echo cancellation, at the start of a reply on the
-    // iPhone's speaker, and the recognizer reports it like any other words.
-
-    @Test func theReplysOwnWordsHeardDuringItDoNotInterruptItAndAreNotSent() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-        var before = bed.audio.playedFrames
-        loop.speak(longReply)
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        let playedAlone = bed.audio.playedFrames - before
-
-        before = bed.audio.playedFrames
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > before })
-        // Reported word by word, the later result with the earlier one's words again.
-        bed.recognizer.hear(timed: [("This", 0), ("is", 0.3)], through: 0.5)
-        bed.recognizer.hear(timed: [("This", 0), ("is", 0.3), ("a", 0.5), ("long", 0.6)], through: 1)
-        try await settle(.milliseconds(100))
-        #expect(loop.state == .speaking)
-
-        // It plays to the end, and the echo's final, reported after that, isn't sent.
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        let played = bed.audio.playedFrames - before
-        #expect(playedAlone > 0)
-        #expect(abs(played - playedAlone) <= playedAlone / 20)
-        bed.recognizer.hear(
-            timed: [("This", 0), ("is", 0.3), ("a", 0.5), ("long", 0.6), ("reply,", 1)],
-            through: 1.4,
-            isFinal: true
-        )
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        #expect(sent.texts.isEmpty)
-
-        bed.recognizer.hear("Thanks.", over: later, isFinal: true)
-        #expect(await eventually { sent.texts == ["Thanks."] })
-    }
-
-    /// Speaks `longReply`, has its first words heard back and ignored as its echo, and waits
-    /// until two more seconds of audio have been fed with the reply still playing. Returns
-    /// where the echo starts, which was fed as the reply started playing: words timed in the
-    /// second after the echo were said while the reply played.
-    private func replyWithItsEchoIgnored(by loop: VoiceLoop, on bed: VoiceTestBed) async throws -> Double {
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        let playing = heardSeconds(bed)
-        bed.recognizer.hear(timed: [("This", playing), ("is", playing + 0.3)], through: playing + 0.5)
-        try await settle(.milliseconds(100))
-        #expect(loop.state == .speaking)
-        #expect(await eventually { heardSeconds(bed) > playing + 2 })
-        #expect(loop.state == .speaking)
-        return playing
-    }
-
-    @Test func wordsSaidDuringAReplyWhoseEchoWasIgnoredAreSentWhenReportedAfterItEnds() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-        let echo = try await replyWithItsEchoIgnored(by: loop, on: bed)
-
-        // It plays to the end. Only then does the recognizer report what Adam said meanwhile,
-        // after the echo: the end of the reply didn't consume it.
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        bed.recognizer.hear(
-            timed: [("Actually,", echo + 1), ("hold", echo + 1.3), ("that", echo + 1.5), ("thought.", echo + 1.7)],
-            through: echo + 1.9,
-            isFinal: true
-        )
-
-        #expect(await eventually { sent.texts == ["Actually, hold that thought."] })
-    }
-
-    @Test func wordsSaidDuringAReplyWhoseEchoWasIgnoredAreSentWhenReportedAfterItIsStopped() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-        let echo = try await replyWithItsEchoIgnored(by: loop, on: bed)
-
-        loop.stopSpeaking()
-        #expect(loop.state == .listening(partial: ""))
-        // Only then does the recognizer report what Adam said meanwhile, after the echo.
-        bed.recognizer.hear(
-            timed: [("Actually,", echo + 1), ("hold", echo + 1.3), ("that", echo + 1.5), ("thought.", echo + 1.7)],
-            through: echo + 1.9,
-            isFinal: true
-        )
-
-        #expect(await eventually { sent.texts == ["Actually, hold that thought."] })
-    }
-
-    @Test func theEchoOfAShortReplyReportedAfterItEndedIsNotSent() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-
-        loop.speak("Hi there.")
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        // The recognizer reports the echo only after the reply has ended.
-        bed.recognizer.hear("Hi there", over: 0...0.5)
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        bed.recognizer.hear("Hi there.", over: 0...0.5, isFinal: true)
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        #expect(sent.texts.isEmpty)
-
-        // Words heard well after the reply are sent, even its own.
-        bed.recognizer.hear("Hi there.", over: later, isFinal: true)
-        #expect(await eventually { sent.texts == ["Hi there."] })
-    }
-
-    // Results lag their audio, so the echo of a reply's last words can be reported after the
-    // next reply has started: a queued one, or a preview that replaced it.
-
-    @Test func theEchoOfAReplyReportedWhileTheQueuedOneAfterItPlaysDoesNotInterruptIt() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-        let first = "Sure, I can check that for you."
-        var before = bed.audio.playedFrames
-        loop.speak(first)
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        let firstAlone = bed.audio.playedFrames - before
-
-        before = bed.audio.playedFrames
-        // Before the first reply starts, so words timed from here are before it ended.
-        let start = loop.fedAudioSeconds
-        loop.speak(first)
-        loop.speak(
-            "Here is the next reply, long enough to still be playing when the test checks it, "
-                + "and it goes on a little longer than the reply before it did."
-        )
-        // The second starts as soon as the first ends, so once clearly more sound than the
-        // first makes has come out, the second is playing.
-        #expect(await eventually { bed.audio.playedFrames > before + firstAlone + firstAlone / 4 })
-        #expect(loop.state == .speaking)
-        // The first reply's last words, reported only now.
-        bed.recognizer.hear(
-            timed: [("that", start), ("for", start + 0.2), ("you.", start + 0.3)],
-            through: start + 0.5,
-            isFinal: true
-        )
-        try await settle(.milliseconds(100))
-
-        #expect(loop.state == .speaking)
-        let playedSoFar = bed.audio.playedFrames
-        #expect(await eventually { bed.audio.playedFrames > playedSoFar })
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        try await settle()
-        #expect(sent.texts.isEmpty)
-    }
-
-    @Test func theEchoOfAReplyReportedWhileAPreviewThatReplacedItPlaysDoesNotInterruptIt() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // Fed while the reply plays.
-        let playing = loop.fedAudioSeconds
-        #expect(loop.state == .speaking)
-        loop.preview(
-            "Testing the voice preview now, which keeps going for several seconds so the check "
-                + "sees it still playing afterwards, and then some more."
-        )
-        #expect(loop.state == .speaking)
-        // The replaced reply's words, reported only once the preview plays.
-        bed.recognizer.hear(
-            timed: [("This", playing), ("is", playing + 0.3), ("a", playing + 0.5), ("long", playing + 0.6)],
-            through: playing + 0.9,
-            isFinal: true
-        )
-        try await settle(.milliseconds(100))
-
-        #expect(loop.state == .speaking)
-        let playedSoFar = bed.audio.playedFrames
-        #expect(await eventually { bed.audio.playedFrames > playedSoFar })
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        try await settle()
-        #expect(sent.texts.isEmpty)
-    }
-
-    // Echo is looked for after a reply only in words starting less than half a second after it
-    // ended, at the audio fed by then. The audio fed, read once the loop is listening again, is
-    // at or past that end, so words starting 0.6 s after it start later than that. What the
-    // recognizer has read lags the audio fed by whatever is still queued, so it can be earlier.
-
-    @Test func theReplysOwnWordsStartingOverHalfASecondAfterItEndedAreSent() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // Fed while the reply plays.
-        let playing = loop.fedAudioSeconds
-        #expect(loop.state == .speaking)
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        let ended = loop.fedAudioSeconds
-
-        // Its words starting while it played, reported once it ended, are its echo.
-        bed.recognizer.hear(
-            timed: [
-                ("This", playing), ("is", playing + 0.3), ("a", playing + 0.5),
-                ("long", playing + 0.6), ("reply.", playing + 0.9),
-            ],
-            through: playing + 1.2,
-            isFinal: true
-        )
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        #expect(sent.texts.isEmpty)
-
-        bed.recognizer.hear(
-            timed: [
-                ("This", ended + 0.6), ("is", ended + 0.9), ("a", ended + 1.1),
-                ("long", ended + 1.2), ("reply.", ended + 1.5),
-            ],
-            through: ended + 1.8,
-            isFinal: true
-        )
-        #expect(await eventually { sent.texts == ["This is a long reply."] })
-    }
-
-    @Test func aResultRepeatingEchoAlreadyConsumedIsTimedFromItsFirstNewWord() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // Fed as the reply started playing.
-        let playing = loop.fedAudioSeconds
-        bed.recognizer.hear(timed: [("This", playing), ("is", playing + 0.3)], through: playing + 0.5)
-        try await settle(.milliseconds(100))
-        #expect(loop.state == .speaking)
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        let ended = loop.fedAudioSeconds
-
-        // It starts with the echo already consumed, from while the reply played, but its first
-        // new word starts more than half a second after the reply ended. That is where it is
-        // timed from, so the reply's words that follow are sent.
-        bed.recognizer.hear(
-            timed: [
-                ("This", playing), ("is", playing + 0.3),
-                ("a", ended + 0.6), ("long", ended + 0.8), ("reply.", ended + 1),
-            ],
-            through: ended + 1.3,
-            isFinal: true
-        )
-        #expect(await eventually { sent.texts == ["a long reply."] })
-    }
-
-    @Test func aMisheardEchoWordWhoseAlternativeMatchesDoesNotCutTheReplyOff() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let greeting = "Hi Adam, I can hear you loud and clear, and this reply goes on long enough "
-            + "to still be playing when the test checks it."
-
-        loop.speak(greeting)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // "Hi" heard as "Hey", with the right reading among the alternatives.
-        bed.recognizer.hear("Hey", over: 0...0.3, alternatives: ["Hey", "Hi"])
-        try await settle(.milliseconds(100))
-
-        #expect(loop.state == .speaking)
-        let playedSoFar = bed.audio.playedFrames
-        #expect(await eventually { bed.audio.playedFrames > playedSoFar })
-    }
-
-    @Test func theEchoAfterAMisheardWordCutTheReplyOffIsDroppedWithThatWord() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        // So the word that cut the reply off isn't sent before the echo after it is reported.
-        loop.pauseThreshold = .seconds(30)
-        let sent = UtteranceLog(loop)
-
-        loop.speak(
-            "Hi Adam, I can hear you loud and clear, and this reply goes on long enough "
-                + "to still be playing when the test checks it."
-        )
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // Fed as the reply started playing.
-        let playing = heardSeconds(bed)
-        // "Hi" heard as "Hey", with no other reading: not the reply's, so it cuts it off.
-        bed.recognizer.hear(timed: [("Hey", playing)], through: playing + 0.3)
-        #expect(await eventually { loop.state == .listening(partial: "Hey") })
-
-        // The same audio and more, starting before the reply was cut off, is mostly its words.
-        bed.recognizer.hear(
-            timed: [
-                ("Hey", playing), ("Adam", playing + 0.3), ("I", playing + 0.5),
-                ("can", playing + 0.6), ("hear", playing + 0.8), ("you", playing + 1),
-            ],
-            through: playing + 1.2
-        )
-        #expect(await eventually { loop.state == .listening(partial: "") })
-        loop.pauseThreshold = .milliseconds(50)
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        #expect(sent.texts.isEmpty)
-
-        // Words heard later are sent on their own.
-        bed.recognizer.hear("Thanks.", over: later, isFinal: true)
-        #expect(await eventually { sent.texts == ["Thanks."] })
-    }
-
-    @Test func talkingOverAReplyAfterItsEchoWasIgnoredInterruptsItWithOnlyTheNewWords() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        // Until the final result is in, so the utterance isn't sent with the volatile one.
-        loop.pauseThreshold = .seconds(30)
-        let sent = UtteranceLog(loop)
-
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // A volatile result's audio runs on to the audio fed so far, past its last word, and
-        // Adam starts talking in that last stretch.
-        var echo = TranscriptPiece.spoken(timed: [("This", 0), ("is", 0.3)], through: 0.5)
-        echo.range = CMTimeRange(start: echo.range.start, end: CMTime(seconds: 0.8, preferredTimescale: 1000))
-        bed.recognizer.hear(echo)
-        try await settle(.milliseconds(100))
-        #expect(loop.state == .speaking)
-
-        // Adam talks over it. The result that first reports him still holds the echo.
-        bed.recognizer.hear(timed: [("This", 0), ("is", 0.3), ("wait", 0.6), ("stop", 0.9)], through: 1.2)
-        #expect(await eventually { loop.state == .listening(partial: "wait stop") })
-        // Nor does the final for the same audio bring the echo back.
-        bed.recognizer.hear(
-            timed: [("This", 0), ("is", 0.3), ("Wait,", 0.6), ("stop.", 0.9)],
-            through: 1.2,
-            isFinal: true
-        )
-        #expect(await eventually { loop.state == .listening(partial: "Wait, stop.") })
-        loop.pauseThreshold = .milliseconds(50)
-
-        #expect(await eventually { sent.texts == ["Wait, stop."] })
-        // By now the engine has faded the stopped player out.
-        let playedWhenInterrupted = bed.audio.playedFrames
-        try await settle()
-        #expect(bed.audio.playedFrames == playedWhenInterrupted)
-        #expect(sent.texts == ["Wait, stop."])
-    }
-
-    @Test func aShortInterruptionWithAWordTheReplySaysElsewhereStopsItAndIsSent() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-
-        loop.speak("This is a long reply that goes on and on, with enough words to still be playing.")
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        // "on" is in the reply, but "hold on" isn't.
-        bed.recognizer.hear(timed: [("Hold", 0.5), ("on.", 0.8)], through: 1, isFinal: true)
-
-        #expect(await eventually { sent.texts == ["Hold on."] })
-        // By now the engine has faded the stopped player out.
-        let playedWhenInterrupted = bed.audio.playedFrames
-        try await settle()
-        #expect(bed.audio.playedFrames == playedWhenInterrupted)
-    }
-
-    @Test func aBargeInInWordsTheReplyHasFarApartIsSentNotDroppedAsItsEcho() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-        // Until the final result is in, so the utterance isn't sent with the volatile one.
-        loop.pauseThreshold = .seconds(30)
-        let sent = UtteranceLog(loop)
-
-        // It has "can", "you" and "that", in that order but far apart.
-        loop.speak(
-            "I can look up the weather for the week ahead, and when the forecast is ready "
-                + "I will send it to you, along with a note about that storm on Friday."
-        )
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-        bed.recognizer.hear(timed: [("wait", 0.5)], through: 0.8)
-        #expect(await eventually { loop.state == .listening(partial: "wait") })
-        // Reported after the barge-in, but starting before the reply was cut off, so it is
-        // checked for the reply's echo, and isn't.
-        bed.recognizer.hear(
-            timed: [("Wait,", 0.5), ("can", 0.8), ("you", 1), ("say", 1.2), ("that", 1.4), ("again?", 1.6)],
-            through: 2,
-            isFinal: true
-        )
-        #expect(await eventually { loop.state == .listening(partial: "Wait, can you say that again?") })
-        loop.pauseThreshold = .milliseconds(50)
-
-        #expect(await eventually { sent.texts == ["Wait, can you say that again?"] })
-    }
-
     @Test func withoutEchoCancellationTalkingOverAReplyDoesNotInterruptIt() async throws {
         let bed = VoiceTestBed()
         bed.hasVoiceProcessing = false
@@ -1742,6 +1338,108 @@ private func listeningLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLo
     return loop
 }
 
+/// A loop as `listeningLoopWithCues(on:)` gives, speaking with a Kokoro voice, with what comes out
+/// of the speaker recorded in `OfflineAudio.output`. `FakeKokoro` renders every sentence as the
+/// same tone, so a reply sounds the same each time it is said, and a test can find it there.
+@MainActor
+private func recordingKokoroLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLoop {
+    bed.audio.recordsOutput = true
+    let loop = try await listeningLoopWithCues(on: bed)
+    loop.voiceIdentifier = "kokoro.af_heart"
+    #expect(await eventually { loop.kokoroModelState == .ready })
+    return loop
+}
+
+/// A stretch of sound out of the speaker, in `OfflineAudio.output`, with no silence longer than
+/// 5 ms in it.
+private struct Sound {
+    /// Where its first and last sounding samples are, in the output looked at.
+    var first: Int
+    var last: Int
+    /// How many of its samples the speaker's meter counts as sound (`OfflineAudio.playedFrames`).
+    var frames: Int
+    /// Its loudest sample.
+    var peak: Float
+
+    /// Whether it is no louder than the working taps, which peak at about 0.03. Everything else
+    /// these tests play is far louder: `FakeKokoro`'s tone at 0.25, the other cues at 0.15 and up.
+    /// So a quiet sound is the taps, or part of them, alone.
+    var isQuiet: Bool { peak <= 0.05 }
+}
+
+/// The sounds in `output`, oldest first.
+private func sounds(in output: some Collection<Float>) -> [Sound] {
+    let gap = 240
+    var found: [Sound] = []
+    var current: Sound?
+    for (index, sample) in output.enumerated() {
+        let level = abs(sample)
+        guard level >= 0.001 else { continue }
+        if let sound = current, index - sound.last <= gap {
+            current?.last = index
+            current?.frames += 1
+            current?.peak = max(sound.peak, level)
+        } else {
+            if let sound = current {
+                found.append(sound)
+            }
+            current = Sound(first: index, last: index, frames: 1, peak: level)
+        }
+    }
+    if let current {
+        found.append(current)
+    }
+    return found
+}
+
+/// The taps as `sounds(in:)` finds them: one sound per tap.
+private let soundOfTheTaps = sounds(in: SoundCue.agentWorking.samples(sampleRate: 48_000))
+
+/// Where the taps came out whole in `output`, with nothing else sounding over them: the first
+/// sample of each run of quiet sounds, one per tap, together as much sound as the taps make.
+private func tapsAlone(in output: [Float]) -> [Int] {
+    let all = sounds(in: output)
+    let taps = soundOfTheTaps.count
+    let tapFrames = soundOfTheTaps.reduce(0) { $0 + $1.frames }
+    guard all.count >= taps else { return [] }
+    return (0...(all.count - taps)).compactMap { index in
+        let run = all[index..<(index + taps)]
+        let frames = run.reduce(0) { $0 + $1.frames }
+        guard run.allSatisfy(\.isQuiet), abs(frames - tapFrames) <= tapFrames / 20 else { return nil }
+        return run.first?.first
+    }
+}
+
+/// How much sound the loud sounds in `output` make together, and the loudest of them: what a
+/// reply said in `FakeKokoro`'s tone sounds like.
+private func loudness(of output: some Collection<Float>) -> (frames: Int, peak: Float) {
+    let loud = sounds(in: output).filter { !$0.isQuiet }
+    return (loud.reduce(0) { $0 + $1.frames }, loud.map(\.peak).max() ?? 0)
+}
+
+/// Where the last loud sound in `output` ends, before `index`. Nil if there is none.
+private func endOfLastLoudSound(in output: [Float], before index: Int) -> Int? {
+    sounds(in: output[..<index]).last { !$0.isQuiet }?.last
+}
+
+/// How loud `text` is said on its own by `loop` now, as `loudness(of:)` measures it. Waits until
+/// it has been said, and a moment after.
+@MainActor
+private func loudnessAlone(of text: String, by loop: VoiceLoop, on bed: VoiceTestBed) async -> (frames: Int, peak: Float) {
+    let start = bed.audio.output.count
+    loop.speak(text)
+    #expect(await eventually { loop.state == .listening(partial: "") })
+    #expect(await audioGoesBy(0.5, on: bed))
+    return loudness(of: bed.audio.output[start...])
+}
+
+/// Whether `output` holds a reply said as loud as `alone`, with nothing over it: as much loud
+/// sound, within a hundredth, and no louder.
+private func holdsReplyAlone(_ output: [Float], saidAlone alone: (frames: Int, peak: Float)) -> Bool {
+    let heard = loudness(of: output)
+    return abs(heard.frames - alone.frames) <= alone.frames / 100 && heard.peak <= alone.peak * 1.02
+}
+
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct WorkingCueTests {
@@ -1906,6 +1604,151 @@ struct WorkingCueTests {
         let startCue = soundingFrames(of: .listeningStarted)
         #expect(abs(bed.audio.playedFrames - played - startCue) <= startCue / 10)
         #expect(loop.hasPlayedWorkingCue)
+    }
+
+    @Test func tapsAskedForDuringAReplyPlayOnlyOnceItsSoundHasEnded() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "Done.", by: loop, on: bed)
+        let start = bed.audio.output.count
+
+        loop.speak("Done.")
+        loop.isAgentWorking = true
+
+        #expect(!loop.hasPlayedWorkingCue)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // Each whole, with nothing sounding over it, the taps after the reply's last sound.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+    }
+
+    @Test(arguments: [Float(1), 2])
+    func tapsAfterAReplyIsCutOffDoNotSoundOverItsLastSound(pitch: Float) async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        // A shifted reply runs on after its player stops, as the pitch shift empties.
+        loop.speechPitch = pitch
+        let start = bed.audio.output.count
+        let before = bed.audio.playedFrames
+        loop.speak("One. Two. Three. Four.")
+        loop.isAgentWorking = true
+        #expect(await eventually { bed.audio.playedFrames > before })
+
+        loop.stopSpeaking()
+
+        #expect(loop.state == .listening(partial: ""))
+        #expect(await audioGoesBy(on: bed))
+        // Whole and alone, after the cut-off reply's last sound.
+        let output = Array(bed.audio.output[start...])
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+    }
+
+    @Test func aReplyThatStartsWhileTheTapsPlayCutsThemOffAndTheyPlayAfterIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        let start = bed.audio.output.count
+
+        loop.isAgentWorking = true
+        #expect(loop.hasPlayedWorkingCue)
+        loop.speak("One. Two. Three.")
+
+        #expect(loop.state == .speaking)
+        #expect(!loop.hasPlayedWorkingCue)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // The reply with nothing over it, then, the agent still working, the taps again in full.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
+        #expect(loop.hasPlayedWorkingCue)
+    }
+
+    @Test func aReplyThatStartsPartWayThroughTheTapsCutsOffTheRest() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        let start = bed.audio.output.count
+
+        loop.isAgentWorking = true
+        // Two render passes, with no await before the reply: the lead-in and most of the first
+        // tap play, and the rest is still to come when the reply starts.
+        bed.audio.render(passes: 2)
+        let partial = sounds(in: bed.audio.output[start...])
+        #expect(!partial.isEmpty && partial.allSatisfy(\.isQuiet))
+        #expect(tapsAlone(in: Array(bed.audio.output[start...])).isEmpty)
+        loop.speak("One. Two. Three.")
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // Nothing of the taps sounds with the reply, and they play in full after it.
+        let output = Array(bed.audio.output[start...])
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let replyStart = try #require(sounds(in: output).first { !$0.isQuiet }?.first)
+        let replyEnd = try #require(endOfLastLoudSound(in: output, before: output.count))
+        #expect(!sounds(in: output).contains { $0.isQuiet && $0.last >= replyStart && $0.first <= replyEnd })
+        #expect(tapsAlone(in: Array(output[replyEnd...])).count == 1)
+    }
+
+    @Test func tapsWaitingBehindAnotherCueDoNotPlayWithAReplyThatStarts() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let start = bed.audio.output.count
+
+        // The taps would start once the chime has played, with the reply well under way.
+        loop.play(.reaction)
+        loop.isAgentWorking = true
+        loop.speak("One. Two. Three. Four.")
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        // The chime plays with the reply, as cues do, but the taps wait until it has ended.
+        let output = Array(bed.audio.output[start...])
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        let replyEnd = taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) }
+        let replyLength = Int(4 * FakeKokoro.secondsPerSentence * 48_000)
+        #expect((replyEnd ?? 0) >= replyLength)
+    }
+
+    @Test func tapsCutOffWhenTheEngineStopsByItselfWaitForTheReplyItStartsAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        let start = bed.audio.output.count
+        loop.isAgentWorking = true
+
+        // The engine stops by itself before the taps have played, and a reply arrives before the
+        // loop hears of it: it waits for the engine.
+        engine.stop()
+        loop.speak("One. Two. Three.")
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { engine.isRunning })
+        #expect(await eventually { bed.kokoro.requests.count == 3 })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await audioGoesBy(on: bed))
+        let output = Array(bed.audio.output[start...])
+        // The same reply said alone afterwards, for comparison.
+        let alone = await loudnessAlone(of: "One. Two. Three.", by: loop, on: bed)
+        #expect(holdsReplyAlone(output, saidAlone: alone))
+        let taps = tapsAlone(in: output)
+        #expect(taps.count == 1)
+        #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
     }
 
     @Test func stoppingCutsTheTapsOffAndTheStopCuePlaysAlone() async throws {
@@ -2262,39 +2105,6 @@ struct PushToTalkTests {
         #expect(bed.audio.playedFrames > playedWhenPressed)
         try await settle()
         #expect(loop.state == .listening(partial: ""))
-    }
-
-    @Test func aHoldRightAfterTheReplyItStoppedIsSentEvenInTheReplysWords() async throws {
-        let bed = VoiceTestBed()
-        let loop = try await pushToTalkLoop(on: bed)
-        defer { loop.stop() }
-        let sent = UtteranceLog(loop)
-        loop.speak(longReply)
-        #expect(await eventually { bed.audio.playedFrames > 0 })
-
-        // The press stops the reply and consumes all the audio fed up to it, so what the hold
-        // hears is Adam, however soon after the reply and whatever he says. Read right after
-        // the press, the audio fed is at or just past where the press consumed through and the
-        // reply ended, so the hold's first word, a tenth of a second later, is inside the hold
-        // and starts well within half a second of the reply's end, where hands-free listening
-        // looks for the reply's echo.
-        loop.beginTalking()
-        #expect(loop.isTalking)
-        let pressed = loop.fedAudioSeconds
-        bed.recognizer.hear(
-            timed: [
-                ("This", pressed + 0.1), ("is", pressed + 0.3), ("a", pressed + 0.5),
-                ("long", pressed + 0.6), ("reply.", pressed + 0.9),
-            ],
-            through: pressed + 1.2,
-            isFinal: true
-        )
-        #expect(await eventually { loop.state == .listening(partial: "This is a long reply.") })
-        // Released after the words.
-        #expect(await eventually { heardSeconds(bed) > pressed + 1.2 })
-        loop.endTalking()
-
-        #expect(await eventually { sent.texts == ["This is a long reply."] })
     }
 
     @Test func aSecondPressBeforeTheFirstIsSentKeepsBothHoldsAsOneUtterance() async throws {

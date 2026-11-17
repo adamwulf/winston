@@ -144,25 +144,8 @@ package final class ScriptedRecognizer: Recognizer {
         isFinal: Bool = false,
         alternatives: [String] = []
     ) {
-        hear(TranscriptPiece.spoken(text, over: seconds, isFinal: isFinal, alternatives: alternatives))
-    }
-
-    /// Reports a result timed word by word, as the transcriber does: `words` are each word with
-    /// where it starts, in seconds, each running until the next starts and the last until `end`.
-    /// The result covers the audio from its first word to `end`. A volatile result unless
-    /// `isFinal`. `alternatives` are other readings of the same audio, timed the same way.
-    package func hear(
-        timed words: [(String, Double)],
-        through end: Double,
-        isFinal: Bool = false,
-        alternatives: [[(String, Double)]] = []
-    ) {
-        hear(TranscriptPiece.spoken(timed: words, through: end, isFinal: isFinal, alternatives: alternatives))
-    }
-
-    /// Reports `piece` as it is.
-    package func hear(_ piece: TranscriptPiece) {
-        state.withLock { $0.lastVolatile = piece.isFinal ? nil : piece }
+        let piece = TranscriptPiece.spoken(text, over: seconds, isFinal: isFinal, alternatives: alternatives)
+        state.withLock { $0.lastVolatile = isFinal ? nil : piece }
         continuation.yield(piece)
     }
 
@@ -251,36 +234,6 @@ extension TranscriptPiece {
             text: timed(text),
             alternatives: alternatives.map(timed),
             range: range,
-            isFinal: isFinal
-        )
-    }
-
-    /// A result timed word by word: `words` are each word with where it starts, in seconds, each
-    /// running until the next starts and the last until `end`. It covers the audio from its
-    /// first word to `end`.
-    package static func spoken(
-        timed words: [(String, Double)],
-        through end: Double,
-        isFinal: Bool = false,
-        alternatives: [[(String, Double)]] = []
-    ) -> TranscriptPiece {
-        func time(_ seconds: Double) -> CMTime {
-            CMTime(seconds: seconds, preferredTimescale: 1000)
-        }
-        func timed(_ words: [(String, Double)]) -> AttributedString {
-            var result = AttributedString()
-            for (index, (word, start)) in words.enumerated() {
-                let wordEnd = index + 1 < words.count ? words[index + 1].1 : end
-                var run = AttributedString(index == 0 ? word : " " + word)
-                run.audioTimeRange = CMTimeRange(start: time(start), end: time(wordEnd))
-                result += run
-            }
-            return result
-        }
-        return TranscriptPiece(
-            text: timed(words),
-            alternatives: alternatives.map(timed),
-            range: CMTimeRange(start: time(words.first?.1 ?? end), end: time(end)),
             isFinal: isFinal
         )
     }
