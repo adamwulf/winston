@@ -18,9 +18,9 @@ import UIKit
 /// interrupts). Speech is rendered with `AVSpeechSynthesizer.write(_:toBufferCallback:)`, or by
 /// Kokoro for a Kokoro voice, and played on an `AVAudioPlayerNode` in the same engine, through
 /// a pitch shift (see `SpeechOutput`). Sound cues (`SoundCue`) play on a second player node
-/// there, not pitch-shifted: taps when listening starts and stops, and whatever `play(_:)` is
-/// asked for. A third plays the working sound (`WorkingSound`), a soft ticking that loops while
-/// `isAgentWorking` and nothing is being said, only with echo cancellation on.
+/// there, not pitch-shifted: taps when listening starts and stops, low taps once each time
+/// `isAgentWorking` turns on (only with echo cancellation on), and whatever `play(_:)` is asked
+/// for.
 ///
 /// With `isPushToTalk` on, all of that keeps running, but the microphone is muted except while
 /// a button is held (`beginTalking()` to `endTalking()`), and what was said during the hold is
@@ -150,27 +150,28 @@ public final class VoiceLoop {
             restart(resettingAudioSession: true)
         }
     }
-    /// Whether `play(_:)`, the start and stop of listening, and the working sound make a sound.
+    /// Whether `play(_:)`, the start and stop of listening, and the working cue make a sound.
     /// Most tests turn it off, since they measure what was spoken by how much sound came out.
     @ObservationIgnored package var playsSoundCues = true
     /// Whether the bot is working on a reply, for the app to set while it shows the bot typing.
-    /// While it is, the loop plays the working sound (`WorkingSound`), a soft ticking, over and
-    /// over, so Adam hears that a reply is on its way without looking. It stops while a reply is
-    /// being said, and plays on afterwards if the bot is still working. It plays through the
-    /// loop's engine, so echo cancellation takes it out of what the microphone hears, and only
-    /// with echo cancellation on: without it, the microphone would hear the ticks as loud as
-    /// they play, and the recognizer and the pause detector would take them for Adam talking.
-    /// Nothing plays while the loop is off, starting, or rebuilding its engine.
+    /// Each time it turns on, the loop plays `SoundCue.agentWorking`, three low taps, once, so
+    /// Adam hears that a reply is on its way without looking. If a reply is being said, the taps
+    /// wait until it ends, and they wait while the loop is off, starting, or rebuilding its
+    /// engine. They play through the loop's engine, so echo cancellation takes them out of what
+    /// the microphone hears, and only with echo cancellation on: without it, the microphone would
+    /// hear them as loud as they play, and the recognizer and the pause detector would take them
+    /// for Adam talking.
     public var isAgentWorking = false {
         didSet {
             guard isAgentWorking != oldValue else { return }
-            updateWorkingSound()
+            if !isAgentWorking {
+                hasPlayedWorkingCue = false
+            }
+            updateWorkingCue()
         }
     }
-    /// Whether the working sound is playing, for tests.
-    package var isPlayingWorkingSound: Bool {
-        pipeline?.isPlayingWorkingSound ?? false
-    }
+    /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on.
+    @ObservationIgnored package private(set) var hasPlayedWorkingCue = false
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
     /// the app model): it has a single consumer, and cancelling that iteration ends the
@@ -422,9 +423,9 @@ public final class VoiceLoop {
         // Replies carried over a rebuild, or queued while starting. Does nothing if the engine
         // is being rebuilt.
         speakNextIfIdle()
-        // The bot may have been working since before voice mode started or the engine was
-        // rebuilt. After the reply above, so one that started keeps it off.
-        updateWorkingSound()
+        // The bot may have started working before voice mode started. After the start cue, so
+        // the taps follow it, and after the reply above, so one that started makes them wait.
+        updateWorkingCue()
     }
 
     /// Activates the iOS session and builds and starts the engine with voice processing (echo
@@ -506,13 +507,14 @@ public final class VoiceLoop {
         isTalking = true
         speechQueue.removeAll()
         silence(consumingEcho: true, reason: "pushToTalk")
-        updateWorkingSound()
         var start = TimelineClock.now()
         if play(.listeningStarted), pipeline?.hasVoiceProcessing == false {
             // Without echo cancellation the microphone hears the cue as loud as it plays.
             let wait = SoundCue.listeningStarted.duration / .seconds(1) + Self.halfDuplexEchoMargin.seconds
             start += AVAudioTime.hostTime(forSeconds: wait)
         }
+        // Taps that waited for the reply stopped above follow the start cue, not delay it.
+        updateWorkingCue()
         microphoneGate.open(at: start)
         if release != nil {
             endRelease()
@@ -588,7 +590,7 @@ public final class VoiceLoop {
     public func stopSpeaking() {
         speechQueue.removeAll()
         silence(consumingEcho: true, reason: "stopped")
-        updateWorkingSound()
+        updateWorkingCue()
     }
 
     /// Says `text` right away in the current voice, speed and pitch, for trying them in settings or
@@ -617,12 +619,12 @@ public final class VoiceLoop {
         // a preview played outside it would reach the microphone and be sent as speech.
         if state != .off || isStarting {
             logPreviewStarted(throughLoop: true)
-            // As `stopSpeaking()` does, except that the working sound waits to see whether the
-            // preview plays: it would start and stop again at once.
+            // As `stopSpeaking()` does, except that the working cue waits to see whether the
+            // preview plays: if it does, the cue waits for it to end.
             speechQueue.removeAll()
             silence(consumingEcho: true, reason: "stopped")
             enqueue(text)
-            updateWorkingSound()
+            updateWorkingCue()
             return
         }
         guard !text.isEmpty else { return }
@@ -836,7 +838,7 @@ public final class VoiceLoop {
             pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
-            updateWorkingSound()
+            updateWorkingCue()
         } else {
             logResult(piece, applied: candidate)
         }
@@ -1045,9 +1047,6 @@ public final class VoiceLoop {
         // A cue cut off here isn't played again; the next start plays its own.
         unfinishedCues = []
         if let pipeline {
-            // Both paths below stop it too; this logs it. A new pipeline plays it again if the
-            // bot is still working.
-            stopWorkingSound(on: pipeline, reason: "teardown")
             self.pipeline = nil
             // No stop cue for a rebuild, for an engine that has stopped (an interruption, or one
             // that keeps stopping), or with push-to-talk, where it marks a release.
@@ -1143,8 +1142,6 @@ public final class VoiceLoop {
         let interruptedCues = unfinishedCues.map(\.cue)
         unfinishedCues = []
         pipeline.cuePlayer.stop()
-        // The engine stopped its player too; it starts again from the top once the engine runs.
-        stopWorkingSound(on: pipeline, reason: "engineStopped")
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
@@ -1152,7 +1149,8 @@ public final class VoiceLoop {
                 play(cue)
             }
             speakNextIfIdle()
-            updateWorkingSound()
+            // Taps that waited for the engine, or for the reply it cut off.
+            updateWorkingCue()
         } catch {
             Self.log.warning("restarting the audio engine failed; rebuilding", error.logContext(pipeline.formatContext))
             restart()
@@ -1316,8 +1314,6 @@ public final class VoiceLoop {
         }
         currentSpeech = playback
         state = .speaking
-        // The working sound stops while a reply is said.
-        updateWorkingSound()
         // The reply's log reports what the microphone heard while it played.
         _ = pipeline.voiceActivity.takePeakDecibels()
         ignoredResultsThisReply = 0
@@ -1429,8 +1425,8 @@ public final class VoiceLoop {
         consumeEcho()
         updateListeningState()
         speakNextIfIdle()
-        // With no reply after it, the working sound plays on if the bot is still working.
-        updateWorkingSound()
+        // With no reply after it, taps that waited for this one play now.
+        updateWorkingCue()
     }
 
     /// The cue `play(_:)` gave `id` has played, or its player was stopped. An engine that stops
@@ -1519,25 +1515,25 @@ public final class VoiceLoop {
         return system.flatMap { AVSpeechSynthesisVoice(identifier: $0.id) }
     }
 
-    // MARK: - Working sound
+    // MARK: - Working cue
 
-    /// Plays the working sound while `isAgentWorking` and nothing is being said, and stops it
-    /// otherwise. Only on a running engine with echo cancellation, and with sound cues on. Call
-    /// it whenever one of those may have changed while the loop listens on. Not from `silence`,
-    /// which a teardown uses too: it would start the sound just before the teardown stops it.
-    private func updateWorkingSound() {
-        guard let pipeline else { return }
-        if let reason = reasonWorkingSoundIsOff(on: pipeline) {
-            stopWorkingSound(on: pipeline, reason: reason)
-        } else if !pipeline.isPlayingWorkingSound {
-            pipeline.startWorkingSound()
-            Self.log.info("working sound started")
+    /// Plays `SoundCue.agentWorking` if `isAgentWorking` and it hasn't played since that turned
+    /// on, once nothing is being said, on a running engine with echo cancellation, and with sound
+    /// cues on. Call it whenever one of those may have changed while the loop listens on. Not from
+    /// `silence`, which a teardown uses too: it would play the cue just before the teardown cuts
+    /// it off.
+    private func updateWorkingCue() {
+        guard isAgentWorking, !hasPlayedWorkingCue, let pipeline else { return }
+        if let reason = reasonWorkingCueWaits(on: pipeline) {
+            Self.log.info("working cue waits", ["reason": reason])
+        } else if play(.agentWorking) {
+            hasPlayedWorkingCue = true
+            Self.log.info("working cue played")
         }
     }
 
-    /// Why the working sound mustn't play on `pipeline` now, for the logs. Nil when it should.
-    private func reasonWorkingSoundIsOff(on pipeline: Pipeline) -> String? {
-        if !isAgentWorking { return "agentDone" }
+    /// Why the working cue can't play on `pipeline` now, for the logs. Nil when it can.
+    private func reasonWorkingCueWaits(on pipeline: Pipeline) -> String? {
         if currentSpeech != nil { return "speaking" }
         // A player can't play in a stopped engine.
         if !pipeline.engine.isRunning { return "engineStopped" }
@@ -1546,13 +1542,6 @@ public final class VoiceLoop {
         if !pipeline.hasVoiceProcessing { return "noEchoCancellation" }
         if !playsSoundCues { return "soundCuesOff" }
         return nil
-    }
-
-    /// Stops the working sound on `pipeline` if it is playing, and logs why.
-    private func stopWorkingSound(on pipeline: Pipeline, reason: String) {
-        guard pipeline.isPlayingWorkingSound else { return }
-        pipeline.stopWorkingSound()
-        Self.log.info("working sound stopped", ["reason": reason])
     }
 }
 

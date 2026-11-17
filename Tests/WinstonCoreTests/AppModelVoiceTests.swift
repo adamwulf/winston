@@ -802,7 +802,7 @@ struct ReactionChimeTests {
     }
 }
 
-/// The working sound: a soft ticking the voice loop plays while the bot in the current chat is
+/// The working cue: low taps the voice loop plays once when the bot in the current chat starts
 /// typing a reply.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -850,7 +850,7 @@ struct BotTypingSoundTests {
         #expect(!model.voiceLoop.isAgentWorking)
     }
 
-    @Test func inVoiceModeTheBotTypingTicksUntilItsReplyIsSpoken() async throws {
+    @Test func inVoiceModeTheBotStartingToTypeTapsOnce() async throws {
         let harness = Harness.withTwoBots(soundCues: true)
         #expect(await harness.startAndLoadChats())
         let model = harness.model
@@ -861,15 +861,15 @@ struct BotTypingSoundTests {
 
         harness.fake.setTyping(true, in: 1)
 
-        #expect(await eventually { model.voiceLoop.isPlayingWorkingSound })
+        #expect(await eventually { model.voiceLoop.hasPlayedWorkingCue })
         #expect(await eventually { harness.bed.audio.playedFrames > played })
 
         harness.fake.receive(textMessage(id: 12, chatID: 1, "Done."))
 
+        // The message ends the typing, so the next typing taps again.
         #expect(await eventually { model.voiceLoop.state == .speaking })
-        #expect(!model.voiceLoop.isPlayingWorkingSound)
-        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
-        #expect(!model.voiceLoop.isPlayingWorkingSound)
+        #expect(!model.voiceLoop.isAgentWorking)
+        #expect(!model.voiceLoop.hasPlayedWorkingCue)
     }
 
     @Test func inTextModeTheBotTypingPlaysNothing() async throws {
@@ -881,7 +881,7 @@ struct BotTypingSoundTests {
 
         #expect(await eventually { model.voiceLoop.isAgentWorking })
         try await settle()
-        #expect(!model.voiceLoop.isPlayingWorkingSound)
+        #expect(!model.voiceLoop.hasPlayedWorkingCue)
         #expect(harness.bed.audio.playedFrames == 0)
         #expect(harness.bed.audio.engines.isEmpty)
     }

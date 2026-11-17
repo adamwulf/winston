@@ -179,19 +179,72 @@ import Testing
         zip(samples, samples.dropFirst()).count { ($0 < 0) != ($1 < 0) && $0 != 0 && $1 != 0 }
     }
 
-    @Test func eachCueIsShortSoftAndStartsAndEndsInSilence() {
+    /// The pitch of `samples` in Hz, from how often they cross zero while they sound. A tone
+    /// crosses twice per cycle.
+    private func pitch(_ samples: [Float]) -> Double {
+        let crossings = zip(samples, samples.dropFirst()).count { ($0 < 0) != ($1 < 0) && max(abs($0), abs($1)) >= 0.001 }
+        let sounding = samples.count { abs($0) >= 0.001 }
+        return Double(crossings) / 2 / (Double(sounding) / sampleRate)
+    }
+
+    /// How many separate sounds `samples` holds: runs of sound with at least 20 ms of silence
+    /// between them.
+    private func soundCount(_ samples: [Float]) -> Int {
+        let gap = Int(0.02 * sampleRate)
+        var count = 0
+        var silent = gap
+        for sample in samples {
+            if abs(sample) >= 0.001 {
+                if silent >= gap { count += 1 }
+                silent = 0
+            } else {
+                silent += 1
+            }
+        }
+        return count
+    }
+
+    @Test func eachCueIsShortAndStartsAndEndsInSilence() {
         for cue in SoundCue.allCases {
             let samples = cue.samples(sampleRate: sampleRate)
-            let peak = samples.map(abs).max() ?? 0
-            #expect(cue.duration < (cue == .reaction ? .milliseconds(450) : .milliseconds(300)))
+            let longest: Duration = switch cue {
+            case .listeningStarted, .listeningStopped: .milliseconds(300)
+            case .agentWorking: .milliseconds(350)
+            case .reaction: .milliseconds(450)
+            }
+            #expect(cue.duration < longest)
             // The loop waits this long for the stop cue to play.
             #expect(samples.count == Int((cue.duration / .seconds(1) * sampleRate).rounded()))
-            // Audible, but well below full scale and the speech it plays beside.
-            #expect(peak > 0.1)
-            #expect(peak < 0.3)
             // No click at either end.
             #expect(samples.first == 0)
             #expect(samples.last == 0)
+        }
+    }
+
+    @Test func eachCueButTheWorkingCueIsAudibleButWellBelowFullScale() {
+        for cue in SoundCue.allCases where cue != .agentWorking {
+            let peak = cue.samples(sampleRate: sampleRate).map(abs).max() ?? 0
+            // Audible, but well below full scale and the speech it plays beside.
+            #expect(peak > 0.1)
+            #expect(peak < 0.3)
+        }
+    }
+
+    @Test func theWorkingCueIsThreeTaps() {
+        #expect(soundCount(SoundCue.agentWorking.samples(sampleRate: sampleRate)) == 3)
+    }
+
+    @Test func theWorkingCueIsLowAndWellBelowEveryOtherCue() {
+        let working = SoundCue.agentWorking.samples(sampleRate: sampleRate)
+        let peak = working.map(abs).max() ?? 0
+
+        #expect(pitch(working) < 400)
+        #expect(peak > 0.02)
+        for cue in SoundCue.allCases where cue != .agentWorking {
+            let samples = cue.samples(sampleRate: sampleRate)
+            // At least an octave lower, and a quarter as loud.
+            #expect(pitch(working) < pitch(samples) / 2)
+            #expect(peak < (samples.map(abs).max() ?? 0) / 4)
         }
     }
 
@@ -209,51 +262,6 @@ import Testing
         let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
         let buffer = try #require(SoundCue.reaction.buffer(in: format))
         let samples = SoundCue.reaction.samples(sampleRate: 48_000)
-
-        #expect(buffer.format == format)
-        #expect(Int(buffer.frameLength) == samples.count)
-        let channel = try #require(buffer.floatChannelData)[0]
-        #expect(Array(UnsafeBufferPointer(start: channel, count: samples.count)) == samples)
-    }
-}
-
-@Suite struct WorkingSoundSynthesisTests {
-    private let sampleRate = 48_000.0
-
-    @Test func onePassLastsItsDurationAndJoinsTheNextInSilence() {
-        let samples = WorkingSound.samples(sampleRate: sampleRate)
-
-        #expect(samples.count == Int((WorkingSound.duration / .seconds(1) * sampleRate).rounded()))
-        // No click where one pass runs into the next.
-        #expect(samples.first == 0)
-        #expect(samples.last == 0)
-        // The last tick is long over by the end, so the seam doesn't sound like a tick cut short.
-        let lastSound = samples.lastIndex { abs($0) >= 0.001 } ?? samples.count
-        #expect(Double(samples.count - lastSound) / sampleRate > 0.2)
-    }
-
-    @Test func itIsAudibleButWellBelowEveryCue() {
-        let peak = WorkingSound.samples(sampleRate: sampleRate).map(abs).max() ?? 0
-
-        #expect(peak > 0.02)
-        for cue in SoundCue.allCases {
-            let cuePeak = cue.samples(sampleRate: sampleRate).map(abs).max() ?? 0
-            #expect(peak < cuePeak / 2)
-        }
-    }
-
-    @Test func itIsMostlySilence() {
-        let samples = WorkingSound.samples(sampleRate: sampleRate)
-        let sounding = samples.count { abs($0) >= 0.001 }
-
-        #expect(sounding > 0)
-        #expect(sounding * 10 < samples.count)
-    }
-
-    @Test func aBufferHoldsOnePassInTheSpeechFormat() throws {
-        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1))
-        let buffer = try #require(WorkingSound.buffer(in: format))
-        let samples = WorkingSound.samples(sampleRate: 48_000)
 
         #expect(buffer.format == format)
         #expect(Int(buffer.frameLength) == samples.count)

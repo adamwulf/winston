@@ -607,10 +607,10 @@ public final class AppModel {
         currentChat.map { typingChats.contains($0.id) } ?? false
     }
 
-    /// Tells the voice loop whether the bot in the current chat is typing a reply, for its working
-    /// sound. Called whenever `typingChats`, `selectedChatID` or `chats` change. The loop plays
-    /// nothing while voice mode is off, so this needs no check for it. Typing ends with the bot's
-    /// message, typing's own end or its timeout; the loop stops the sound while a reply is said.
+    /// Tells the voice loop whether the bot in the current chat is typing a reply, for the taps it
+    /// plays once when typing starts. Called whenever `typingChats`, `selectedChatID` or `chats`
+    /// change. The loop plays nothing while voice mode is off, so this needs no check for it.
+    /// Typing ends with the bot's message, typing's own end or its timeout.
     private func updateAgentWorking() {
         voiceLoop.isAgentWorking = isBotTyping
     }

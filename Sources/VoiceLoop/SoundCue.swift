@@ -9,6 +9,9 @@ public enum SoundCue: Sendable, CaseIterable {
     case listeningStopped
     /// The bot reacted to a message, with any emoji: a soft two-note chime.
     case reaction
+    /// The bot has started working on a reply: three low, quiet taps, like fingers on a desk.
+    /// The loop plays it by itself, once each time `VoiceLoop.isAgentWorking` turns on.
+    case agentWorking
 }
 
 extension SoundCue {
@@ -24,7 +27,8 @@ extension SoundCue {
     }
 
     /// The cue's mono samples at `sampleRate`. It starts and ends at silence, so it doesn't click.
-    func samples(sampleRate: Double) -> [Float] {
+    /// `package` so tests can tell how much sound a cue makes.
+    package func samples(sampleRate: Double) -> [Float] {
         Note.render(notes, sampleRate: sampleRate)
     }
 
@@ -33,6 +37,7 @@ extension SoundCue {
         case .listeningStarted: Self.taps(rising: true)
         case .listeningStopped: Self.taps(rising: false)
         case .reaction: Self.chime
+        case .agentWorking: Self.workingTaps
         }
     }
 
@@ -49,40 +54,18 @@ extension SoundCue {
         Note(start: 0, length: 0.3, frequency: 1046.5, level: 0.15, decay: 0.09, overtone: 0.25),
         Note(start: 0.11, length: 0.3, frequency: 1567.98, level: 0.15, decay: 0.11, overtone: 0.25),
     ]
-}
 
-/// The soft ticking the voice loop plays over and over while the bot works on a reply, like
-/// someone typing quietly nearby, so Adam hears that a reply is on its way. Not a `SoundCue`:
-/// cues play once, and this loops for as long as the bot works. Synthesized in code too.
-enum WorkingSound {
-    /// How long one pass of the loop lasts.
-    static let duration: Duration = .milliseconds(1200)
-
-    /// One pass as one buffer in `format`, as `SoundCue.buffer(in:)` makes a cue's.
-    static func buffer(in format: AVAudioFormat) -> AVAudioPCMBuffer? {
-        pcmBuffer(samples(sampleRate: format.sampleRate), in: format)
-    }
-
-    /// One pass's mono samples at `sampleRate`, `duration` long. It starts and ends at silence,
-    /// and the last tick ends long before the end, so passes join without a click.
-    static func samples(sampleRate: Double) -> [Float] {
-        Note.render(ticks, sampleRate: sampleRate, length: duration / .seconds(1))
-    }
-
-    /// Five short ticks around 2 kHz, each a little different in pitch and level, at uneven gaps
-    /// as typing has: 0.13 s, 0.29 s, 0.16 s, 0.28 s, then 0.34 s to the next pass. Each lasts
-    /// 18 ms, so the loop is mostly silence. They peak at about 0.05, well below the cues (0.15 and
-    /// up), to sit quietly under everything else.
-    private static let ticks = [
-        tick(at: 0, frequency: 2200, level: 0.045),
-        tick(at: 0.13, frequency: 1950, level: 0.038),
-        tick(at: 0.42, frequency: 2450, level: 0.042),
-        tick(at: 0.58, frequency: 2050, level: 0.034),
-        tick(at: 0.86, frequency: 2300, level: 0.04),
+    /// Three soft taps around 320 Hz, each a little different in pitch and level, 120 ms then
+    /// 110 ms apart: 300 ms in all. Low, and quick to fade, like fingers tapping a desk. They peak
+    /// at about 0.03, well below the other cues (0.15 and up), to sit quietly under everything else.
+    private static let workingTaps = [
+        tap(at: 0, frequency: 330, level: 0.024),
+        tap(at: 0.12, frequency: 310, level: 0.02),
+        tap(at: 0.23, frequency: 320, level: 0.022),
     ]
 
-    private static func tick(at start: Double, frequency: Double, level: Float) -> Note {
-        Note(start: start, length: 0.018, frequency: frequency, level: level, decay: 0.004, overtone: 0.3)
+    private static func tap(at start: Double, frequency: Double, level: Float) -> Note {
+        Note(start: start, length: 0.07, frequency: frequency, level: level, decay: 0.018, overtone: 0.5)
     }
 }
 
@@ -98,8 +81,7 @@ private func pcmBuffer(_ samples: [Float], in format: AVAudioFormat) -> AVAudioP
     return buffer
 }
 
-/// One note of a cue, or one tick of the working sound: a sine with a little of its octave, a
-/// fast attack and an exponential decay.
+/// One note of a cue: a sine with a little of its octave, a fast attack and an exponential decay.
 private struct Note {
     /// When it starts, in seconds from the start of the cue.
     var start: Double
@@ -117,10 +99,9 @@ private struct Note {
     private static let attack = 0.002
     private static let release = 0.005
 
-    /// Mixes `notes` into one buffer of samples, `length` seconds long, or as long as the last of
-    /// them to end when `length` is nil.
-    static func render(_ notes: [Note], sampleRate: Double, length: Double? = nil) -> [Float] {
-        let end = length ?? notes.map { $0.start + $0.length }.max() ?? 0
+    /// Mixes `notes` into one buffer of samples, as long as the last of them to end.
+    static func render(_ notes: [Note], sampleRate: Double) -> [Float] {
+        let end = notes.map { $0.start + $0.length }.max() ?? 0
         var samples = [Float](repeating: 0, count: Int((end * sampleRate).rounded()))
         for note in notes {
             let first = Int((note.start * sampleRate).rounded())
