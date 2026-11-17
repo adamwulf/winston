@@ -154,6 +154,28 @@ struct Transcript {
         consumedThrough = max(consumedThrough, heardThrough)
     }
 
+    /// Drops the utterance so far, consuming the audio before `time` rather than all the audio
+    /// its results covered. A volatile result covers the audio fed so far, which can reach past
+    /// its last word into the start of a word still to come.
+    mutating func discard(through time: CMTime) {
+        finalized = []
+        volatile = nil
+        consume(through: time)
+    }
+
+    /// The text with `piece` applied, then with each of its alternatives applied in its place:
+    /// every reading of the utterance so far with the piece in. Nothing for a piece `apply(_:)`
+    /// wouldn't apply. Changes nothing.
+    func readings(with piece: TranscriptPiece) -> [String] {
+        ([piece.text] + piece.alternatives).compactMap { reading in
+            var transcript = self
+            var piece = piece
+            piece.text = reading
+            piece.alternatives = []
+            return transcript.apply(piece) ? transcript.text : nil
+        }
+    }
+
     /// The part of `text` from its first run starting at or after `time`, up to its first run
     /// starting at or after `end` if there is one, judged by the `audioTimeRange` attributes.
     /// Empty when no run qualifies or the timing is missing.
@@ -170,6 +192,12 @@ struct Transcript {
     /// qualifies or the timing is missing.
     static func start(of text: AttributedString, startingAt time: CMTime) -> CMTime? {
         firstRun(of: text, startingAt: time)?.audioTimeRange?.start
+    }
+
+    /// Where the last word of `text` ends on the audio timeline, judged by the `audioTimeRange`
+    /// attributes. Nil when the timing is missing.
+    static func end(of text: AttributedString) -> CMTime? {
+        text.runs.compactMap(\.audioTimeRange?.end).max()
     }
 
     private static func firstRun(of text: some AttributedStringProtocol, startingAt time: CMTime) -> AttributedString.Runs.Run? {
