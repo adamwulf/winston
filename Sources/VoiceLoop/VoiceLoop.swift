@@ -157,6 +157,13 @@ public final class VoiceLoop {
     /// Whether `play(_:)`, the start and stop of listening, and the working cue make a sound.
     /// Most tests turn it off, since they measure what was spoken by how much sound came out.
     @ObservationIgnored package var playsSoundCues = true
+    /// Seconds of microphone audio fed to the recognizer so far: where its timeline is now, and
+    /// what a reply's end, a press and consuming are measured on. Zero while off. For tests: the
+    /// recognizer reads what is fed on a task of its own, so what it has read lags this by
+    /// whatever is still queued.
+    package var fedAudioSeconds: Double {
+        pipeline?.fedAudio.time.seconds ?? 0
+    }
     /// Whether the bot is working on a reply, for the app to set while it shows the bot typing.
     /// Each time it turns on, the loop plays `SoundCue.agentWorking`, three low taps, once, so
     /// Adam hears that a reply is on its way without looking. If a reply is being said, the taps
