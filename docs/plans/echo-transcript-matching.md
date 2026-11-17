@@ -307,8 +307,8 @@ Loop tests, in `BargeInTests` with `VoiceTestBed` and `ScriptedRecognizer`:
   the reply, and the echoed words are then sent with his.
 - **Echo from two replies back.** Only the reply that last ended is kept. If
   a reply shorter than the recognizer's delay plays and ends between two
-  others, the echo of the one before it, reported after that, is judged
-  against the short reply only.
+  others, the first one is no longer kept by then. Its echo, reported late, is
+  judged only against the reply now playing and the short one.
 
 ## The start-cue experiment
 
