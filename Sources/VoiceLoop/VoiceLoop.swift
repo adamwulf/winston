@@ -112,7 +112,7 @@ public final class VoiceLoop {
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Whatever this is, the reply's own words heard back through echo
     /// cancellation don't interrupt it (see `ReplyEcho`): a result interrupts when the words it
-    /// adds after the echo already heard are mostly not the reply's. Raise this if the app's
+    /// adds after the echo already heard aren't a stretch of the reply. Raise this if the app's
     /// voice still interrupts, say with words the recognizer mishears. Without echo cancellation
     /// (if it couldn't start), speech never interrupts a reply, and with push-to-talk nothing
     /// heard does.
