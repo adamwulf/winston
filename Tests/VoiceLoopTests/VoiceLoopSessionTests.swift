@@ -850,6 +850,80 @@ struct BargeInTests {
         #expect(await eventually { sent.texts == ["Hi there."] })
     }
 
+    // Results lag their audio, so the echo of a reply's last words can be reported after the
+    // next reply has started: a queued one, or a preview that replaced it.
+
+    @Test func theEchoOfAReplyReportedWhileTheQueuedOneAfterItPlaysDoesNotInterruptIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+        let first = "Sure, I can check that for you."
+        var before = bed.audio.playedFrames
+        loop.speak(first)
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let firstAlone = bed.audio.playedFrames - before
+
+        before = bed.audio.playedFrames
+        // Before the first reply starts, so words timed from here are before it ended.
+        let start = loop.fedAudioSeconds
+        loop.speak(first)
+        loop.speak(
+            "Here is the next reply, long enough to still be playing when the test checks it, "
+                + "and it goes on a little longer than the reply before it did."
+        )
+        // The second starts as soon as the first ends, so once clearly more sound than the
+        // first makes has come out, the second is playing.
+        #expect(await eventually { bed.audio.playedFrames > before + firstAlone + firstAlone / 4 })
+        #expect(loop.state == .speaking)
+        // The first reply's last words, reported only now.
+        bed.recognizer.hear(
+            timed: [("that", start), ("for", start + 0.2), ("you.", start + 0.3)],
+            through: start + 0.5,
+            isFinal: true
+        )
+        try await settle(.milliseconds(100))
+
+        #expect(loop.state == .speaking)
+        let playedSoFar = bed.audio.playedFrames
+        #expect(await eventually { bed.audio.playedFrames > playedSoFar })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        try await settle()
+        #expect(sent.texts.isEmpty)
+    }
+
+    @Test func theEchoOfAReplyReportedWhileAPreviewThatReplacedItPlaysDoesNotInterruptIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let sent = UtteranceLog(loop)
+
+        loop.speak(longReply)
+        #expect(await eventually { bed.audio.playedFrames > 0 })
+        // Fed while the reply plays.
+        let playing = loop.fedAudioSeconds
+        #expect(loop.state == .speaking)
+        loop.preview(
+            "Testing the voice preview now, which keeps going for several seconds so the check "
+                + "sees it still playing afterwards, and then some more."
+        )
+        #expect(loop.state == .speaking)
+        // The replaced reply's words, reported only once the preview plays.
+        bed.recognizer.hear(
+            timed: [("This", playing), ("is", playing + 0.3), ("a", playing + 0.5), ("long", playing + 0.6)],
+            through: playing + 0.9,
+            isFinal: true
+        )
+        try await settle(.milliseconds(100))
+
+        #expect(loop.state == .speaking)
+        let playedSoFar = bed.audio.playedFrames
+        #expect(await eventually { bed.audio.playedFrames > playedSoFar })
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        try await settle()
+        #expect(sent.texts.isEmpty)
+    }
+
     // Echo is looked for after a reply only in words starting less than half a second after it
     // ended, at the audio fed by then. The recognizer has read that far once the loop is
     // listening again, so words starting 0.6 s after what it has read start later than that.
