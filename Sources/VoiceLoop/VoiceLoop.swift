@@ -1149,6 +1149,11 @@ public final class VoiceLoop {
         let interruptedCues = unfinishedCues.map(\.cue)
         unfinishedCues = []
         pipeline.cuePlayer.stop()
+        // A player the engine stopped under still says it is playing, and never plays what is
+        // scheduled on it next: the next reply would be silent, and never finish. `silence`
+        // stops the speech player only for a reply in progress, and one that played to its end
+        // leaves it playing.
+        pipeline.speech.player.stop()
         // Working taps that were cut off play again as the others do, but only once nothing is
         // said: the reply cut off with them starts over first.
         if interruptedCues.contains(.agentWorking) {
