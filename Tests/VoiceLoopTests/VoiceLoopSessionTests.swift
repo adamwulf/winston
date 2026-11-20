@@ -796,7 +796,8 @@ struct BargeInTests {
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct EngineStopTests {
-    /// The audio hardware changed (AirPods connected): the engine stops itself and says so.
+    /// The audio hardware's configuration changed while the devices stayed the same, as on the
+    /// iPhone right after a new engine starts: the engine stops itself and says so.
     private func stopByItself(_ engine: AVAudioEngine) {
         engine.stop()
         postConfigurationChange(for: engine)
@@ -1317,6 +1318,94 @@ struct SoundCueTests {
         #expect(loop.state == .listening(partial: ""))
         #expect(await eventually { bed.audio.engines.count == 2 && bed.recognizer.isStarted })
         #expect(await eventually { bed.audio.playedFrames > played })
+    }
+
+    @Test func aStopCueCutOffByTheEngineStoppingByItselfPlaysAgainInFull() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        let engine = try #require(bed.audio.engines.last)
+
+        loop.stop()
+        // As the hardware changing can, before any of the stop cue has played.
+        engine.stop()
+        let playedBeforeStop = bed.audio.playedFrames
+
+        #expect(await eventually { engine.isRunning })
+        #expect(await eventually { !engine.isRunning })
+        let expected = soundingFrames(of: .listeningStopped)
+        #expect(abs(bed.audio.playedFrames - playedBeforeStop - expected) <= expected / 10)
+        #expect(loop.state == .off)
+    }
+}
+
+// MARK: - Audio devices changing
+
+/// AirPods, as the iOS route names them.
+private let airPods = AudioDevices(
+    inputs: [.init(id: "airpods-hfp", kind: "BluetoothHFP")],
+    outputs: [.init(id: "airpods-hfp", kind: "BluetoothHFP")]
+)
+
+@MainActor
+@Suite(.serialized, .timeLimit(.minutes(1)))
+struct AudioDeviceChangeTests {
+    @Test func newDevicesEndVoiceModeWithTheStopCueAndItDoesNotStartAgain() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        let engine = try #require(bed.audio.engines.last)
+        let played = bed.audio.playedFrames
+
+        // AirPods connect.
+        bed.audioDevices = airPods
+        bed.reportAudioDeviceChange()
+
+        #expect(await eventually { loop.state == .off })
+        #expect(await eventually { bed.recognizer.isCancelled })
+        #expect(await eventually { !engine.isRunning })
+        let expected = soundingFrames(of: .listeningStopped)
+        #expect(abs(bed.audio.playedFrames - played - expected) <= expected / 10)
+        try await settle()
+        #expect(loop.state == .off)
+        #expect(bed.audio.engines.count == 1)
+    }
+
+    @Test func newDevicesThatStoppedTheEngineStillGetTheStopCue() async throws {
+        let bed = VoiceTestBed()
+        let builtIn = bed.audioDevices
+        bed.audioDevices = airPods
+        let loop = try await listeningLoopWithCues(on: bed)
+        let engine = try #require(bed.audio.engines.last)
+        let played = bed.audio.playedFrames
+
+        // AirPods are taken out: the engine stops by itself and says so, before the route change
+        // arrives.
+        bed.audioDevices = builtIn
+        engine.stop()
+        postConfigurationChange(for: engine)
+
+        #expect(await eventually { loop.state == .off })
+        // Started again for the stop cue, then released once it has played.
+        #expect(await eventually { !engine.isRunning })
+        #expect(await eventually { bed.recognizer.isCancelled })
+        let expected = soundingFrames(of: .listeningStopped)
+        #expect(abs(bed.audio.playedFrames - played - expected) <= expected / 10)
+        #expect(bed.audio.engines.count == 1)
+    }
+
+    @Test func aChangeReportedWithTheSameDevicesKeepsListening() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+
+        bed.reportAudioDeviceChange()
+        postConfigurationChange(for: engine)
+
+        #expect(await staysSilent(on: bed))
+        #expect(loop.state == .listening(partial: ""))
+        #expect(engine.isRunning)
+        #expect(!bed.recognizer.isCancelled)
+        #expect(bed.audio.engines.count == 1)
     }
 }
 
