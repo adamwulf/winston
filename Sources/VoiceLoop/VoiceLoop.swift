@@ -996,7 +996,14 @@ public final class VoiceLoop {
     /// Adds a result to the transcript, interrupting a reply if it is a barge-in.
     private func apply(_ piece: TranscriptPiece) {
         var candidate = transcript
-        guard candidate.apply(piece) else { return }
+        guard candidate.apply(piece) else {
+            // For the echo log: the recognizer heard something during the reply, though the
+            // transcript doesn't take it.
+            if currentSpeech != nil, let pipeline {
+                echo.resultDuringReply(pipeline, words: transcript.wordCount, outcome: "filtered")
+            }
+            return
+        }
         if currentSpeech != nil {
             // Without echo cancellation the microphone hears the reply itself, so nothing
             // spoken interrupts it (the app's stop button still does).
