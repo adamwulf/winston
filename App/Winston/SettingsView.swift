@@ -422,6 +422,8 @@ private struct PronunciationsSection: View {
             ForEach($model.pronunciations) { $pronunciation in
                 PronunciationRow(pronunciation: $pronunciation) { text in
                     model.previewPronunciation(text)
+                } playPhonemes: { word, phonemes in
+                    model.previewPronunciation(word: word, phonemes: phonemes)
                 } remove: {
                     // Read through the binding first: reading it while removeAll changes
                     // the array it reads from is an exclusive access conflict.
@@ -438,43 +440,52 @@ private struct PronunciationsSection: View {
         } header: {
             Text("Pronunciations")
         } footer: {
-            Text("Each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason.")
+            Text("Say As: each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason. IPA: Kokoro voices say the word with the phonemes you write, in Kokoro's symbols, such as kˈOkəɹO for Kokoro; symbols Kokoro doesn't know are dropped. Other voices say the word as written.")
         }
     }
 }
 
-/// One pronunciation: the word, and what to say in its place. Both are typed exactly as written,
-/// since the word matches only with the same case. Each has a play button that says it as written
-/// in the chosen voice, so the word as the voice would say it can be compared with its replacement.
-/// On iOS a row is removed by swiping it; on the Mac, with its remove button.
+/// One pronunciation: the word, whether it is said as other text (Say As) or with Kokoro phonemes
+/// (IPA), and that text or those phonemes. Word and text are typed exactly as written, since the
+/// word matches only with the same case. Each side has a play button in the chosen voice: the
+/// word's says it as written, so it can be compared with the other side's, which says the text as
+/// written, or the word with the phonemes (with a system voice, the word as written, as a reply
+/// would). On the Mac a row is one line, with a remove button; on iOS it is two, the word over the
+/// replacement, and is removed by swiping it.
 private struct PronunciationRow: View {
     @Binding var pronunciation: Pronunciation
-    /// Says the text it's given: the word or the replacement.
+    /// Says the text it's given: the word, or a Say As replacement.
     let play: (String) -> Void
+    /// Says a word with phonemes: an IPA replacement.
+    let playPhonemes: (_ word: String, _ phonemes: String) -> Void
     let remove: () -> Void
 
     var body: some View {
-        HStack {
-            TextField("Word", text: $pronunciation.word, prompt: Text("Word"))
-            PlayButton(text: pronunciation.word, help: "Play Word", accessibilityLabel: "Play word", play: play)
-            Image(systemName: "arrow.right")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            TextField("Say as", text: $pronunciation.replacement, prompt: Text("Say as"))
-            PlayButton(
-                text: pronunciation.replacement,
-                help: "Play Say As",
-                accessibilityLabel: "Play replacement",
-                play: play
-            )
-            #if os(macOS)
-            Button(action: remove) {
-                Image(systemName: "minus.circle")
+        rowLayout {
+            HStack {
+                TextField("Word", text: $pronunciation.word, prompt: Text("Word"))
+                PlayButton(help: "Play Word", accessibilityLabel: "Play word", isEnabled: !isBlank(pronunciation.word)) {
+                    play(pronunciation.word)
+                }
+                Picker("Pronunciation Type", selection: $pronunciation.mode) {
+                    Text("Say As").tag(Pronunciation.Mode.respelling)
+                    Text("IPA").tag(Pronunciation.Mode.phonetic)
+                }
+                .pickerStyle(.menu)
+                .fixedSize()
+                .help("Say As or IPA")
             }
-            .buttonStyle(.borderless)
-            .help("Remove")
-            .accessibilityLabel("Remove pronunciation")
-            #endif
+            HStack {
+                replacementSide
+                #if os(macOS)
+                Button(action: remove) {
+                    Image(systemName: "minus.circle")
+                }
+                .buttonStyle(.borderless)
+                .help("Remove")
+                .accessibilityLabel("Remove pronunciation")
+                #endif
+            }
         }
         .labelsHidden()
         .autocorrectionDisabled()
@@ -482,19 +493,54 @@ private struct PronunciationRow: View {
         .textInputAutocapitalization(.never)
         #endif
     }
+
+    /// One line on the Mac; on iOS, the word over the replacement, so each field has room.
+    private var rowLayout: AnyLayout {
+        #if os(iOS)
+        AnyLayout(VStackLayout(alignment: .leading))
+        #else
+        AnyLayout(HStackLayout())
+        #endif
+    }
+
+    /// The replacement field and what plays it, for the mode chosen. Controls for one mode only
+    /// go in its case.
+    @ViewBuilder private var replacementSide: some View {
+        let prompt: LocalizedStringKey = pronunciation.mode == .phonetic ? "IPA" : "Say as"
+        TextField(prompt, text: $pronunciation.replacement, prompt: Text(prompt))
+        switch pronunciation.mode {
+        case .respelling:
+            PlayButton(help: "Play Say As", accessibilityLabel: "Play replacement", isEnabled: !isBlank(pronunciation.replacement)) {
+                play(pronunciation.replacement)
+            }
+        case .phonetic:
+            PlayButton(
+                help: "Play IPA",
+                accessibilityLabel: "Play phonemes",
+                isEnabled: !isBlank(pronunciation.word) && !isBlank(pronunciation.replacement)
+            ) {
+                playPhonemes(pronunciation.word, pronunciation.replacement)
+            }
+        }
+    }
+
+    private func isBlank(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 }
 
-/// A pronunciation row's button for playing one of its fields, disabled while that field is blank.
+/// A pronunciation row's button for playing one of its sides, disabled while there's nothing to
+/// play.
 private struct PlayButton: View {
-    let text: String
     let help: LocalizedStringKey
     let accessibilityLabel: LocalizedStringKey
-    let play: (String) -> Void
+    let isEnabled: Bool
+    let play: () -> Void
 
     var body: some View {
         // Borderless, so on iOS only the button plays, not a tap anywhere in the row.
         Button {
-            play(text)
+            play()
         } label: {
             Image(systemName: "play.circle")
                 #if os(iOS)
@@ -504,7 +550,7 @@ private struct PlayButton: View {
                 #endif
         }
         .buttonStyle(.borderless)
-        .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .disabled(!isEnabled)
         .help(help)
         .accessibilityLabel(accessibilityLabel)
     }

@@ -13,10 +13,15 @@ import Synchronization
 /// reaches the tap after it. Once a buffer reaches the release, the tap records where the hold
 /// ended on the analyzer's timeline, for the main actor to take.
 ///
+/// It is also the AirPods mute on macOS (`setMuted(_:)`): while muted, nothing gets through,
+/// whatever push-to-talk does.
+///
 /// Shared by the main actor and the audio thread; a `Mutex` guards it.
 final class MicrophoneGate: Sendable {
     private struct State {
         var isEnabled = false
+        /// While set, every frame is silenced, with or without push-to-talk.
+        var isMuted = false
         /// When the hold began, in host time. Nil while there is no hold for the tap to pass.
         var start: UInt64?
         /// When the hold ended, in host time. Nil while the button is held.
@@ -34,7 +39,12 @@ final class MicrophoneGate: Sendable {
     /// Turns push-to-talk on, muting the microphone except during a hold, or off. Either way,
     /// any hold is forgotten.
     func setEnabled(_ isEnabled: Bool) {
-        state.withLock { $0 = State(isEnabled: isEnabled) }
+        state.withLock { $0 = State(isEnabled: isEnabled, isMuted: $0.isMuted) }
+    }
+
+    /// Mutes the microphone, letting nothing through until it is unmuted, or unmutes it.
+    func setMuted(_ isMuted: Bool) {
+        state.withLock { $0.isMuted = isMuted }
     }
 
     /// A hold begins at `hostTime`, which may be a moment from now. If the button was pressed
@@ -66,7 +76,7 @@ final class MicrophoneGate: Sendable {
 
     /// Forgets any hold, leaving push-to-talk on or off.
     func endHold() {
-        state.withLock { $0 = State(isEnabled: $0.isEnabled) }
+        state.withLock { $0 = State(isEnabled: $0.isEnabled, isMuted: $0.isMuted) }
     }
 
     /// Where the last hold ended on the analyzer's timeline, once, after the tap has reached
@@ -81,7 +91,7 @@ final class MicrophoneGate: Sendable {
     /// Runs on the audio thread for each microphone buffer: `frames` frames at `sampleRate`,
     /// the first captured at `captureTime` (host time), starting at `audioStart` on the
     /// analyzer's timeline, whose timescale is its sample rate. Returns the frames to keep: all
-    /// of them while push-to-talk is off.
+    /// of them while push-to-talk is off, and none while muted.
     func keptFrames(_ frames: AVAudioFrameCount, sampleRate: Double, capturedAt captureTime: UInt64, audioStart: CMTime) -> Range<Int> {
         let count = Int(frames)
         /// The frame captured at `hostTime`: 0 for a time before the buffer, `count` after it.
@@ -90,7 +100,9 @@ final class MicrophoneGate: Sendable {
             let seconds = AVAudioTime.seconds(forHostTime: hostTime - captureTime)
             return min(count, Int((seconds * sampleRate).rounded()))
         }
-        return state.withLock { state in
+        /// The frames push-to-talk keeps, muted or not. Once the buffer reaches the end of a
+        /// hold, moves `state` on past it.
+        func pushToTalkFrames(_ state: inout State) -> Range<Int> {
             guard state.isEnabled else { return 0..<count }
             guard let start = state.start else { return count..<count }
             let first = frame(at: start)
@@ -110,6 +122,11 @@ final class MicrophoneGate: Sendable {
                 state.end = nil
             }
             return first..<last
+        }
+        return state.withLock { state in
+            let kept = pushToTalkFrames(&state)
+            // A hold still ends where it was released, so its utterance is sent as usual.
+            return state.isMuted ? count..<count : kept
         }
     }
 }

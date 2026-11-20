@@ -65,6 +65,14 @@ extension Trait where Self == OneVoiceLoopAtATime {
 /// What the speaker plays for one sentence from `FakeKokoro`, at 48 kHz.
 private let fakeSentenceFrames = Int(FakeKokoro.secondsPerSentence * 48_000)
 
+/// The placeholder numbered `number` (see `PhoneticPlaceholders`): in lowercase, as Kokoro is
+/// given its phonemes, or with a `capital`, as a message holds it for a word that has one. A loop
+/// gives them out from 0, in the order it first meets each word and phonemes.
+private func placeholder(_ number: Int, capital: Bool = false) -> String {
+    let placeholder = PhoneticPlaceholders.placeholder(number: number)
+    return capital ? placeholder.prefix(1).uppercased() + placeholder.dropFirst() : placeholder
+}
+
 /// Audio far enough along the timeline to be new, whatever has been consumed.
 private let later: ClosedRange<Double> = 1_000_000...1_000_001
 
@@ -180,6 +188,299 @@ struct KokoroSpeakingTests {
         _ = await framesPlayed(saying: "The JSON is valid, and so is the XML. Not json.", by: loop, on: bed)
 
         #expect(bed.kokoro.requests.map(\.text) == ["The Jason is valid, and so is the X M L.", "Not json."])
+    }
+
+    @Test func kokoroIsGivenAnIPAWordAsAPlaceholderWithItsPhonemes() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.dictionary = ["reads"]
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [
+            Pronunciation(word: "Kokoro", replacement: " kˈOkəɹO ", mode: .phonetic),
+            Pronunciation(word: "JSON", replacement: "Jason"),
+        ]
+
+        _ = await framesPlayed(saying: "Kokoro reads JSON. Not kokoro. Kokoro's 2nd API.", by: loop, on: bed)
+
+        let requests = bed.kokoro.requests
+        let placeholder = try #require(requests.first?.pronunciations.first?.key)
+        #expect(placeholder.allSatisfy { $0.isASCII && $0.isLowercase })
+        #expect(placeholder != "kokoro")
+        let phonemes = [placeholder: "kˈOkəɹO"]
+        // With the word's capital, so the third sentence is still a sentence of its own.
+        let p = placeholder.prefix(1).uppercased() + placeholder.dropFirst()
+        #expect(requests == [
+            FakeKokoro.Request(text: "\(p) reads Jason.", voice: "af_heart", speed: 1, pronunciations: phonemes),
+            FakeKokoro.Request(text: "Not kokoro.", voice: "af_heart", speed: 1),
+            FakeKokoro.Request(text: "\(p)'s second eh P eye.", voice: "af_heart", speed: 1, pronunciations: phonemes),
+        ])
+    }
+
+    @Test func aReplyQueuedBeforeItsIPAPronunciationWasRemovedStillGetsItsPhonemes() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+        loop.speak("The first one.")
+        loop.speak("Kokoro is next.")
+
+        loop.pronunciations = []
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        let requests = bed.kokoro.requests
+        #expect(requests.count == 2)
+        let placeholder = try #require(requests.last?.pronunciations.first?.key)
+        #expect(requests.last == FakeKokoro.Request(
+            text: placeholder.prefix(1).uppercased() + placeholder.dropFirst() + " is next.",
+            voice: "af_heart",
+            speed: 1,
+            pronunciations: [placeholder: "kˈOkəɹO"]
+        ))
+    }
+
+    @Test func aSystemVoiceSaysIPAWordsAsWritten() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [
+            Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic),
+            Pronunciation(word: "JSON", replacement: "Jason"),
+            Pronunciation(word: "New York City", replacement: "nˈu jˈɔɹk sˈɪɾi", mode: .phonetic),
+            Pronunciation(word: "Yahoo!", replacement: "jˈɑhu", mode: .phonetic),
+            Pronunciation(word: "Mr.", replacement: "mˈɪstəɹ", mode: .phonetic),
+            Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic),
+            Pronunciation(word: "👍", replacement: "thumbs up"),
+        ]
+        let replies = [
+            // A word beside a respelling.
+            "Kokoro reads JSON.",
+            // Several words, a placeholder each.
+            "I love New York City.",
+            // Sentence punctuation kept after the placeholders: said once.
+            "I used Yahoo! Then I switched.",
+            // A full stop that ends no sentence, part of the placeholders.
+            "Mr. Smith paid 3.50 for it.",
+            // Placeholders side by side, a space between.
+            "Done 👏👏👍👏",
+        ]
+
+        for reply in replies {
+            loop.speak(reply)
+            // The system voice is given the reply as it starts; it needn't be heard.
+            loop.stopSpeaking()
+        }
+
+        #expect(bed.systemVoiceTexts == [
+            "Kokoro reads Jason.",
+            "I love New York City.",
+            "I used Yahoo! Then I switched.",
+            "Mr. Smith paid 3.50 for it.",
+            "Done 👏 👏 thumbs up 👏",
+        ])
+        #expect(bed.kokoro.requests.isEmpty)
+    }
+
+    @Test func whenKokoroFailsMidReplyTheSystemVoiceSaysTheRestWithTheIPAWord() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+        bed.kokoro.failingRequest = 1
+
+        loop.speak("Kokoro one. Kokoro two. Kokoro three.")
+
+        #expect(await eventually { !bed.systemVoiceTexts.isEmpty })
+        loop.stopSpeaking()
+        #expect(bed.kokoro.requests.count == 2)
+        #expect(bed.kokoro.requests.allSatisfy { $0.pronunciations.count == 1 })
+        #expect(bed.systemVoiceTexts == ["Kokoro two. Kokoro three."])
+    }
+
+    @Test func whenTheModelIsFreedMidReplyTheSystemVoiceSaysTheRestWithTheIPAWord() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+        bed.kokoro.holdsSynthesis = true
+        loop.speak("The first sentence here. Kokoro says the second.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        loop.voiceIdentifier = nil
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+
+        #expect(await eventually { !bed.systemVoiceTexts.isEmpty })
+        loop.stopSpeaking()
+        #expect(bed.systemVoiceTexts == ["Kokoro says the second."])
+    }
+
+    /// Says `reply` once the utterance being heard is sent: it is queued now, as `change` is made,
+    /// and waits without anything playing. Returns once the reply has started.
+    private func speakAfterTheUtteranceInProgress(
+        _ reply: String,
+        by loop: VoiceLoop,
+        on bed: VoiceTestBed,
+        changingThePronunciations change: () -> Void,
+        started: @MainActor () -> Bool
+    ) async {
+        bed.recognizer.hear("Hold on", over: 0...1)
+        #expect(await eventually { loop.state == .listening(partial: "Hold on") })
+        loop.speak(reply)
+        // Queued, not started: it starts only after the change.
+        #expect(!started())
+        #expect(loop.state == .listening(partial: "Hold on"))
+        change()
+        #expect(await eventually(started))
+    }
+
+    @Test func aReplyQueuedBeforeItsIPAPronunciationWasRemovedIsStillSaidAsTheWordByASystemVoice() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+
+        await speakAfterTheUtteranceInProgress("Kokoro is next.", by: loop, on: bed) {
+            loop.pronunciations = []
+        } started: {
+            !bed.systemVoiceTexts.isEmpty
+        }
+
+        loop.stopSpeaking()
+        #expect(bed.systemVoiceTexts == ["Kokoro is next."])
+    }
+
+    @Test func aReplyQueuedBeforeItsIPAPronunciationWasRenamedIsStillSaidAsTheOldWordByASystemVoice() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+
+        await speakAfterTheUtteranceInProgress("Kokoro is next.", by: loop, on: bed) {
+            loop.pronunciations[0].word = "Coco"
+        } started: {
+            !bed.systemVoiceTexts.isEmpty
+        }
+
+        loop.stopSpeaking()
+        #expect(bed.systemVoiceTexts == ["Kokoro is next."])
+    }
+
+    @Test func whenKokoroFailsAfterAnIPAPronunciationWasRenamedTheSystemVoiceSaysTheOldWord() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+        bed.kokoro.holdsSynthesis = true
+        bed.kokoro.failingRequest = 1
+        loop.speak("The first one. Kokoro is next.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        loop.pronunciations[0].word = "Coco"
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+
+        #expect(await eventually { !bed.systemVoiceTexts.isEmpty })
+        loop.stopSpeaking()
+        #expect(bed.kokoro.requests.last?.pronunciations == [placeholder(0): "kˈOkəɹO"])
+        #expect(bed.systemVoiceTexts == ["Kokoro is next."])
+    }
+
+    @Test func aReplyQueuedBeforeItsIPAPhonemesChangedIsStillSaidWithTheOldOnes() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)]
+        loop.speak("The first one.")
+        loop.speak("Kokoro is next.")
+
+        loop.pronunciations[0].replacement = "kəkˈɔɹO"
+        loop.speak("Kokoro is last.")
+
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(Array(bed.kokoro.requests.dropFirst()) == [
+            FakeKokoro.Request(
+                text: "\(placeholder(0, capital: true)) is next.",
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(0): "kˈOkəɹO"]
+            ),
+            FakeKokoro.Request(
+                text: "\(placeholder(1, capital: true)) is last.",
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(1): "kəkˈɔɹO"]
+            ),
+        ])
+    }
+
+    @Test func kokoroIsGivenAPlaceholderForEachWordOfAnIPAPronunciationsPhonemes() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "New York City", replacement: "nˈu jˈɔɹk sˈɪɾi", mode: .phonetic)]
+
+        _ = await framesPlayed(saying: "I love New York City.", by: loop, on: bed)
+
+        // A space between them, so KokoroTTS can cut a long sentence there rather than inside one.
+        #expect(bed.kokoro.requests == [FakeKokoro.Request(
+            text: "I love \(placeholder(0, capital: true)) \(placeholder(1)) \(placeholder(2)).",
+            voice: "af_heart",
+            speed: 1,
+            pronunciations: [placeholder(0): "nˈu", placeholder(1): "jˈɔɹk", placeholder(2): "sˈɪɾi"]
+        )])
+    }
+
+    @Test func anIPAWordsSentencePunctuationStillEndsItsSentenceForKokoro() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Yahoo!", replacement: "jˈɑhu", mode: .phonetic)]
+
+        _ = await framesPlayed(saying: "I used Yahoo! Then I switched.", by: loop, on: bed)
+
+        // Placeholders 0 stand for all of "Yahoo!"; 1 keep its "!" after them.
+        #expect(bed.kokoro.requests == [
+            FakeKokoro.Request(
+                text: "I used \(placeholder(1, capital: true))!",
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(1): "jˈɑhu"]
+            ),
+            FakeKokoro.Request(text: "Then I switched.", voice: "af_heart", speed: 1),
+        ])
+    }
+
+    @Test func anIPAWordsFullStopThatEndsNoSentenceMakesNoSentenceForKokoro() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Mr.", replacement: "mˈɪstəɹ", mode: .phonetic)]
+
+        _ = await framesPlayed(saying: "Mr. Smith paid 3.50 for it.", by: loop, on: bed)
+
+        let requests = bed.kokoro.requests
+        #expect(requests.count == 1)
+        #expect(requests.first?.text.hasPrefix("\(placeholder(0, capital: true)) Smith paid ") == true)
+        #expect(requests.first?.pronunciations == [placeholder(0): "mˈɪstəɹ"])
+    }
+
+    @Test func kokoroIsGivenEachOfIPAWordsSideBySideAsAPlaceholderOfItsOwn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [
+            Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic),
+            Pronunciation(word: "👍", replacement: "thumbs up"),
+        ]
+
+        _ = await framesPlayed(saying: "Done 👏👏👍👏", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests == [FakeKokoro.Request(
+            text: "Done \(placeholder(0)) \(placeholder(0)) thumbs up \(placeholder(0))",
+            voice: "af_heart",
+            speed: 1,
+            pronunciations: [placeholder(0): "klˈæp"]
+        )])
     }
 
     @Test func choosingAKokoroVoiceLoadsTheModelOnceAndASystemVoiceDoesNot() async throws {
@@ -446,6 +747,62 @@ struct KokoroPreviewTests {
         #expect(loop.state == .listening(partial: ""))
         #expect(bed.kokoro.requests.count == 1)
         #expect(bed.audio.playedFrames == 0)
+    }
+
+    @Test func aPreviewOfAWordWithPhonemesIsSpokenByKokoroWithThem() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+
+        loop.preview(word: "Kokoro", phonemes: "kˈOkəɹO")
+        let first = try #require(bed.audio.engines.last)
+        #expect(await eventually { !first.isRunning })
+        // Unsaved phonemes too, such as a suggestion being tried.
+        loop.preview(word: "Kokoro", phonemes: "kəkˈɔɹO")
+        let second = try #require(bed.audio.engines.last)
+        #expect(await eventually { !second.isRunning })
+
+        #expect(bed.kokoro.requests == [
+            FakeKokoro.Request(
+                text: placeholder(0, capital: true),
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(0): "kˈOkəɹO"]
+            ),
+            FakeKokoro.Request(
+                text: placeholder(1, capital: true),
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(1): "kəkˈɔɹO"]
+            ),
+        ])
+        #expect(bed.systemVoiceTexts.isEmpty)
+    }
+
+    @Test func aPreviewOfAWordWithPhonemesBeforeTheModelIsReadyIsTheWordAsWritten() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        loop.preview(word: "Kokoro", phonemes: "kˈOkəɹO")
+
+        // The system voice is given the preview as it starts; it needn't be heard.
+        loop.stopPreview()
+        #expect(bed.systemVoiceTexts == ["Kokoro"])
+        #expect(bed.kokoro.requests.isEmpty)
+        bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func aPreviewOfAnEmptyWordOrEmptyPhonemesSaysNothing() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+
+        loop.preview(word: "", phonemes: "kˈOkəɹO")
+        loop.preview(word: "Kokoro", phonemes: "")
+        try await settle()
+
+        #expect(bed.audio.engines.isEmpty)
+        #expect(bed.kokoro.requests.isEmpty)
     }
 }
 
@@ -1370,7 +1727,7 @@ struct KokoroLanguageTests {
         let result = await Task {
             // Stopped while it waits for an earlier request to render.
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await engine.synthesize("Hello.", voice: "af_heart", speed: 1)
+            return try await engine.synthesize("Hello.", voice: "af_heart", speed: 1, pronunciations: [:])
         }.result
 
         #expect(throws: CancellationError.self) { try result.get() }
@@ -1493,8 +1850,8 @@ private final class RecordingKokoro: KokoroEngine {
         await engine.dictionaryWords()
     }
 
-    func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
-        let samples = try await engine.synthesize(text, voice: voice, speed: speed)
+    func synthesize(_ text: String, voice: String, speed: Float, pronunciations: [String: String]) async throws -> [Float] {
+        let samples = try await engine.synthesize(text, voice: voice, speed: speed, pronunciations: pronunciations)
         renderedSamples.withLock { $0 += samples.count { abs($0) >= 0.001 } }
         return samples
     }
@@ -1627,7 +1984,7 @@ struct KokoroLoadTimingTests {
             try await engine.load(variant, voice: "af_heart") { _ in } stageChanged: { _ in }
             let firstLoad = milliseconds(since: start)
             start = clock.now
-            let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let firstAudio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1, pronunciations: [:])
             let firstRender = milliseconds(since: start)
 
             // Loaded again, as at the next launch: anything compiled the first time is cached.
@@ -1636,9 +1993,9 @@ struct KokoroLoadTimingTests {
             try await engine.load(variant, voice: "af_heart") { _ in } stageChanged: { _ in }
             let secondLoad = milliseconds(since: start)
             start = clock.now
-            let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1)
+            let audio = try await engine.synthesize(sentence, voice: "af_heart", speed: 1, pronunciations: [:])
             let render = milliseconds(since: start)
-            let fast = try await engine.synthesize(sentence, voice: "af_heart", speed: 2)
+            let fast = try await engine.synthesize(sentence, voice: "af_heart", speed: 2, pronunciations: [:])
 
             print(
                 "KOKORO TIMING model=\(variant.rawValue) firstLoadMs=\(firstLoad) firstRenderMs=\(firstRender)",

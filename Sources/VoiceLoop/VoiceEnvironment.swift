@@ -55,6 +55,9 @@ package struct VoiceEnvironment: Sendable {
     package var kokoroUnchosenSince: @MainActor @Sendable () -> Date?
     /// Saves `kokoroUnchosenSince`. Nil clears it.
     package var setKokoroUnchosenSince: @MainActor @Sendable (Date?) -> Void
+    /// Told the text of each utterance the system voice is about to say. Nothing in the app;
+    /// tests can't hear the system voice, so they read what it was given here.
+    package var systemVoiceWillSay: @MainActor @Sendable (String) -> Void
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
@@ -66,7 +69,8 @@ package struct VoiceEnvironment: Sendable {
         systemVoices: @escaping @MainActor @Sendable (String) -> [VoiceOption],
         now: @escaping @MainActor @Sendable () -> Date,
         kokoroUnchosenSince: @escaping @MainActor @Sendable () -> Date?,
-        setKokoroUnchosenSince: @escaping @MainActor @Sendable (Date?) -> Void
+        setKokoroUnchosenSince: @escaping @MainActor @Sendable (Date?) -> Void,
+        systemVoiceWillSay: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
@@ -78,5 +82,6 @@ package struct VoiceEnvironment: Sendable {
         self.now = now
         self.kokoroUnchosenSince = kokoroUnchosenSince
         self.setKokoroUnchosenSince = setKokoroUnchosenSince
+        self.systemVoiceWillSay = systemVoiceWillSay
     }
 }

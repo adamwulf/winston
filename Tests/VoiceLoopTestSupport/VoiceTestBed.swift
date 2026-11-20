@@ -36,6 +36,9 @@ package final class VoiceTestBed {
     /// When the loop recorded that the last Kokoro voice was unchosen, as the app keeps it in its
     /// user defaults. A loop made later on the same bed sees it, as after a relaunch.
     package var kokoroUnchosenSince: Date?
+    /// The text of each utterance the system voice was given, oldest first, by every loop on
+    /// this bed: replies and previews.
+    package private(set) var systemVoiceTexts: [String] = []
 
     /// Runs while the loop waits for permission, for tests of what happens meanwhile.
     package var whenRequestingPermissions: @MainActor () async -> Void = {}
@@ -83,7 +86,8 @@ package final class VoiceTestBed {
             },
             now: { [self] in now },
             kokoroUnchosenSince: { [self] in kokoroUnchosenSince },
-            setKokoroUnchosenSince: { [self] in kokoroUnchosenSince = $0 }
+            setKokoroUnchosenSince: { [self] in kokoroUnchosenSince = $0 },
+            systemVoiceWillSay: { [self] in systemVoiceTexts.append($0) }
         )
     }
 

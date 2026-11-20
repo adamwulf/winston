@@ -471,6 +471,65 @@ struct PronunciationPreviewTests {
 
         #expect(model.voiceLoop.state == .speaking)
     }
+
+    @Test func ipaPhonemesAreSaidTrimmedByKokoroInVoiceModeAndOutsideIt() async throws {
+        let harness = Harness()
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+
+        model.previewPronunciation(word: " Kokoro ", phonemes: " kˈOkəɹO ")
+        let engine = try #require(harness.bed.audio.engines.last)
+        #expect(await eventually { !engine.isRunning })
+        await model.setVoiceMode(true)
+        model.previewPronunciation(word: "Kokoro", phonemes: "kəkˈɔɹO")
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+
+        let requests = harness.bed.kokoro.requests
+        #expect(requests.map { Array($0.pronunciations.values) } == [["kˈOkəɹO"], ["kəkˈɔɹO"]])
+        // Each is the placeholder Kokoro was given the phonemes for, with the word's capital.
+        #expect(requests.allSatisfy { [$0.text.lowercased()] == Array($0.pronunciations.keys) && $0.text.first?.isUppercase == true })
+        #expect(harness.bed.systemVoiceTexts.isEmpty)
+    }
+
+    @Test func withASystemVoiceIPAPhonemesPlayTheWordAsWritten() async throws {
+        let harness = Harness()
+        let model = harness.model
+
+        model.previewPronunciation(word: " Kokoro ", phonemes: "kˈOkəɹO")
+
+        // The system voice is given the preview as it starts; it needn't be heard.
+        model.voiceLoop.stopPreview()
+        #expect(harness.bed.systemVoiceTexts == ["Kokoro"])
+        #expect(harness.bed.kokoro.requests.isEmpty)
+    }
+
+    @Test func ipaPhonemesOrTheirWordLeftBlankSayNothingAndWhatIsBeingSaidCarriesOn() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let bed = harness.bed
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        await model.setVoiceMode(true)
+        // Held while Kokoro renders it, so a cut-off would drop it.
+        bed.kokoro.holdsSynthesis = true
+        model.previewVoice()
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        model.previewPronunciation(word: "Kokoro", phonemes: "  ")
+        model.previewPronunciation(word: " ", phonemes: "kˈOkəɹO")
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+
+        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        try await settle(.milliseconds(50))
+        // The voice preview was the only thing said, and all of it played.
+        #expect(bed.kokoro.requests.map(\.text) == ["This is how I sound with the Heart voice."])
+        let sentenceFrames = Int(FakeKokoro.secondsPerSentence * 48_000)
+        #expect(abs(bed.audio.playedFrames - sentenceFrames) <= sentenceFrames / 20)
+    }
 }
 
 /// The message list's Speak item: a message said again in the chosen voice and model.
@@ -1163,6 +1222,34 @@ struct VoiceSettingsTests {
         let relaunched = harness.relaunchedModel()
         #expect(relaunched.pronunciations == pronunciations)
         #expect(relaunched.voiceLoop.pronunciations == pronunciations)
+    }
+
+    @Test func ipaPronunciationsAreSavedAndRestoredWithTheirMode() async throws {
+        let harness = Harness()
+        let model = harness.model
+        let pronunciations = [
+            Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic),
+            Pronunciation(word: "JSON", replacement: "Jason"),
+        ]
+
+        model.pronunciations = pronunciations
+
+        let relaunched = harness.relaunchedModel()
+        #expect(relaunched.pronunciations == pronunciations)
+        #expect(relaunched.voiceLoop.pronunciations == pronunciations)
+    }
+
+    @Test func pronunciationsSavedBeforeIPAAreRestoredAsSayAs() async throws {
+        let harness = Harness()
+        let id = UUID()
+        harness.defaults.set(
+            Data(#"[{"id": "\#(id.uuidString)", "word": "JSON", "replacement": "Jason"}]"#.utf8),
+            forKey: "pronunciations"
+        )
+
+        let relaunched = harness.relaunchedModel()
+
+        #expect(relaunched.pronunciations == [Pronunciation(id: id, word: "JSON", replacement: "Jason", mode: .respelling)])
     }
 
     @Test func unreadableSavedPronunciationsAreDropped() async throws {

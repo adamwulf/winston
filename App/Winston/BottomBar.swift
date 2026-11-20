@@ -184,9 +184,11 @@ struct BottomBar: View {
         } else {
             Button(action: tapIndicator) {
                 Image(systemName: indicatorSymbol)
-                    .symbolEffect(.variableColor.iterative, isActive: isListening)
+                    .symbolEffect(.variableColor.iterative, isActive: isListening && !model.voiceLoop.isInputMuted)
             }
-            .accessibilityLabel(model.voiceLoop.state == .speaking ? "Stop Speaking" : "Listening")
+            .accessibilityLabel(
+                model.voiceLoop.state == .speaking ? "Stop Speaking" : model.voiceLoop.isInputMuted ? "Muted" : "Listening"
+            )
 
             // Longer transcripts scroll, kept at the newest words; a short one sits on the
             // first line.
@@ -228,7 +230,8 @@ struct BottomBar: View {
     private var indicatorSymbol: String {
         switch model.voiceLoop.state {
         case .off: "mic.slash"
-        case .listening: "waveform"
+        // Muted from the AirPods.
+        case .listening: model.voiceLoop.isInputMuted ? "mic.slash" : "waveform"
         case .speaking: "speaker.wave.2.fill"
         }
     }
@@ -242,7 +245,7 @@ struct BottomBar: View {
     private var transcript: String {
         switch model.voiceLoop.state {
         case .off: "Starting…"
-        case .listening(let partial): partial.isEmpty ? "Listening…" : partial
+        case .listening(let partial): partial.isEmpty ? (model.voiceLoop.isInputMuted ? "Muted" : "Listening…") : partial
         case .speaking: "Speaking…"
         }
     }

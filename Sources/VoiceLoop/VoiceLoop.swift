@@ -100,15 +100,23 @@ public final class VoiceLoop {
     public static let speechPitches: ClosedRange<Float> = 0.5...2.0
     /// The voice's normal pitch.
     public static let defaultSpeechPitch: Float = 1.0
-    /// Words said differently, by every voice: each is replaced in a message as it is queued
-    /// (see `Pronunciation`), before Kokoro's numbers and acronyms are spelled out.
+    /// Words said differently: each is replaced in a message as it is queued (see
+    /// `Pronunciation`), before Kokoro's numbers and acronyms are spelled out. A respelling is
+    /// said by every voice. A phonetic pronunciation's word is replaced by placeholders that the
+    /// Kokoro voices say with its phonemes, and that the system voices say as the word. Either
+    /// way, a message keeps what it was queued with.
     public var pronunciations: [Pronunciation] = [] {
         didSet {
             guard pronunciations != oldValue else { return }
-            pronunciationReplacer = PronunciationReplacer(pronunciations)
+            phoneticPlaceholders.add(pronunciations)
+            pronunciationReplacer = PronunciationReplacer(pronunciations, placeholders: phoneticPlaceholders)
         }
     }
     @ObservationIgnored private var pronunciationReplacer = PronunciationReplacer([])
+    /// The placeholders of every word and phonemes of a phonetic pronunciation or a
+    /// `preview(word:phonemes:)` this run. None is forgotten, so a message queued before its
+    /// pronunciation changed still says what it was queued with.
+    @ObservationIgnored private var phoneticPlaceholders = PhoneticPlaceholders()
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -140,6 +148,14 @@ public final class VoiceLoop {
         access(keyPath: \.canTalk)
         return isPushToTalk && pipeline != nil
     }
+    /// Whether the microphone is muted from the AirPods: while voice mode runs, a press of the
+    /// stem (the Digital Crown on AirPods Max) mutes or unmutes it. iOS mutes the input itself,
+    /// with its own chime; on macOS the loop mutes it, through `microphoneGate`. Either way the
+    /// stop cue plays on mute and the start cue on unmute. What was said before a mute is sent
+    /// after the pause, as usual. Stopping voice mode unmutes it.
+    public private(set) var isInputMuted = false
+    /// Follows the AirPods mute while voice mode runs (see `isInputMuted`). Nil while it is off.
+    @ObservationIgnored private var inputMuteObserver: Task<Void, Never>?
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -312,6 +328,8 @@ public final class VoiceLoop {
         // A preview playing outside the engine would be heard as speech once listening starts.
         stopPreviewPlayer()
         isStarting = true
+        // Removed by `tearDown(.stop)`, which a start that fails also ends in.
+        observeInputMute()
         defer {
             isStarting = false
             // speak() queues while starting; if stop() came meanwhile, those replies are stale.
@@ -614,7 +632,19 @@ public final class VoiceLoop {
         preview(spoken: text)
     }
 
-    /// Says `text`, ready to say as it is, for `preview(_:)` and `preview(asWritten:)`.
+    /// Says `word` with `phonemes`, as a phonetic `Pronunciation` would have it, saved or not, as
+    /// `preview(asWritten:)` otherwise does: for hearing a phonetic pronunciation in settings. A
+    /// Kokoro voice whose model is ready says the phonemes; any other voice says the word as
+    /// written. Both are trimmed; nothing when either is blank.
+    public func preview(word: String, phonemes: String) {
+        let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phonemes = phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty, !phonemes.isEmpty else { return }
+        preview(spoken: phoneticPlaceholders.add(word: word, phonemes: phonemes))
+    }
+
+    /// Says `text`, ready to say as it is, for `preview(_:)`, `preview(asWritten:)` and
+    /// `preview(word:phonemes:)`.
     private func preview(spoken text: String) {
         stopPreviewPlayer()
         // Starting or rebuilding counts as running: speech queues for the engine then, and
@@ -1077,6 +1107,7 @@ public final class VoiceLoop {
             }
             resumeAfterInterruption = false
             recentEngineStops = []
+            stopObservingInputMute()
             if state != .off {
                 Self.log.notice("voice mode stopped")
             }
@@ -1319,6 +1350,81 @@ public final class VoiceLoop {
     }
     #endif
 
+    // MARK: - AirPods mute
+
+    /// For the mute logs.
+    private nonisolated static var platform: String {
+        #if os(macOS)
+        "macOS"
+        #else
+        "iOS"
+        #endif
+    }
+
+    /// Starts following the AirPods mute (see `isInputMuted`), unless it is already followed.
+    private func observeInputMute() {
+        guard inputMuteObserver == nil else { return }
+        let changes = NotificationCenter.default.notifications(named: AVAudioApplication.inputMuteStateChangeNotification)
+            .compactMap { $0.userInfo?[AVAudioApplication.muteStateKey] as? Bool }
+        inputMuteObserver = Task { [weak self] in
+            for await isMuted in changes {
+                guard let self, !Task.isCancelled else { return }
+                self.inputMuteChanged(isMuted)
+            }
+        }
+        Self.log.notice("input mute observer installed", ["platform": Self.platform])
+        #if os(macOS)
+        // On macOS the app does the muting itself. The handler can run on any thread.
+        let gate = microphoneGate
+        do {
+            try AVAudioApplication.shared.setInputMuteStateChangeHandler { @Sendable isMuted in
+                VoiceLoop.log.notice("input mute handler called", ["muted": isMuted, "platform": VoiceLoop.platform])
+                gate.setMuted(isMuted)
+                return true
+            }
+            Self.log.notice("input mute handler installed", ["platform": Self.platform])
+        } catch {
+            Self.log.error("input mute handler failed to install", error.logContext())
+        }
+        #endif
+    }
+
+    /// Stops following the AirPods mute, and unmutes the microphone, when voice mode stops.
+    private func stopObservingInputMute() {
+        guard let inputMuteObserver else { return }
+        inputMuteObserver.cancel()
+        self.inputMuteObserver = nil
+        // Before the handler goes, so on macOS it unmutes the gate too.
+        if AVAudioApplication.shared.isInputMuted {
+            do {
+                try AVAudioApplication.shared.setInputMuted(false)
+                Self.log.notice("input unmuted as voice mode stops", ["platform": Self.platform])
+            } catch {
+                Self.log.warning("unmuting the input failed", error.logContext())
+            }
+        }
+        #if os(macOS)
+        do {
+            try AVAudioApplication.shared.setInputMuteStateChangeHandler(nil)
+            Self.log.notice("input mute handler removed", ["platform": Self.platform])
+        } catch {
+            Self.log.error("input mute handler failed to remove", error.logContext())
+        }
+        #endif
+        microphoneGate.setMuted(false)
+        isInputMuted = false
+        Self.log.notice("input mute observer removed", ["platform": Self.platform])
+    }
+
+    /// The AirPods mute changed: shows it, and plays the stop cue on mute and the start cue on
+    /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already.
+    private func inputMuteChanged(_ isMuted: Bool) {
+        Self.log.notice("input mute changed", ["muted": isMuted, "platform": Self.platform])
+        guard isMuted != isInputMuted else { return }
+        isInputMuted = isMuted
+        play(isMuted ? .listeningStopped : .listeningStarted)
+    }
+
     // MARK: - Speaking
 
     /// Starts the next reply in the queue, unless one is playing, an utterance is in progress, or
@@ -1375,10 +1481,11 @@ public final class VoiceLoop {
     }
 
     /// Kokoro doesn't stream, so `text` is rendered a sentence at a time off the main actor, and
-    /// each sentence is fed to `playback` once it's ready. Cancelling the returned task stops
-    /// it: no further sentence is rendered, and the caller cancels `playback` too, so the one
-    /// rendering then is dropped. If rendering fails, or the model is freed because another
-    /// voice was chosen, `systemVoice` is handed the rest of the text to say.
+    /// each sentence is fed to `playback` once it's ready. Each sentence's placeholders go to
+    /// Kokoro with their phonemes. Cancelling the returned task stops it: no further sentence is
+    /// rendered, and the caller cancels `playback` too, so the one rendering then is dropped. If
+    /// rendering fails, or the model is freed because another voice was chosen, `systemVoice` is
+    /// handed the rest of the text to say, placeholders and all.
     private func synthesizeWithKokoro(
         _ text: String,
         voice: String,
@@ -1402,9 +1509,17 @@ public final class VoiceLoop {
                 }
                 let samples: [Float]
                 do {
-                    // Numbers first: their rules read the words around them as written.
+                    // Numbers first: their rules read the words around them as written. Both
+                    // leave placeholders as they are.
                     let spoken = acronyms.spelledOut(numbers.spelledOut(sentence))
-                    samples = try await engine.synthesize(spoken, voice: voice, speed: speed)
+                    // Read as the sentence starts: placeholders are only ever added, never
+                    // changed, so those queued with it are all there.
+                    samples = try await engine.synthesize(
+                        spoken,
+                        voice: voice,
+                        speed: speed,
+                        pronunciations: phoneticPlaceholders.phonemes(in: spoken)
+                    )
                 } catch {
                     guard !Task.isCancelled else { return }
                     // Codes only: KokoroTTS's messages can list voices and paths.
@@ -1519,9 +1634,12 @@ public final class VoiceLoop {
     /// Words starting this soon after a reply ends are dropped when there is no echo cancellation.
     private static let halfDuplexEchoMargin = CMTime(value: 3, timescale: 10)
 
-    /// `text` in the chosen voice and speed.
+    /// `text` in the chosen voice and speed, for the system voice: every system voice utterance is
+    /// made here. Phonetic pronunciations are for Kokoro, so each placeholder is said as its word.
     private func makeUtterance(_ text: String) -> AVSpeechUtterance {
-        let utterance = AVSpeechUtterance(string: text)
+        let written = phoneticPlaceholders.written(text)
+        environment.systemVoiceWillSay(written)
+        let utterance = AVSpeechUtterance(string: written)
         utterance.voice = voice()
         utterance.rate = speechRate
         return utterance

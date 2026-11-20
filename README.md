@@ -416,10 +416,27 @@ letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
 `us_gold.json` and `us_silver.json`, the same files in both repositories.
 System voices get the text as written.
 
-Settings → Pronunciations lists words every voice says differently: each word,
-matched with its case and only as a whole word, is replaced before anything
-else, so "JSON" said as "Jason" isn't spelled out. `AppModel` saves them in the
-standard user defaults, under `pronunciations`.
+Settings → Pronunciations lists words said differently: each word, matched with
+its case and only as a whole word, is replaced before anything else, so "JSON"
+said as "Jason" isn't spelled out. A word is either Say As, other text every
+voice says in its place, or IPA, Kokoro phonemes in Kokoro's notation (IPA with
+capitals for the diphthongs A, I, O, W and Y, as in `kˈOkəɹO` for "Kokoro";
+KokoroTTS drops a symbol it doesn't have). IPA is for the Kokoro voices only:
+KokoroTTS takes phonemes for single lowercase words and can't forget them, so an
+IPA word becomes made-up placeholder words (`PhoneticPlaceholders`), one for
+each word of its phonemes so KokoroTTS can cut a long sentence between them, and
+each sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro`
+adds to the loaded model with `addPronunciations` before rendering it. The
+system voices get the placeholders back as the word, as written. Where sentence
+punctuation that ends the word ("Yahoo!") ends a sentence in the message, it
+stays after the placeholders, so the sentence still ends there; elsewhere ("Mr.
+Smith") the placeholders stand for all of the word. A space keeps placeholders
+apart from any letter or digit beside them ("👏👏"). Placeholders are kept by
+word and phonemes for the whole run, so a reply queued before its pronunciation
+was changed or removed still says what it was queued with, as a Say As reply
+does.
+`AppModel` saves the pronunciations in the standard user defaults, under
+`pronunciations`; one saved before IPA existed is Say As.
 
 ## Logging
 
