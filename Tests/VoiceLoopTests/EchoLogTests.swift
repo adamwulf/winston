@@ -122,5 +122,15 @@ import Testing
         levels.add(reading(at: 1700, rms: 0.0001), firstAudio: 1500)
         #expect(levels.takeWindow()?.buffers == 1)
         #expect(levels.playback.buffers == 3)
+
+        // It ends at 1800. A buffer captured before the end, handed over after it, still counts;
+        // one captured after it doesn't, and shows every earlier one has come.
+        levels.close(at: 1800)
+        levels.add(reading(at: 1750, rms: 0.3), firstAudio: 1500)
+        #expect(!levels.hasReadingAfterEnd)
+        levels.add(reading(at: 1850, rms: 0.9), firstAudio: 1500)
+        #expect(levels.hasReadingAfterEnd)
+        #expect(levels.playback.buffers == 4)
+        #expect(levels.playback.rmsDb == -10)
     }
 }

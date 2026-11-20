@@ -23,7 +23,8 @@ import Synchronization
 ///   long into its playback, and whether it stopped the reply, was ignored, or was filtered out.
 /// - `reply playback`: how each reply ended: its first sound and its stop on the session's clock,
 ///   whether the voice detector heard voice meanwhile, and the loudest microphone level before
-///   its first sound and from then on.
+///   its first sound and from then on. Written once the tap has handed over every buffer
+///   captured before the reply's end, or `readingsGrace` after it.
 /// - `preview stopped as voice mode starts` and `audio outside voice processing`: the preview
 ///   player's engine, which plays outside voice processing, playing around voice mode.
 ///
@@ -50,6 +51,11 @@ final class EchoLog {
     /// The shortest time between two `mic level` lines, in seconds. The loop looks every 100 ms,
     /// so they come every 300 ms.
     nonisolated static let levelInterval = 0.25
+
+    /// How long after a reply ends its "reply playback" line waits for the tap to hand over the
+    /// buffers captured before the end, if no buffer captured after it shows they all have, in
+    /// seconds. A 4096-frame buffer at 48 kHz is about 85 ms.
+    nonisolated static let readingsGrace = 0.5
 
     /// Push-to-talk's and the AirPods mute's state: while push-to-talk is on and not `talking`,
     /// or while `inputMuted`, the recognizer hears silence.
@@ -365,7 +371,7 @@ final class EchoLog {
     func poll(_ pipeline: Pipeline) {
         absorbLevels(from: pipeline)
         writeEvents()
-        writeEndedReplies(of: pipeline)
+        writeEndedReplies(of: pipeline, allIn: false)
         writeLevelLine(for: pipeline)
     }
 
@@ -379,7 +385,7 @@ final class EchoLog {
     func pipelineEnded(_ pipeline: Pipeline) {
         absorbLevels(from: pipeline)
         writeEvents()
-        writeEndedReplies(of: pipeline)
+        writeEndedReplies(of: pipeline, allIn: true)
         if reply?.pipeline === pipeline {
             reply = nil
         }
@@ -428,11 +434,17 @@ final class EchoLog {
         }
     }
 
-    /// Writes the "reply playback" line of each of `pipeline`'s replies that has ended.
-    private func writeEndedReplies(of pipeline: Pipeline) {
+    /// Writes the "reply playback" line of each of `pipeline`'s replies that has ended, once the
+    /// tap has handed over every buffer captured before its end: once a buffer captured after
+    /// it has come, or `readingsGrace` after it if none does (the engine stopped, say). With
+    /// `allIn`, the tap is gone, and nothing more will come.
+    private func writeEndedReplies(of pipeline: Pipeline, allIn: Bool) {
+        let time = TimelineClock.now()
+        let grace = AVAudioTime.hostTime(forSeconds: Self.readingsGrace)
         var finished: [Reply] = []
         endedReplies.removeAll { ended in
-            guard ended.pipeline === pipeline else { return false }
+            guard ended.pipeline === pipeline, let end = ended.end else { return false }
+            guard allIn || ended.levels.hasReadingAfterEnd || time >= end.time &+ grace else { return false }
             finished.append(ended)
             return true
         }
@@ -554,6 +566,9 @@ final class EchoLog {
         // included.
         fields.merge(Self.levelFields(ended.levels.pre, prefix: "pre")) { $1 }
         fields.merge(Self.levelFields(ended.levels.playback, prefix: "mic")) { $1 }
+        // False if the line was written before a buffer captured after the end came: after
+        // `readingsGrace`, or because the pipeline went.
+        fields["levelsComplete"] = ended.levels.hasReadingAfterEnd
         if ended.droppedBuffers > 0 {
             fields["droppedBuffers"] = ended.droppedBuffers
         }
@@ -828,6 +843,10 @@ struct ReplyLevels: Equatable {
         self.started = started
     }
 
+    /// Whether a reading captured at or after the end has come. The tap hands buffers over in
+    /// the order they were captured, so every buffer captured before the end has come too.
+    private(set) var hasReadingAfterEnd = false
+
     /// The reply ended at `time` (host time).
     mutating func close(at time: UInt64) {
         end = time
@@ -836,8 +855,11 @@ struct ReplyLevels: Equatable {
     /// Counts `reading` before or after the reply's first sound, which was scheduled at
     /// `firstAudio` (host time), or hadn't been when the reading was taken if nil.
     mutating func add(_ reading: MicrophoneLevels.Reading, firstAudio: UInt64?) {
+        if let end, reading.captureTime >= end {
+            hasReadingAfterEnd = true
+            return
+        }
         guard reading.captureTime >= started else { return }
-        if let end, reading.captureTime >= end { return }
         if let firstAudio, reading.captureTime >= firstAudio {
             playback.add(reading)
             window.add(reading)
