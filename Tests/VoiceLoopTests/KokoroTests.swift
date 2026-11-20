@@ -326,6 +326,9 @@ struct KokoroSpeakingTests {
         bed.recognizer.hear("Hold on", over: 0...1)
         #expect(await eventually { loop.state == .listening(partial: "Hold on") })
         loop.speak(reply)
+        // Queued, not started: it starts only after the change.
+        #expect(!started())
+        #expect(loop.state == .listening(partial: "Hold on"))
         change()
         #expect(await eventually(started))
     }
