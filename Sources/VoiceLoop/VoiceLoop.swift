@@ -148,6 +148,14 @@ public final class VoiceLoop {
         access(keyPath: \.canTalk)
         return isPushToTalk && pipeline != nil
     }
+    /// Whether the microphone is muted from the AirPods: while voice mode runs, a press of the
+    /// stem (the Digital Crown on AirPods Max) mutes or unmutes it. iOS mutes the input itself,
+    /// with its own chime; on macOS the loop mutes it, through `microphoneGate`. Either way the
+    /// stop cue plays on mute and the start cue on unmute. What was said before a mute is sent
+    /// after the pause, as usual. Stopping voice mode unmutes it.
+    public private(set) var isInputMuted = false
+    /// Follows the AirPods mute while voice mode runs (see `isInputMuted`). Nil while it is off.
+    @ObservationIgnored private var inputMuteObserver: Task<Void, Never>?
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -320,6 +328,8 @@ public final class VoiceLoop {
         // A preview playing outside the engine would be heard as speech once listening starts.
         stopPreviewPlayer()
         isStarting = true
+        // Removed by `tearDown(.stop)`, which a start that fails also ends in.
+        observeInputMute()
         defer {
             isStarting = false
             // speak() queues while starting; if stop() came meanwhile, those replies are stale.
@@ -1097,6 +1107,7 @@ public final class VoiceLoop {
             }
             resumeAfterInterruption = false
             recentEngineStops = []
+            stopObservingInputMute()
             if state != .off {
                 Self.log.notice("voice mode stopped")
             }
@@ -1338,6 +1349,81 @@ public final class VoiceLoop {
         }
     }
     #endif
+
+    // MARK: - AirPods mute
+
+    /// For the mute logs.
+    private nonisolated static var platform: String {
+        #if os(macOS)
+        "macOS"
+        #else
+        "iOS"
+        #endif
+    }
+
+    /// Starts following the AirPods mute (see `isInputMuted`), unless it is already followed.
+    private func observeInputMute() {
+        guard inputMuteObserver == nil else { return }
+        let changes = NotificationCenter.default.notifications(named: AVAudioApplication.inputMuteStateChangeNotification)
+            .compactMap { $0.userInfo?[AVAudioApplication.muteStateKey] as? Bool }
+        inputMuteObserver = Task { [weak self] in
+            for await isMuted in changes {
+                guard let self, !Task.isCancelled else { return }
+                self.inputMuteChanged(isMuted)
+            }
+        }
+        Self.log.notice("input mute observer installed", ["platform": Self.platform])
+        #if os(macOS)
+        // On macOS the app does the muting itself. The handler can run on any thread.
+        let gate = microphoneGate
+        do {
+            try AVAudioApplication.shared.setInputMuteStateChangeHandler { @Sendable isMuted in
+                VoiceLoop.log.notice("input mute handler called", ["muted": isMuted, "platform": VoiceLoop.platform])
+                gate.setMuted(isMuted)
+                return true
+            }
+            Self.log.notice("input mute handler installed", ["platform": Self.platform])
+        } catch {
+            Self.log.error("input mute handler failed to install", error.logContext())
+        }
+        #endif
+    }
+
+    /// Stops following the AirPods mute, and unmutes the microphone, when voice mode stops.
+    private func stopObservingInputMute() {
+        guard let inputMuteObserver else { return }
+        inputMuteObserver.cancel()
+        self.inputMuteObserver = nil
+        // Before the handler goes, so on macOS it unmutes the gate too.
+        if AVAudioApplication.shared.isInputMuted {
+            do {
+                try AVAudioApplication.shared.setInputMuted(false)
+                Self.log.notice("input unmuted as voice mode stops", ["platform": Self.platform])
+            } catch {
+                Self.log.warning("unmuting the input failed", error.logContext())
+            }
+        }
+        #if os(macOS)
+        do {
+            try AVAudioApplication.shared.setInputMuteStateChangeHandler(nil)
+            Self.log.notice("input mute handler removed", ["platform": Self.platform])
+        } catch {
+            Self.log.error("input mute handler failed to remove", error.logContext())
+        }
+        #endif
+        microphoneGate.setMuted(false)
+        isInputMuted = false
+        Self.log.notice("input mute observer removed", ["platform": Self.platform])
+    }
+
+    /// The AirPods mute changed: shows it, and plays the stop cue on mute and the start cue on
+    /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already.
+    private func inputMuteChanged(_ isMuted: Bool) {
+        Self.log.notice("input mute changed", ["muted": isMuted, "platform": Self.platform])
+        guard isMuted != isInputMuted else { return }
+        isInputMuted = isMuted
+        play(isMuted ? .listeningStopped : .listeningStarted)
+    }
 
     // MARK: - Speaking
 
