@@ -1,3 +1,6 @@
+#if os(macOS)
+import AppKit
+#endif
 import SwiftUI
 import TelegramLink
 import WinstonCore
@@ -7,6 +10,9 @@ import WinstonCore
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @State private var presentations = Presentations()
+    #if os(macOS)
+    @State private var window = WindowReference()
+    #endif
 
     var body: some View {
         Group {
@@ -25,7 +31,16 @@ struct ContentView: View {
         // Winston is handed: it has no URL scheme.
         .onOpenURL { url in
             model.openFile(at: url)
+            #if os(macOS)
+            // In front of Settings, its own window on the Mac, say, so the agent sheet is seen.
+            window.window?.makeKeyAndOrderFront(nil)
+            #endif
         }
+        #if os(macOS)
+        .background {
+            WindowReader(reference: window)
+        }
+        #endif
         // This window takes it. Otherwise the Mac opens a new window for each file, sharing the
         // one model.
         .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
@@ -45,6 +60,36 @@ struct ContentView: View {
         }
     }
 }
+
+#if os(macOS)
+/// The chat window, once ContentView is in one. Weak: the window holds the view, not the other
+/// way round.
+final class WindowReference {
+    weak var window: NSWindow?
+}
+
+/// Puts the window it is shown in into `reference`.
+private struct WindowReader: NSViewRepresentable {
+    let reference: WindowReference
+
+    func makeNSView(context: Context) -> NSView {
+        let view = WindowView()
+        view.reference = reference
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class WindowView: NSView {
+        var reference: WindowReference?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            reference?.window = window
+        }
+    }
+}
+#endif
 
 struct MissingCredentialsView: View {
     var body: some View {
