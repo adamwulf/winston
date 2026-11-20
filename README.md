@@ -416,10 +416,20 @@ letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
 `us_gold.json` and `us_silver.json`, the same files in both repositories.
 System voices get the text as written.
 
-Settings → Pronunciations lists words every voice says differently: each word,
-matched with its case and only as a whole word, is replaced before anything
-else, so "JSON" said as "Jason" isn't spelled out. `AppModel` saves them in the
-standard user defaults, under `pronunciations`.
+Settings → Pronunciations lists words said differently: each word, matched with
+its case and only as a whole word, is replaced before anything else, so "JSON"
+said as "Jason" isn't spelled out. A word is either Say As, other text every
+voice says in its place, or IPA, Kokoro phonemes in Kokoro's notation (IPA with
+capitals for the diphthongs A, I, O, W and Y, as in `kˈOkəɹO` for "Kokoro";
+KokoroTTS drops a symbol it doesn't have). IPA is for the Kokoro voices only:
+KokoroTTS takes phonemes for single lowercase words and can't forget them, so an
+IPA word becomes a made-up placeholder word (`PhoneticPlaceholders`), and each
+sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro` adds
+to the loaded model with `addPronunciations` before rendering it. The system
+voices get each placeholder back as its word, as written. A placeholder lasts
+the run, so a reply queued before its pronunciation was removed still says it.
+`AppModel` saves the pronunciations in the standard user defaults, under
+`pronunciations`; one saved before IPA existed is Say As.
 
 ## Logging
 
