@@ -163,11 +163,14 @@ public final class VoiceLoop {
     /// leave voice mode as if Adam had. Not called for any other stop. Voice mode doesn't start
     /// again on its own, and plays the stop cue on the new devices, with push-to-talk too.
     @ObservationIgnored public var onStoppedForDeviceChange: (@MainActor () -> Void)?
-    /// The audio devices at voice mode's first start, kept through rebuilds. Nil while voice mode
-    /// is off. On the Mac voice mode ends when the default input or output is no longer the one
-    /// here. On iOS they are only logged: each route change carries its own routes.
+    #if os(macOS)
+    /// The default input and output at voice mode's first start, kept through rebuilds: voice
+    /// mode ends when they are no longer these. Nil while it is off. iOS has none: each route
+    /// change carries its own routes.
     @ObservationIgnored private var deviceBaseline: AudioDevices?
-    /// Follows the audio session's route changes while voice mode runs. Nil while it is off.
+    #endif
+    /// Follows the audio session's route changes while voice mode runs. Nil while it is off, so a
+    /// start that finds it set is a rebuild.
     @ObservationIgnored private var routeChangeObserver: Task<Void, Never>?
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
@@ -403,21 +406,24 @@ public final class VoiceLoop {
         self.pipeline = pipeline
         resumeAfterInterruption = false
         state = .listening(partial: "")
-        // A rebuild (an engine that couldn't restart, a settings change, or an interruption) keeps
-        // the devices voice mode started with, so it can't take up new ones.
-        let isRebuild = deviceBaseline != nil
+        // A rebuild (an engine that couldn't restart, a settings change, or an interruption) comes
+        // while the route changes are still followed from the first start.
+        let isRebuild = routeChangeObserver != nil
+        let devices = environment.audioDevices()
         if !isRebuild {
-            // What voice mode listens and speaks through until it stops. The changes this start
-            // made itself, such as the session's category and the speaker, are part of it.
-            deviceBaseline = environment.audioDevices()
             observeRouteChanges()
+            #if os(macOS)
+            // What voice mode listens and speaks through until it stops; a rebuild keeps them, so
+            // it can't take up new ones. The changes this start made itself are part of it.
+            deviceBaseline = devices
+            #endif
         }
         // Also after a rebuild, which has no "stopped" before it.
         Self.log.notice(
             "voice mode started",
             pipeline.formatContext.merging([
                 "echoCancellation": "\(pipeline.hasVoiceProcessing)",
-                "devices": deviceBaseline?.logDescription ?? "unknown",
+                "devices": devices.logDescription,
                 "rebuild": "\(isRebuild)",
             ]) { $1 }
         )
@@ -445,8 +451,14 @@ public final class VoiceLoop {
                 await self?.listen(to: recognizer, in: pipeline)
             },
             Task { [weak self] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(100))
+                while true {
+                    do {
+                        try await Task.sleep(for: .milliseconds(100))
+                    } catch {
+                        // The pipeline was torn down. For a rebuild, the new start checks the
+                        // devices itself.
+                        return
+                    }
                     #if os(macOS)
                     // The default input or output can change with no configuration change to
                     // say so, such as between two outputs of the same format.
@@ -464,8 +476,9 @@ public final class VoiceLoop {
                 for await _ in configurationChanges {
                     guard let self, let pipeline, self.pipeline === pipeline else { return }
                     #if os(macOS)
-                    // On the Mac a change of the default input or output shows only here. On iOS
-                    // the route change says whether a device came or went (`routeChanged(_:)`).
+                    // On the Mac a change of the default input or output can show here, in the
+                    // 100 ms check above, or at the end of a rebuild. On iOS the route change
+                    // says whether a device came or went (`routeChanged(_:)`).
                     if self.stopIfDevicesChanged(source: "configurationChange") {
                         return
                     }
@@ -1490,12 +1503,14 @@ public final class VoiceLoop {
         }
     }
 
-    /// Stops following the route changes and forgets the devices voice mode started with, when
-    /// it stops.
+    /// Stops following the route changes, and on the Mac forgets the devices voice mode started
+    /// with, when it stops.
     private func stopObservingRouteChanges() {
         routeChangeObserver?.cancel()
         routeChangeObserver = nil
+        #if os(macOS)
         deviceBaseline = nil
+        #endif
     }
 
     /// An iOS route change: voice mode ends if a device came or went and the route's devices
