@@ -17,6 +17,10 @@ package final class OfflineAudio {
     /// How many times the sound out of the speaker crossed zero. A tone crosses twice per
     /// cycle, so per second of `playedFrames` this says how high the sound is.
     package private(set) var playedZeroCrossings = 0
+    /// How many render passes have pulled audio through the running engines, by the timer or
+    /// `render(passes:)`: the engines' clock, for a test that must let them run a few passes
+    /// however slowly the machine gets round to them. A pass with no engine running isn't one.
+    package private(set) var renderPasses = 0
     /// Whether `output` keeps what comes out of the speaker. Off unless a test turns it on, since
     /// it grows with every render pass.
     package var recordsOutput = false
@@ -122,6 +126,9 @@ package final class OfflineAudio {
     /// Renders one pass on each running engine. Returns false when none is running.
     private func renderOnce() -> Bool {
         let running = engines.filter { $0.isRunning && $0.isInManualRenderingMode }
+        if !running.isEmpty {
+            renderPasses += 1
+        }
         for engine in running {
             guard let output = AVAudioPCMBuffer(
                 pcmFormat: engine.manualRenderingFormat,
