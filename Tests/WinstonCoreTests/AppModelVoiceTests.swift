@@ -794,7 +794,8 @@ struct ReactionChimeTests {
 
         await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
         #expect(await eventually { model.latestIncomingMessage?.hasMyThumbsUp == true })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
 
         try harness.fake.botReacts("👍", to: 11, in: 1)
@@ -810,7 +811,7 @@ struct ReactionChimeTests {
         #expect(await eventually {
             model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
         })
-        try await settle()
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == playedWithBoth)
     }
 
@@ -838,7 +839,8 @@ struct ReactionChimeTests {
         #expect(await eventually {
             model.messages[ChatID(2)]?.last?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
         })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
     }
 
@@ -884,7 +886,8 @@ struct ReactionChimeTests {
         #expect(await eventually {
             model.latestIncomingMessage?.reactions == [Reaction(emoji: "🎉", count: 1, isChosen: true)]
         })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
     }
 
@@ -900,7 +903,8 @@ struct ReactionChimeTests {
         harness.fake.setTyping(true, in: 2)
 
         #expect(await eventually { model.typingChats.contains(ChatID(2)) })
-        try await settle()
+        // A chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
         #expect(!model.currentMessages.contains { $0.id == MessageID(5) })
     }
