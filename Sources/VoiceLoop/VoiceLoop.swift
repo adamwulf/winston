@@ -475,7 +475,6 @@ public final class VoiceLoop {
             "appState": MediaDiagnostics.appState,
         ]) { $1 })
         #endif
-        echo.logEngineState(pipeline, reason: isRebuild ? "rebuild" : "start")
         #if os(macOS)
         // The rebuild may have come from the default input or output changing, which can show
         // only after the engine's configuration change, with nothing to say so after.
@@ -537,8 +536,11 @@ public final class VoiceLoop {
         // The engine started before the analyzer, while nothing watched for configuration
         // changes; if one stopped it in that window, start it again now. A rebuild's new start
         // runs in a Task, after this start has finished and cleared `isStarting`.
+        // `startCheck` says what it did, for the echo log.
+        var startCheck = "notNeeded"
         if !pipeline.engine.isRunning {
             engineStopped(pipeline, source: "startCheck")
+            startCheck = self.pipeline === pipeline ? "restarted" : state == .off ? "stopped" : "replaced"
         }
         // Adam can talk now, also after a rebuild or an interruption. Does nothing if the engine
         // is being rebuilt; the rebuild's start plays it. With push-to-talk, he can talk only
@@ -552,6 +554,8 @@ public final class VoiceLoop {
         // The bot may have started working before voice mode started. After the start cue, so
         // the taps follow it, and after the reply above, so one that started makes them wait.
         updateWorkingCue()
+        // Last, once the start's work is done. The start's `defer` writes the rest.
+        echo.logEngineState(pipeline, reason: isRebuild ? "rebuild" : "start", startCheck: startCheck)
     }
 
     /// Activates the iOS session and builds and starts the engine with voice processing (echo
@@ -1384,7 +1388,10 @@ public final class VoiceLoop {
                 updateWorkingCue()
             }
             // After the cues and the reply are under way again, so logging never delays them.
-            echo.logEngineState(pipeline, reason: "restart")
+            // A start's own check writes its line once the start is done (`startCheck`).
+            if !isStarting {
+                echo.logEngineState(pipeline, reason: "restart")
+            }
         } catch {
             Self.log.warning("restarting the audio engine failed; rebuilding", error.logContext(pipeline.formatContext))
             restart()

@@ -10,7 +10,8 @@ import Synchronization
 ///
 /// - `engine audio state`: voice processing's settings and the formats on both sides of it, once
 ///   an engine has started (`reason=start`), a new one has replaced it (`rebuild`), or it has
-///   started again after it stopped itself (`restart`).
+///   started again after it stopped itself (`restart`), each written after the start's or the
+///   restart's work is done. A start's line says what its start check did (`startCheck`).
 /// - `engine configuration changed`: the same, at each `AVAudioEngineConfigurationChange`, with
 ///   the values that changed since the line before (`<key>Before`, `changed`).
 /// - `cue played`: each cue the loop plays, with its level.
@@ -218,13 +219,16 @@ final class EchoLog {
 
     /// Logs the state of `pipeline`'s engine, which started at `noteEngineStart()`: `reason` is
     /// `start`, `rebuild` (a new engine while voice mode was already running) or `restart` (the
-    /// same engine again, after it stopped itself).
-    func logEngineState(_ pipeline: Pipeline, reason: String) {
+    /// same engine again, after it stopped itself). For a start or a rebuild, `startCheck` says
+    /// what the check for an engine that stopped while starting did: `notNeeded`, `restarted`,
+    /// `replaced` (a rebuild follows) or `stopped` (voice mode ended).
+    func logEngineState(_ pipeline: Pipeline, reason: String, startCheck: String? = nil) {
         let time = TimelineClock.now()
         let state = EngineAudioState(pipeline)
         engineState = state
         var fields = state.fields
         fields["reason"] = reason
+        fields["startCheck"] = startCheck
         fields["echoCancellation"] = pipeline.hasVoiceProcessing
         fields["sinceEngineStartMs"] = Self.milliseconds(since: engineStartTime, to: time)
         fields["sinceRouteChangeMs"] = Self.milliseconds(since: routeChangeTime, to: time)
