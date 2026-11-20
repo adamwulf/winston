@@ -350,6 +350,38 @@ package actor LiveKokoro: KokoroEngine {
         return words
     }
 
+    /// The loaded model's phoneme symbols: see `phonemeSymbols(in:)`.
+    package func phonemeSymbols() -> Set<Character> {
+        guard let variant = loaded?.variant else { return [] }
+        return Self.phonemeSymbols(in: modelFolder(variant))
+    }
+
+    /// The phoneme symbols in the `vocab_index.json` KokoroTTS downloads into each model's
+    /// `folder`, which maps each to its token, either at the top level or under "vocab", as
+    /// KokoroTTS reads it. KokoroTTS looks up each character of the phonemes on its own, so only
+    /// keys of one character count. Empty if the file can't be read.
+    static func phonemeSymbols(in folder: URL) -> Set<Character> {
+        let json: Any
+        do {
+            let data = try Data(contentsOf: folder.appending(path: "vocab_index.json", directoryHint: .notDirectory))
+            json = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            // Codes only: a file error's message names the model's folder.
+            Self.log.warning("kokoro vocabulary unreadable; suggestions are checked against misaki's symbols", error.logCodes())
+            return []
+        }
+        let vocabulary: [String: Int]
+        if let nested = (json as? [String: Any])?["vocab"] as? [String: Int] {
+            vocabulary = nested
+        } else if let flat = json as? [String: Int] {
+            vocabulary = flat
+        } else {
+            Self.log.warning("kokoro vocabulary isn't a map of symbols; suggestions are checked against misaki's symbols")
+            return []
+        }
+        return Set(vocabulary.keys.compactMap { $0.count == 1 ? $0.first : nil })
+    }
+
     package func synthesize(
         _ text: String,
         voice: String,

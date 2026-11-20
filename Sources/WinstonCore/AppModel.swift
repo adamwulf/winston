@@ -158,6 +158,8 @@ public final class AppModel {
     /// Nil without credentials, and in previews. One instance for the app's lifetime: once started it must
     /// never be deallocated, because TDLib's client manager blocks while tearing down.
     private let link: TelegramLink?
+    /// Suggests phonemes for an IPA pronunciation's word in settings.
+    private let pronunciationSuggester: any PronunciationSuggester
     /// Where the settings persist.
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
@@ -189,14 +191,22 @@ public final class AppModel {
         )
     }
 
-    /// Tests pass a link over a fake TDLib, a voice loop on offline audio, and defaults of their own.
-    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
-    package init(link: TelegramLink?, voiceLoop: VoiceLoop, defaults: UserDefaults, hasCredentials: Bool? = nil) {
+    /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own, and
+    /// a fake pronunciation suggester. `hasCredentials` defaults to whether there is a link; only
+    /// previews have one without the other.
+    package init(
+        link: TelegramLink?,
+        voiceLoop: VoiceLoop,
+        defaults: UserDefaults,
+        hasCredentials: Bool? = nil,
+        pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester()
+    ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
         self.voiceLoop = voiceLoop
         self.defaults = defaults
         self.hasCredentials = hasCredentials ?? (link != nil)
+        self.pronunciationSuggester = pronunciationSuggester
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
@@ -1072,6 +1082,75 @@ public final class AppModel {
         guard !word.isEmpty, !phonemes.isEmpty else { return }
         voiceLoop.preview(word: word, phonemes: phonemes)
     }
+
+    /// Whether settings offers the Suggest button on an IPA pronunciation: the suggester can run
+    /// now. The on-device one can't without Apple Intelligence, while it is turned off, or while
+    /// its model downloads.
+    public var canSuggestPronunciations: Bool {
+        pronunciationSuggester.isAvailable
+    }
+
+    /// Whether the suggestion list's play buttons can tell its suggestions apart: a Kokoro voice is
+    /// chosen and its model is ready, so each plays its phonemes. Any other voice would say the
+    /// same written word for every one.
+    public var canPlaySuggestions: Bool {
+        suggestionPlayback == .plays
+    }
+
+    /// Whether the suggestion list's play buttons play, and if not, what would let them: for the
+    /// list's note.
+    public var suggestionPlayback: SuggestionPlayback {
+        if voiceLoop.saysPhonemes {
+            return .plays
+        }
+        guard voiceLoop.chosenVoice?.engine == .kokoro else { return .needsKokoroVoice }
+        guard voiceLoop.kokoroModelVariant != nil else { return .needsVoiceModel }
+        switch voiceLoop.kokoroModelState {
+        case .failed:
+            return .voiceModelFailed
+        case .notLoaded, .loading, .downloading, .ready:
+            // A chosen Kokoro voice with a model chosen loads it: not loaded is about to.
+            return .waitsForVoiceModel
+        }
+    }
+
+    /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
+    /// asks nothing until its `generate()` is called. Its candidates are checked against the
+    /// phoneme symbols the Kokoro voices can say now (`VoiceLoop.kokoroPhonemeSymbols`), each time
+    /// they are read.
+    public func pronunciationSuggestions(for word: String) -> PronunciationSuggestions {
+        PronunciationSuggestions(word: word, suggester: pronunciationSuggester) { [voiceLoop] in
+            voiceLoop.kokoroPhonemeSymbols
+        }
+    }
+
+    /// Fills the pronunciation with `id` with `candidate`'s phonemes, as IPA, and saves it, for the
+    /// suggestion list's Use button. Returns whether it did: not for a candidate with a symbol
+    /// Kokoro doesn't have now, whatever it had when the candidate was made, nor once the
+    /// pronunciation is gone.
+    @discardableResult
+    public func use(_ candidate: PronunciationCandidate, forPronunciation id: Pronunciation.ID) -> Bool {
+        let checked = PronunciationCandidate(candidate.suggestion, symbols: voiceLoop.kokoroPhonemeSymbols)
+        guard checked.isUsable, let index = pronunciations.firstIndex(where: { $0.id == id }) else { return false }
+        pronunciations[index].replacement = candidate.suggestion.phonemes
+        pronunciations[index].mode = .phonetic
+        return true
+    }
+}
+
+/// Whether the suggestion list's play buttons play: `AppModel.suggestionPlayback`. Only a ready
+/// Kokoro voice says a suggestion's phonemes; any other voice says the same written word for each.
+public enum SuggestionPlayback: Equatable, Sendable {
+    /// A Kokoro voice is chosen and its model is ready.
+    case plays
+    /// A system voice is chosen: choosing a Kokoro voice would play them.
+    case needsKokoroVoice
+    /// A Kokoro voice is chosen, but no voice model ("No Model"): choosing one would.
+    case needsVoiceModel
+    /// The Kokoro voice model is downloading or loading: they play once it is ready.
+    case waitsForVoiceModel
+    /// The Kokoro voice model couldn't download or load: retrying it would.
+    case voiceModelFailed
 }
 
 /// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.
@@ -1135,6 +1214,14 @@ public func userMessage(for error: any Error) -> String {
     if let error = error as? DocumentFiles.Failure {
         switch error {
         case .folder: return "Winston can send files, but not folders."
+        }
+    }
+    if let error = error as? PronunciationSuggestionError {
+        switch error {
+        case .unavailable: return "Suggestions aren't available right now. Check that Apple Intelligence is turned on and its model has downloaded."
+        case .declined: return "The model declined to suggest pronunciations for this word."
+        case .busy: return "The model is busy. Try again in a moment."
+        case .failed: return "Couldn't get suggestions. Try again."
         }
     }
     return error.localizedDescription

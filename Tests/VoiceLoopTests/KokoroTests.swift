@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Observation
 import Synchronization
 import Testing
 @testable import VoiceLoop
@@ -1788,6 +1789,101 @@ struct KokoroLanguageTests {
 
         #expect(await engine.dictionaryWords().isEmpty)
     }
+
+    @Test func thePhonemeSymbolsAreTheVocabularysOneCharacterKeysFlatOrUnderVocab() async throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "winston-kokoro-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appending(path: "vocab_index.json")
+
+        // As KokoroTTS reads it: under "vocab", with other keys beside it.
+        try Data(#"{"vocab": {"ɹ": 123, "A": 24, "ˈ": 156, " ": 16, "ab": 7}, "metadata": {"version": 1}}"#.utf8).write(to: file)
+        // KokoroTTS looks up each character on its own, so "ab" is never found.
+        #expect(LiveKokoro.phonemeSymbols(in: folder) == ["ɹ", "A", "ˈ", " "])
+        // Or at the top level.
+        try Data(#"{"ʤ": 82, "ɡ": 92}"#.utf8).write(to: file)
+        #expect(LiveKokoro.phonemeSymbols(in: folder) == ["ʤ", "ɡ"])
+        // Anything else, or no file, gives none.
+        try Data(#"["ɹ", "A"]"#.utf8).write(to: file)
+        #expect(LiveKokoro.phonemeSymbols(in: folder).isEmpty)
+        try FileManager.default.removeItem(at: file)
+        #expect(LiveKokoro.phonemeSymbols(in: folder).isEmpty)
+    }
+
+    @Test func withoutALoadedModelThereAreNoPhonemeSymbols() async throws {
+        let engine = LiveKokoro(directory: FileManager.default.temporaryDirectory.appending(path: "winston-unused-\(UUID())"))
+
+        #expect(await engine.phonemeSymbols().isEmpty)
+    }
+}
+
+/// The symbols suggested phonemes are checked against.
+@MainActor
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
+struct KokoroPhonemeSymbolTests {
+    @Test func withoutAReadyModelTheyAreMisakisUSSymbols() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.symbols = ["x"]
+        let loop = bed.makeLoop()
+
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
+        // Still loading.
+        bed.kokoro.loadBehavior = .waits
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { bed.kokoro.loads == 1 })
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
+        bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroPhonemeSymbols == ["x"])
+        // A system voice frees the model.
+        loop.voiceIdentifier = nil
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
+    }
+
+    @Test func theyAreReadOnceAsTheModelLoads() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.symbols = ["ɹ", "x"]
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroPhonemeSymbols == ["ɹ", "x"])
+
+        // A change to the engine's vocabulary shows only once the model loads again.
+        bed.kokoro.symbols = ["y"]
+        #expect(loop.kokoroPhonemeSymbols == ["ɹ", "x"])
+        loop.voiceIdentifier = nil
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroPhonemeSymbols == ["y"])
+    }
+
+    @Test func aVocabularyThatCantBeReadGivesMisakisUSSymbols() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+
+        // The fake's vocabulary is empty, as the engine's is when its file can't be read.
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
+    }
+
+    @Test func theyAreObservable() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.symbols = ["x"]
+        let loop = bed.makeLoop()
+        let changed = Mutex(false)
+        withObservationTracking {
+            _ = loop.kokoroPhonemeSymbols
+        } onChange: {
+            changed.withLock { $0 = true }
+        }
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        #expect(await eventually { loop.kokoroPhonemeSymbols == ["x"] })
+        #expect(changed.withLock { $0 })
+    }
 }
 
 // MARK: - The real model
@@ -1848,6 +1944,10 @@ private final class RecordingKokoro: KokoroEngine {
 
     func dictionaryWords() async -> Set<String> {
         await engine.dictionaryWords()
+    }
+
+    func phonemeSymbols() async -> Set<Character> {
+        await engine.phonemeSymbols()
     }
 
     func synthesize(_ text: String, voice: String, speed: Float, pronunciations: [String: String]) async throws -> [Float] {

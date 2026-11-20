@@ -156,7 +156,10 @@ the message, the same one the other lines show.
 
 ## Build and test
 
-The first package resolve downloads TDLibFramework (about 375 MB).
+Building needs Xcode 27 or later: the code uses the iOS 27 and macOS 27 SDKs
+(Foundation Models' newer error types, behind availability checks), though it
+runs on iOS 26 and macOS 26. The first package resolve downloads
+TDLibFramework (about 375 MB).
 
 ```sh
 swift test --build-path .build
@@ -176,7 +179,7 @@ xcodebuild -quiet -project App/Winston.xcodeproj -scheme Winston \
 
 ### What the tests run
 
-The tests run the real code. A test process can't have seven things, and each
+The tests run the real code. A test process can't have eight things, and each
 is reached through one seam. The seams are `package` declarations, so the app
 can't see them.
 
@@ -185,7 +188,8 @@ can't see them.
 | TDLib and a Telegram account | `TDLibRequests` and `TDLibClientSource` in `TelegramLink` | `FakeTDLib`: keeps a pretend account, walks TDLib's login states, and sends updates as TDLib's JSON |
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment`, and the `Recognizer` it makes: `start(inputs:)`, `results`, `finalize(through:)` and `cancel()` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard. Asked to finalize, it waits until it has read that far and reports its last volatile result again as final, as the analyzer does. It notes where the audio it is fed was loud (`soundHeard`) |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
-| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words the test gives it |
+| The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words and phoneme symbols the test gives it |
+| Apple's on-device language model | `PronunciationSuggester`, as `pronunciationSuggester` in `AppModel`'s package init | `FakePronunciationSuggester`: available while the test says so, answers each request with the next answer the test gave it, can hold each answer back until the test lets it go, and notes which requests were cancelled |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -200,6 +204,25 @@ every test target shares them.
 only once the model is in `.build/kokoro-model` (or `WINSTON_KOKORO_MODEL_DIR`);
 otherwise it is skipped. Running `LiveKokoro(directory:)` on that folder once
 downloads it.
+
+`OnDevicePronunciationSuggesterRealModelTests` runs Apple's on-device model
+and prints what it suggests for a few words, for a person to judge. It is off
+by default: it spends about 25 s on the model beside suites that time things,
+and its answers differ from run to run. Ask for it where the model is
+available, with an environment variable:
+
+```sh
+WINSTON_SUGGESTER_REAL_MODEL=1 swift test --filter OnDevicePronunciationSuggesterRealModelTests
+```
+
+or, where setting one is awkward, with a file in the package's `.build` folder,
+which git ignores; delete it to turn the check off again:
+
+```sh
+touch .build/suggester-real-model
+swift test --filter OnDevicePronunciationSuggesterRealModelTests
+rm .build/suggester-real-model
+```
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
 when listening starts and stops, a chime for any reaction from the bot, and low
@@ -231,13 +254,16 @@ runs the tests on macOS and prints line coverage for every file in `Sources/`.
 [docs/coverage](docs/coverage/README.md) has the dated reports, how to make
 one, and the goals for coverage and tests.
 
-Four places stay uncovered on purpose, because they only call into the
+Five places stay uncovered on purpose, because they only call into the
 system:
 
 - `LiveVoiceEnvironment.swift`: the permission prompts, the speech model, the
   clock and the standard user defaults.
 - `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
   `KokoroRealModelTests` runs.
+- `OnDevicePronunciationSuggester.generatedPronunciations(for:)`: Apple's
+  on-device model. Covered only when
+  `OnDevicePronunciationSuggesterRealModelTests` runs.
 - `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
   `TelegramLink.init(config:)`: the real TDLib, which would use the network.
 - A few defensive `throw`s that the system never triggers, such as
@@ -437,6 +463,51 @@ was changed or removed still says what it was queued with, as a Say As reply
 does.
 `AppModel` saves the pronunciations in the standard user defaults, under
 `pronunciations`; one saved before IPA existed is Say As.
+
+An IPA row has a Suggest button (sparkles), shown only while the suggester can
+run (`AppModel.canSuggestPronunciations`). It lists a few ways to say the word,
+each with its phonemes, a respelling and a note, a play button, and Use, which
+fills the row's IPA; Regenerate asks again, even while a request is under way.
+The play buttons are on only while a Kokoro voice is ready
+(`AppModel.suggestionPlayback`): any other voice would say the same written word
+for every suggestion. Otherwise a note says what would turn them on: choosing a
+Kokoro voice, choosing a voice model (with No Model), waiting while it loads, or
+retrying it after it failed. The suggester is a
+`PronunciationSuggester`, so another backend can be added without changing the
+settings screen: each says where its suggestions come from (`attribution`), and
+the list's footer shows it. The one there is, `OnDevicePronunciationSuggester`, asks
+Apple's on-device model (`SystemLanguageModel.default`; no network, no key),
+which isn't there without Apple Intelligence, while it is turned off, or while
+its model downloads. The model knows standard IPA far better than Kokoro's
+notation, so it is asked for IPA for American English, and
+`MisakiPhonemes.fromIPA` converts each answer: diphthongs to capitals (the
+vowel of "say" is eɪ or eː, and a bare e is the vowel of "bed", ɛ, as the
+prompt asks), r to ɹ, g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and ɜɹ, o to
+ɔ before an r unless marked long, syllable dots, hyphens, length marks,
+slashes, tie bars and other diacritics dropped (ç stays ç), a syllabic
+consonant given ᵊ, and each stress mark moved from the start of its syllable to
+right before its vowel. A word written without spaces gets one word of
+phonemes: a space in its IPA only breaks syllables. An optional sound in
+parentheses, such as the (h) of ˈsɪbə(h)n, gives a suggestion without it and
+one with it, so both can be heard. Repeats are dropped, and every symbol is
+checked against the symbols Kokoro can say now (`VoiceLoop.kokoroPhonemeSymbols`):
+the loaded model's `vocab_index.json`, read once as it loads, next to its
+dictionary words, or misaki's US symbols while no model is ready. The check is
+made each time the list shows them, so it follows the model as it loads and is
+freed. A suggestion with a symbol Kokoro doesn't have says so and can't be
+used. The model's IPA isn't held to IPA's symbols with a pattern guide: on
+macOS 27 the guides take no character classes or anchors, and an alternation of
+the symbols made a request take 36 to 104 s rather than about 2. The logs hold
+counts, times and error codes, never the word or what the model wrote.
+
+The suggestions are often wrong, above all for names from other languages, and
+change from one request to the next: play each before using it. About 1
+request in 35 fails on the model's side, and settings says so; Regenerate asks
+again. Its guardrails declined "Nguyen" once and answered it the other times
+(nothing turns them off for a structured, `@Generable`, answer), and once it ran
+on writing until the token cap cut it off.
+`OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
+for a few words, when asked for (see [What the tests run](#what-the-tests-run)).
 
 ## Logging
 

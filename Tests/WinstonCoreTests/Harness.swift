@@ -9,14 +9,16 @@ import WinstonCore
 // TDLibKit isn't imported in this target: it has its own `ChatEvent`, `Message` and `File`.
 // The builders in TelegramLinkTestSupport make the TDLibKit values the tests hand to the fake.
 
-/// An `AppModel` as the app builds it, except for the three things a test can't have: TDLib is
+/// An `AppModel` as the app builds it, except for the four things a test can't have: TDLib is
 /// `FakeTDLib` behind the real `TelegramLink`, the voice loop is the real `VoiceLoop` on a
-/// `VoiceTestBed` (offline audio, scripted recognizer), and the settings go to user defaults
-/// of the harness's own.
+/// `VoiceTestBed` (offline audio, scripted recognizer), the pronunciation suggester is
+/// `FakePronunciationSuggester` rather than Apple's on-device model, and the settings go to user
+/// defaults of the harness's own.
 @MainActor
 final class Harness {
     let fake: FakeTDLib
     let bed = VoiceTestBed()
+    let suggester = FakePronunciationSuggester()
     let model: AppModel
     private let testDefaults = TestDefaults()
 
@@ -33,7 +35,8 @@ final class Harness {
         model = AppModel(
             link: fake.makeLink(typingTimeout: .seconds(60)),
             voiceLoop: bed.makeLoop(soundCues: soundCues),
-            defaults: testDefaults.defaults
+            defaults: testDefaults.defaults,
+            pronunciationSuggester: suggester
         )
     }
 
