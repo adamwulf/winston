@@ -82,6 +82,13 @@ import Testing
         #expect(misaki("ˈɡo") == "ɡˈO")
     }
 
+    @Test func aLongEOrOIsADiphthongEvenBeforeAnR() {
+        // As the model wrote Kokoro.
+        #expect(misaki("kɔˈroːro") == "kɔɹˈOɹO")
+        #expect(misaki("ˈseːra") == "sˈAɹɑ")
+        #expect(misaki("ˈɡnoːki") == "ɡnˈOki")
+    }
+
     @Test func otherVowelsMisakiWritesOtherwise() {
         #expect(misaki("ˈfaðɚ") == "fˈɑðəɹ")
         #expect(misaki("ˈlɒt") == "lˈɑt")

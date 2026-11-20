@@ -455,8 +455,9 @@ which isn't there without Apple Intelligence, while it is turned off, or while
 its model downloads. The model knows standard IPA far better than Kokoro's
 notation, so it is asked for IPA for American English, and
 `MisakiPhonemes.fromIPA` converts each answer: diphthongs to capitals, r to ɹ,
-g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and ɜɹ, syllable dots, hyphens,
-length marks, slashes and tie bars dropped, a syllabic consonant given ᵊ, and
+g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and ɜɹ, e and o to ɛ and ɔ before
+an r unless marked long, syllable dots, hyphens, length marks, slashes and tie
+bars dropped, a syllabic consonant given ᵊ, and
 each stress mark moved from the start of its syllable to right before its
 vowel. Repeats are dropped, and every symbol is checked against the loaded
 Kokoro model's `vocab_index.json` (misaki's US symbols while no model is
@@ -467,7 +468,10 @@ the symbols made a request take 36 to 104 s rather than about 2. The logs hold
 counts, times and error codes, never the word or what the model wrote.
 
 The suggestions are often wrong, above all for names from other languages, and
-change from one request to the next: play each before using it.
+change from one request to the next: play each before using it. The model's
+guardrails sometimes decline a word, deciding afresh each time ("Nguyen" was
+declined once in five runs), and settings says so; nothing turns them off for a
+structured (`@Generable`) answer.
 `OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
 for a few words; it runs only where the model is available.
 

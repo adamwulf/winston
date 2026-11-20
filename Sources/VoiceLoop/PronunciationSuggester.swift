@@ -135,7 +135,15 @@ enum MisakiPhonemes {
                 symbols += [isRhotic(consonant) ? "ə" : "ᵊ", consonant]
             case "-", "‿":
                 symbols.append(".")
-            case "/", "[", "]", "ː", "ˑ", "ʰ":
+            case "ː", "ˑ":
+                // A long e or o is the vowel of "say" or "go" even before an r: kɔˈroːro is
+                // Kokoro, not "kor-or-o".
+                switch symbols.last {
+                case "e": symbols[symbols.count - 1] = "A"
+                case "o": symbols[symbols.count - 1] = "O"
+                default: continue
+                }
+            case "/", "[", "]", "ʰ":
                 continue
             default:
                 guard scalar.properties.generalCategory != .nonspacingMark else { continue }
@@ -167,9 +175,9 @@ enum MisakiPhonemes {
     ]
 
     /// `symbols` in misaki's: diphthongs and affricates joined, and each symbol misaki writes
-    /// otherwise replaced. Before an r, e and o are the vowels of "air" and "or" (ɛ, ɔ); elsewhere
-    /// they are the diphthongs of "say" and "go" (A, O). American English says ɜ only before an r,
-    /// so one without is given it.
+    /// otherwise replaced. Before an r, e and o are the vowels of "air" and "or" (ɛ, ɔ); elsewhere,
+    /// or marked long (see `symbols(in:)`), they are the diphthongs of "say" and "go" (A, O).
+    /// American English says ɜ only before an r, so one without is given it.
     private static func converted(_ symbols: [String]) -> [String] {
         var result: [String] = []
         var index = 0
