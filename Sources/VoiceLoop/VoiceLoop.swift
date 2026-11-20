@@ -1021,13 +1021,15 @@ public final class VoiceLoop {
             // Without echo cancellation the microphone hears the reply itself, so nothing
             // spoken interrupts it (the app's stop button still does).
             let echoCancelled = pipeline?.hasVoiceProcessing ?? false
-            guard echoCancelled, candidate.wordCount >= max(1, bargeInMinimumWords) else {
+            // Counted once: the decision and every log line use it.
+            let words = candidate.wordCount
+            guard echoCancelled, words >= max(1, bargeInMinimumWords) else {
                 pipeline?.timeline.resultIgnored(
                     reason: echoCancelled ? "tooFewWords" : "noEchoCancellation",
-                    words: candidate.wordCount
+                    words: words
                 )
                 echo.resultDuringReply(
-                    words: candidate.wordCount,
+                    words: words,
                     outcome: echoCancelled ? "ignoredTooFewWords" : "ignoredNoEchoCancellation"
                 )
                 ignoredWhileSpeaking = true
@@ -1037,10 +1039,10 @@ public final class VoiceLoop {
             logResult(piece, applied: candidate)
             // Barge-in: speech over the reply stops it and becomes the next utterance. Results
             // ignored so far may be this utterance's first words, so no audio is consumed.
-            Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
-            pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
+            Self.log.notice("speech interrupted a reply", ["words": words])
+            pipeline?.timeline.bargeInDecided(words: words)
             // Only notes the time and the count: its line is written after the reply has stopped.
-            echo.resultDuringReply(words: candidate.wordCount, outcome: "bargeIn")
+            echo.resultDuringReply(words: words, outcome: "bargeIn")
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
             updateWorkingCue()
