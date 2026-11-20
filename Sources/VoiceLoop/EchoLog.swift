@@ -91,6 +91,21 @@ final class EchoLog {
         var cutStarted: UInt64?
         /// Whether a reply cut it off.
         var cutOff: Bool { cutStarted != nil }
+
+        /// Its completion ran at `hostTime`, because it played out or its player was stopped.
+        /// For a cue a reply cut off, a completion stamped at or after the stop began is the
+        /// stop's own, and the cut stands; one stamped before it means the cue had played out
+        /// already, and that is its end. Its hop to the main actor can come either side of the
+        /// cut being noted.
+        mutating func noteCompletion(at hostTime: UInt64) {
+            if let cutStarted {
+                guard hostTime < cutStarted else { return }
+                self.cutStarted = nil
+            } else if ended != nil {
+                return
+            }
+            ended = hostTime
+        }
     }
 
     /// How a reply ended, noted as it did.
@@ -151,7 +166,8 @@ final class EchoLog {
         let engineStartTime: UInt64?
         let routeChangeTime: UInt64?
         let replyEndTime: UInt64?
-        let lastCue: LastCue?
+        /// Kept up to date by its completion until the line is written.
+        var lastCue: LastCue?
         /// The fed audio's position on the analyzer's timeline as it started.
         let audio: CMTime
     }
@@ -349,20 +365,20 @@ final class EchoLog {
         )))
     }
 
-    /// Cue `id` stopped sounding at `hostTime`: its completion ran, because it played out or its
-    /// player was stopped. For a cue a reply cut off (`cuesCutOff(ids:stopStarted:stopEnded:)`),
-    /// a completion stamped at or after the stop began is the stop's own, and the cut stands; one
-    /// stamped before it means the cue had played out already, and that is its end. Its hop to
-    /// the main actor can come either side of the cut being noted.
+    /// Cue `id`'s completion ran at `hostTime` (see `LastCue.noteCompletion(at:)`). It also
+    /// reaches a "reply started" line still waiting to be written that took this cue as its
+    /// last, if the cue stopped before that reply started, though a newer cue is the last now.
     func cueEnded(id: Int, at hostTime: UInt64) {
-        guard let cue = lastCue, cue.id == id else { return }
-        if let cutStarted = cue.cutStarted {
-            guard hostTime < cutStarted else { return }
-            lastCue?.cutStarted = nil
-        } else if cue.ended != nil {
-            return
+        if lastCue?.id == id {
+            lastCue?.noteCompletion(at: hostTime)
         }
-        lastCue?.ended = hostTime
+        for index in events.indices {
+            guard case .replyStarted(var start) = events[index], var cue = start.lastCue,
+                  cue.id == id, hostTime <= start.started else { continue }
+            cue.noteCompletion(at: hostTime)
+            start.lastCue = cue
+            events[index] = .replyStarted(start)
+        }
     }
 
     /// The cue player was stopped to make way for a reply, cutting off cues `ids`: the stop
@@ -617,14 +633,9 @@ final class EchoLog {
         fields["sinceEngineStartMs"] = Self.milliseconds(since: start.engineStartTime, to: start.started)
         fields["sinceRouteChangeMs"] = Self.milliseconds(since: start.routeChangeTime, to: start.started)
         fields["sinceReplyEndMs"] = Self.milliseconds(since: start.replyEndTime, to: start.started)
-        // A completion stamped before the start can reach the main actor after it: the cue, as
-        // its completion has told by now, if it stopped sounding before the reply started.
-        var startCue = start.lastCue
-        if let lastCue, lastCue.id == startCue?.id, let ended = lastCue.ended, ended <= start.started {
-            startCue = lastCue
-        }
-        fields["lastCue"] = startCue.map { "\($0.cue)" } ?? "none"
-        if let lastCue = startCue {
+        // As its completion has told by now (`cueEnded(id:at:)`), if that came after the start.
+        fields["lastCue"] = start.lastCue.map { "\($0.cue)" } ?? "none"
+        if let lastCue = start.lastCue {
             fields["sinceCueScheduledMs"] = TimelineClock.milliseconds(from: lastCue.scheduled, to: start.started)
             // Nil while it still sounds, or hasn't reported stopping yet.
             fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: start.started)
