@@ -76,11 +76,16 @@ struct MessageList: View {
             presentations.previewURL = $0
         })
         .onChange(of: model.notificationOpenCount) {
-            presentations.previewURL = nil
+            presentations.closePreview()
         }
-        // As after a logout: the preview went with the list.
+        // A document of the chat before, still downloading, doesn't open over this one.
+        .onChange(of: model.selectedChatID) {
+            presentations.dropPendingPreview()
+        }
+        // As after a logout: the preview went with the list, and a download still under way
+        // shows nothing.
         .onDisappear {
-            presentations.previewURL = nil
+            presentations.closePreview()
         }
         #endif
     }
@@ -299,11 +304,15 @@ struct DocumentRow: View {
 
     private func open() async {
         let notificationCount = model.notificationOpenCount
+        #if os(iOS)
+        // The download can outlive this row, and its chat being shown.
+        let request = presentations.requestPreview()
+        #endif
         do {
             let url = try await model.download(file)
             guard notificationCount == model.notificationOpenCount else { return }
             #if os(iOS)
-            presentations.previewURL = url
+            presentations.showPreview(url, for: request)
             #else
             NSWorkspace.shared.open(url)
             #endif
