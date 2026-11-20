@@ -483,6 +483,22 @@ import Testing
         #expect(kept(by: gate, capturedAt: 0.3).isEmpty)
     }
 
+    @Test func whileMutedNothingIsKeptButAHoldStillEndsWhereItWasReleased() {
+        let gate = MicrophoneGate()
+        gate.setMuted(true)
+        #expect(kept(by: gate, capturedAt: 0).isEmpty)
+        // Push-to-talk changes leave the mute on.
+        gate.setEnabled(true)
+        gate.open(at: host(0.1))
+        gate.close(at: host(0.15))
+        #expect(kept(by: gate, capturedAt: 0.1).isEmpty)
+        #expect(gate.takeHeldThrough() == audio(0.15))
+
+        gate.setMuted(false)
+        gate.setEnabled(false)
+        #expect(kept(by: gate, capturedAt: 0.2) == 0..<4_800)
+    }
+
     @Test func zeroingFramesSilencesAllButTheKeptOnes() throws {
         let format = try #require(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: false))
         let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 8))
