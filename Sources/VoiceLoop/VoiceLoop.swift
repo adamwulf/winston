@@ -2213,11 +2213,12 @@ public final class VoiceLoop {
     private func cutOffWorkingCue(on pipeline: Pipeline) {
         guard unfinishedCues.contains(where: { $0.cue == .agentWorking }) else { return }
         let otherCues = unfinishedCues.map(\.cue).filter { $0 != .agentWorking }
-        // For the echo log: the cut-off time is known here, before any completion reports it.
+        // For the echo log: the cut-off is known here, before any completion reports it.
         let cutOff = unfinishedCues.map(\.id)
         unfinishedCues = []
+        let stopStarted = TimelineClock.now()
         pipeline.cuePlayer.stop()
-        echo.cuesCutOff(ids: cutOff)
+        echo.cuesCutOff(ids: cutOff, stopStarted: stopStarted, stopEnded: TimelineClock.now())
         hasPlayedWorkingCue = false
         Self.log.info("working cue cut off", ["reason": "speaking"])
         for cue in otherCues {

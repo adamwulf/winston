@@ -79,10 +79,12 @@ final class EchoLog {
         /// When it was scheduled, in host time.
         let scheduled: UInt64
         /// When it stopped sounding, in host time: its completion, for a cue that played out, or
-        /// when a reply cut it off. Nil until then.
+        /// when the player's stop returned, for one a reply cut off. Nil until then.
         var ended: UInt64?
+        /// When the player's stop began, for a cue a reply cut off; nil otherwise.
+        var cutStarted: UInt64?
         /// Whether a reply cut it off.
-        var cutOff = false
+        var cutOff: Bool { cutStarted != nil }
     }
 
     /// How a reply ended, noted as it did.
@@ -270,21 +272,28 @@ final class EchoLog {
     }
 
     /// Cue `id` stopped sounding at `hostTime`: its completion ran, because it played out or its
-    /// player was stopped. The completion of a cue a reply cut off comes after the cut
-    /// (`cuesCutOff(ids:)`), and reaches the main actor later still, so the cut's time stands.
-    /// One from before the cut means the cue had played out already.
+    /// player was stopped. For a cue a reply cut off (`cuesCutOff(ids:stopStarted:stopEnded:)`),
+    /// a completion stamped at or after the stop began is the stop's own, and the cut stands; one
+    /// stamped before it means the cue had played out already, and that is its end. Its hop to
+    /// the main actor can come either side of the cut being noted.
     func cueEnded(id: Int, at hostTime: UInt64) {
         guard let cue = lastCue, cue.id == id else { return }
-        if let ended = cue.ended, ended <= hostTime { return }
+        if let cutStarted = cue.cutStarted {
+            guard hostTime < cutStarted else { return }
+            lastCue?.cutStarted = nil
+        } else if cue.ended != nil {
+            return
+        }
         lastCue?.ended = hostTime
-        lastCue?.cutOff = false
     }
 
-    /// The cue player was just stopped to make way for a reply, cutting off cues `ids`.
-    func cuesCutOff(ids: [Int]) {
+    /// The cue player was stopped to make way for a reply, cutting off cues `ids`: the stop
+    /// began at `stopStarted` and returned at `stopEnded` (host time). A cue whose natural end
+    /// has already been noted wasn't cut off.
+    func cuesCutOff(ids: [Int], stopStarted: UInt64, stopEnded: UInt64) {
         guard let cue = lastCue, cue.ended == nil, ids.contains(cue.id) else { return }
-        lastCue?.ended = TimelineClock.now()
-        lastCue?.cutOff = true
+        lastCue?.cutStarted = stopStarted
+        lastCue?.ended = stopEnded
     }
 
     /// A reply was set up at `started`, and its synthesis has started. `firstAudio` tells when
