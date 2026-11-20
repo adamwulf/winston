@@ -35,11 +35,16 @@ import Testing
 
 /// What the on-device suggester makes of a pronunciation the model wrote.
 @Suite struct OnDevicePronunciationSuggestionTests {
-    private func suggestion(_ ipa: String, for word: String) -> PronunciationSuggestion {
-        OnDevicePronunciationSuggester.suggestion(
+    private func suggestions(_ ipa: String, for word: String) -> [PronunciationSuggestion] {
+        OnDevicePronunciationSuggester.suggestions(
             from: .init(respelling: "WIN-stun", ipa: ipa, note: "the usual way"),
             for: word
         )
+    }
+
+    /// The phonemes of each suggestion for `ipa`.
+    private func phonemes(_ ipa: String, for word: String) -> [String] {
+        suggestions(ipa, for: word).map(\.phonemes)
     }
 
     @Test func itCreditsAppleIntelligenceOnThisDevice() {
@@ -47,15 +52,34 @@ import Testing
     }
 
     @Test func itsIPAIsInKokorosNotationWithItsRespellingAndNote() {
-        #expect(suggestion("ˈwɪn.stən", for: "Winston") == PronunciationSuggestion(phonemes: "wˈɪnstən", respelling: "WIN-stun", note: "the usual way"))
+        #expect(suggestions("ˈwɪn.stən", for: "Winston") == [PronunciationSuggestion(phonemes: "wˈɪnstən", respelling: "WIN-stun", note: "the usual way")])
     }
 
     @Test func theIPAOfOneWordIsOneWordThoughTheModelSpacedItsSyllables() {
-        #expect(suggestion("ˈwɪn stən", for: " Winston ").phonemes == "wˈɪnstən")
+        #expect(phonemes("ˈwɪn stən", for: " Winston ") == ["wˈɪnstən"])
         // The space breaks syllables: joined, o and ɪ would be the diphthong of "boy".
-        #expect(suggestion("ˈɡo ɪŋ", for: "going").phonemes == "ɡˈOɪŋ")
+        #expect(phonemes("ˈɡo ɪŋ", for: "going") == ["ɡˈOɪŋ"])
         // Several words keep their spaces.
-        #expect(suggestion("ˈnu ˈjɔrk", for: "New York").phonemes == "nˈu jˈɔɹk")
+        #expect(phonemes("ˈnu ˈjɔrk", for: "New York") == ["nˈu jˈɔɹk"])
+    }
+
+    @Test func anOptionalSoundGivesASuggestionWithoutItAndOneWithIt() {
+        // As the model wrote Siobhan.
+        let siobhan = suggestions("ˈsɪːbə(h)n", for: "Siobhan")
+        #expect(siobhan.map(\.phonemes) == ["sˈɪbən", "sˈɪbəhn"])
+        #expect(siobhan.allSatisfy { $0.respelling == "WIN-stun" && $0.note == "the usual way" })
+        // Both can be used, one heard after the other.
+        let candidates = PronunciationCandidate.candidates(from: siobhan, symbols: MisakiPhonemes.usSymbols)
+        #expect(candidates.map(\.isUsable) == [true, true])
+    }
+
+    @Test func eachOptionalSoundIsReadBothWaysAndARepeatIsDroppedAfterward() {
+        #expect(phonemes("ˈ(h)wɪ(t)ʃ", for: "which") == ["wˈɪʃ", "wˈɪʧ", "hwˈɪʃ", "hwˈɪʧ"])
+        // An optional sound that makes no difference gives the same phonemes twice; the list
+        // shows them once.
+        let same = suggestions("ˈkæ(ː)t", for: "cat")
+        #expect(same.map(\.phonemes) == ["kˈæt", "kˈæt"])
+        #expect(PronunciationCandidate.candidates(from: same, symbols: MisakiPhonemes.usSymbols).count == 1)
     }
 }
 
@@ -122,23 +146,25 @@ struct OnDevicePronunciationSuggesterRealModelTests {
             }
             let seconds = Double(started.duration(to: .now) / .milliseconds(1)) / 1000
             let candidates = PronunciationCandidate.candidates(
-                from: generated.map { OnDevicePronunciationSuggester.suggestion(from: $0, for: word) },
+                from: generated.flatMap { OnDevicePronunciationSuggester.suggestions(from: $0, for: word) },
                 symbols: MisakiPhonemes.usSymbols
             )
             report.append("\(word) (\(seconds.formatted(.number.precision(.fractionLength(1)))) s, \(generated.count) generated, \(candidates.count) after dropping repeats):")
-            // The phonemes reported so far: a pronunciation with the same ones again was dropped.
+            // The phonemes reported so far: a suggestion with the same ones again was dropped.
             var reported: Set<String> = []
             for pronunciation in generated {
-                let suggestion = OnDevicePronunciationSuggester.suggestion(from: pronunciation, for: word)
-                let candidate = candidates.first { $0.suggestion.phonemes == suggestion.phonemes }
-                let isRepeat = candidate.map { !reported.insert($0.id).inserted } ?? false
-                let status = switch candidate {
-                case nil: "empty, dropped"
-                case _ where isRepeat: "repeat, dropped"
-                case let candidate? where candidate.isUsable: "usable"
-                case let candidate?: "unknown symbols: \(String(candidate.unknownSymbols))"
+                // One line for each reading of its optional sounds.
+                for suggestion in OnDevicePronunciationSuggester.suggestions(from: pronunciation, for: word) {
+                    let candidate = candidates.first { $0.suggestion.phonemes == suggestion.phonemes }
+                    let isRepeat = candidate.map { !reported.insert($0.id).inserted } ?? false
+                    let status = switch candidate {
+                    case nil: "empty, dropped"
+                    case _ where isRepeat: "repeat, dropped"
+                    case let candidate? where candidate.isUsable: "usable"
+                    case let candidate?: "unknown symbols: \(String(candidate.unknownSymbols))"
+                    }
+                    report.append("  \(pronunciation.respelling) | IPA \(pronunciation.ipa) → \(suggestion.phonemes) | \(pronunciation.note) | \(status)")
                 }
-                report.append("  \(pronunciation.respelling) | IPA \(pronunciation.ipa) → \(suggestion.phonemes) | \(pronunciation.note) | \(status)")
             }
             // Not 3 to 5, though the guide asks for that: the model gave Kokoro 2 once.
             if !candidates.contains(where: \.isUsable) {

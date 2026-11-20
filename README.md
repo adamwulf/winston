@@ -485,7 +485,9 @@ prompt asks), r to ɹ, g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and 
 slashes, tie bars and other diacritics dropped (ç stays ç), a syllabic
 consonant given ᵊ, and each stress mark moved from the start of its syllable to
 right before its vowel. A word written without spaces gets one word of
-phonemes: a space in its IPA only breaks syllables. Repeats are dropped, and
+phonemes: a space in its IPA only breaks syllables. An optional sound in
+parentheses, such as the (h) of ˈsɪbə(h)n, gives a suggestion without it and
+one with it, so both can be heard. Repeats are dropped, and
 every symbol is checked against the loaded Kokoro model's `vocab_index.json`
 (misaki's US symbols while no model is
 ready); a suggestion with a symbol Kokoro doesn't have says so and can't be

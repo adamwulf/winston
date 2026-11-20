@@ -105,6 +105,22 @@ import Testing
         #expect(misaki("ˈde.i.ti") == "dˈɛiti")
     }
 
+    @Test func anOptionalSoundIsReadWithoutItThenWithIt() {
+        #expect(MisakiPhonemes.readings(ofIPA: "ˈsɪbə(h)n") == ["ˈsɪbən", "ˈsɪbəhn"])
+        #expect(MisakiPhonemes.readings(ofIPA: "ˈwɪnstən") == ["ˈwɪnstən"])
+    }
+
+    @Test func aParenthesisWithoutItsPairOrInsideAnotherIsLeftAsItIs() {
+        #expect(MisakiPhonemes.readings(ofIPA: "ˈsɪbə(hn") == ["ˈsɪbə(hn"])
+        #expect(MisakiPhonemes.readings(ofIPA: "ˈsɪbəh)n") == ["ˈsɪbəh)n"])
+        #expect(MisakiPhonemes.readings(ofIPA: "ˈsɪ((b))ən") == ["ˈsɪ((b))ən"])
+    }
+
+    @Test func onlyTheFirstThreeOptionalSoundsAreReadBothWays() {
+        let readings = MisakiPhonemes.readings(ofIPA: "(a)(b)(c)(d)")
+        #expect(readings == ["d", "cd", "bd", "bcd", "ad", "acd", "abd", "abcd"])
+    }
+
     @Test func aRhoticHookIsAnR() {
         #expect(misaki("ˈbʌtə˞") == "bˈʌtəɹ")
         #expect(misaki("ˈbɜ˞d") == "bˈɜɹd")

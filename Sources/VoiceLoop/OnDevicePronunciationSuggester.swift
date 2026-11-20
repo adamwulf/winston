@@ -24,19 +24,23 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     }
 
     public func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
-        try await generatedPronunciations(for: word).map { Self.suggestion(from: $0, for: word) }
+        try await generatedPronunciations(for: word).flatMap { Self.suggestions(from: $0, for: word) }
     }
 
-    /// `pronunciation` of `word` in Kokoro's notation. The model sometimes puts a space between
-    /// the syllables of one word ("ˈwɪn stən"), which Kokoro would say as two, so the IPA of a
-    /// word without spaces is one word, its spaces syllable breaks.
-    static func suggestion(from pronunciation: GeneratedPronunciation, for word: String) -> PronunciationSuggestion {
+    /// `pronunciation` of `word` in Kokoro's notation: a suggestion for each reading of its
+    /// optional sounds, such as the (h) of "ˈsɪbə(h)n" (see `MisakiPhonemes.readings(ofIPA:)`),
+    /// so each can be heard, with the same respelling and note. The model sometimes puts a space
+    /// between the syllables of one word ("ˈwɪn stən"), which Kokoro would say as two, so the IPA
+    /// of a word without spaces is one word, its spaces syllable breaks.
+    static func suggestions(from pronunciation: GeneratedPronunciation, for word: String) -> [PronunciationSuggestion] {
         let isOneWord = !word.trimmingCharacters(in: .whitespacesAndNewlines).contains(where: \.isWhitespace)
-        return PronunciationSuggestion(
-            phonemes: MisakiPhonemes.fromIPA(pronunciation.ipa, asOneWord: isOneWord),
-            respelling: pronunciation.respelling,
-            note: pronunciation.note
-        )
+        return MisakiPhonemes.readings(ofIPA: pronunciation.ipa).map { ipa in
+            PronunciationSuggestion(
+                phonemes: MisakiPhonemes.fromIPA(ipa, asOneWord: isOneWord),
+                respelling: pronunciation.respelling,
+                note: pronunciation.note
+            )
+        }
     }
 
     /// The model's pronunciations of `word`, as it writes them.

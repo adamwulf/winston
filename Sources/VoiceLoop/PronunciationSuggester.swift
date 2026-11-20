@@ -112,6 +112,34 @@ enum MisakiPhonemes {
         return unknown
     }
 
+    /// How many optional sounds in one transcription `readings(ofIPA:)` reads both ways: 3, for
+    /// up to 8 readings. Any after them are kept in.
+    static let maximumOptionalSounds = 3
+
+    /// The readings of `ipa` that its optional sounds, each in parentheses, give: without each,
+    /// then with it, so "ˈsɪbə(h)n" is ˈsɪbən and ˈsɪbəhn. Only the first
+    /// `maximumOptionalSounds` are read both ways; the rest are kept in. A parenthesis without its
+    /// pair, or one inside another, is left as it is, for `unknownSymbols(in:symbols:)` to find.
+    static func readings(ofIPA ipa: String) -> [String] {
+        var readings = [""]
+        var optionalSounds = 0
+        var rest = Substring(ipa)
+        while let open = rest.firstIndex(of: "("),
+              let close = rest[open...].firstIndex(of: ")"),
+              !rest[rest.index(after: open)..<close].contains("(") {
+            let before = rest[..<open]
+            let sound = rest[rest.index(after: open)..<close]
+            if optionalSounds < maximumOptionalSounds {
+                readings = readings.flatMap { [$0 + before, $0 + before + sound] }
+                optionalSounds += 1
+            } else {
+                readings = readings.map { $0 + before + sound }
+            }
+            rest = rest[rest.index(after: close)...]
+        }
+        return readings.map { $0 + rest }
+    }
+
     /// `ipa`, standard IPA for American English (such as "ˈwɪn.stən"), in misaki's notation
     /// ("wˈɪnstən"). Each word is converted on its own, and they are kept apart by one space.
     /// `asOneWord` says `ipa` is all one word, as for a word written without spaces: a space in it
