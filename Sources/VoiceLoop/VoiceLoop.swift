@@ -818,8 +818,10 @@ public final class VoiceLoop {
         // The working cue can follow a reply that has just ended or been cut off: some of it can
         // still be on its way out of the pitch shift then, which keeps sounding as it empties,
         // and offline it holds a render pass of it (see `SpeechOutput.completion`). The taps
-        // start after that.
-        let leadIn = cue == .agentWorking ? SpeechOutput.pitchShiftTail : 0
+        // start after that. A shifted reply cut off mid-sound runs on longer
+        // (`SpeechOutput.cutOffPitchShiftTail`), so with the shift on they wait for that.
+        let tail = pipeline.speech.pitchShift.bypass ? SpeechOutput.pitchShiftTail : SpeechOutput.cutOffPitchShiftTail
+        let leadIn = cue == .agentWorking ? tail : 0
         pipeline.play(cue, leadIn: leadIn) { [weak self] in
             Task { @MainActor in self?.cueFinished(id) }
         }
