@@ -1,3 +1,4 @@
+import Accelerate
 @preconcurrency import AVFoundation
 import Logging
 import LogSupport
@@ -55,7 +56,8 @@ import Synchronization
 /// microphone tap only records readings, in `MicrophoneLevels`.
 @MainActor
 final class EchoLog {
-    private static let log = Logger(label: "voice.echo")
+    // `Logging.` because Accelerate brings in `os.Logger` too.
+    private static let log = Logging.Logger(label: "voice.echo")
 
     /// The shortest time between two `mic level` lines, in seconds. The loop looks every 100 ms,
     /// so they come every 300 ms.
@@ -204,7 +206,7 @@ final class EchoLog {
         case previewStopped
     }
 
-    private let logger: Logger
+    private let logger: Logging.Logger
     /// When the running engine last started or restarted, in host time.
     private var engineStartTime: UInt64?
     /// Replies started since then.
@@ -241,7 +243,7 @@ final class EchoLog {
     nonisolated static let endedReplyLimit = 8
 
     /// `log` is for tests: by default the `voice.echo` logger.
-    init(log: Logger? = nil) {
+    init(log: Logging.Logger? = nil) {
         logger = log ?? Self.log
         // Room for the most each queue holds, so noting never allocates.
         events.reserveCapacity(Self.eventLimit)
@@ -964,19 +966,16 @@ final class MicrophoneLevels: @unchecked Sendable {
     /// (host time units), the first captured at `captureTime` (host time).
     func record(_ samples: UnsafePointer<Float>, count: Int, capturedAt captureTime: UInt64, duration: UInt64) {
         guard count > 0 else { return }
-        var sum: Float = 0
-        var peak: Float = 0
-        for index in 0..<count {
-            let sample = samples[index]
-            sum += sample * sample
-            peak = max(peak, abs(sample))
-        }
-        let rms = (sum / Float(count)).squareRoot()
+        // A full ring would drop the reading, so it isn't measured.
         let next = written.load(ordering: .relaxed)
         guard next - taken.load(ordering: .acquiring) < Self.capacity else {
             dropped.wrappingAdd(1, ordering: .relaxed)
             return
         }
+        var rms: Float = 0
+        var peak: Float = 0
+        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
+        vDSP_maxmgv(samples, 1, &peak, vDSP_Length(count))
         let slot = next % Self.capacity
         times[slot] = captureTime
         durations[slot] = duration
