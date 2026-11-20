@@ -468,10 +468,11 @@ the symbols made a request take 36 to 104 s rather than about 2. The logs hold
 counts, times and error codes, never the word or what the model wrote.
 
 The suggestions are often wrong, above all for names from other languages, and
-change from one request to the next: play each before using it. The model's
-guardrails sometimes decline a word, deciding afresh each time ("Nguyen" was
-declined once in five runs), and settings says so; nothing turns them off for a
-structured (`@Generable`) answer.
+change from one request to the next: play each before using it. About 1
+request in 35 fails on the model's side, and settings says so; Regenerate asks
+again. Its guardrails declined "Nguyen" once and answered it the other times
+(nothing turns them off for a structured, `@Generable`, answer), and once it ran
+on writing until the token cap cut it off.
 `OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
 for a few words; it runs only where the model is available.
 

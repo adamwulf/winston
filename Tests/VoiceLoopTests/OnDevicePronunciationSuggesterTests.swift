@@ -56,8 +56,14 @@ import Testing
 /// The real on-device model, skipped unless it can run here (Apple Intelligence on and its model
 /// downloaded): it prints what it suggests for a few words, for a person to judge, as the
 /// suggestions settings would list. The phonemes are checked against misaki's US symbols, as
-/// they are while the Kokoro model isn't loaded. A word the guardrails decline is reported, not
-/// failed; any other error fails.
+/// they are while the Kokoro model isn't loaded.
+///
+/// A word the model fails on is reported, and the check fails only if it fails on more than two:
+/// it fails now and then on its own, about 2 requests in 70 so far. Its guardrails declined
+/// "Nguyen" once and answered it the other times, and nothing turns them off for a @Generable
+/// answer; once it ran on writing for Siobhan until `maximumResponseTokens` cut it off, and its
+/// answer couldn't be read. Settings shows either as a message, and Regenerate asks again. A
+/// mistake of ours, such as a guide the model doesn't take, fails every word.
 @Suite(
     .serialized,
     .enabled(if: OnDevicePronunciationSuggester().isAvailable, "the on-device language model isn't available"),
@@ -81,20 +87,16 @@ struct OnDevicePronunciationSuggesterRealModelTests {
     @Test func itSuggestsAFewPronunciationsForEachWord() async throws {
         let suggester = OnDevicePronunciationSuggester()
         var report = ["", "On-device pronunciation suggestions (IPA from the model → Kokoro phonemes):"]
+        var failedWords: [String] = []
         for word in Self.words {
             let started = ContinuousClock.now
             let generated: [OnDevicePronunciationSuggester.GeneratedPronunciation]
             do {
                 generated = try await suggester.generatedPronunciations(for: word)
-            } catch let reason as PronunciationSuggestionError where reason == .declined {
-                // The model's guardrails, which settings shows as a message. They decide afresh
-                // each time: "Nguyen" was declined once in five runs, and answered the others.
-                // Nothing turns them off for a @Generable answer.
-                report.append("\(word): declined by the model's guardrails")
-                continue
             } catch {
+                // The suggester's log line, above the report, has the model's error code.
                 report.append("\(word): failed, \(error)")
-                Issue.record(error, "\(word)")
+                failedWords.append(word)
                 continue
             }
             let seconds = Double(started.duration(to: .now) / .milliseconds(1)) / 1000
@@ -117,5 +119,6 @@ struct OnDevicePronunciationSuggesterRealModelTests {
             #expect(!candidates.isEmpty, "\(word)")
         }
         print(report.joined(separator: "\n"))
+        #expect(failedWords.count <= 2, "the model failed on \(failedWords)")
     }
 }
