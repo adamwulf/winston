@@ -75,8 +75,8 @@ public final class AppModel {
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
     public private(set) var isStartingVoice = false
     /// Counts the times voice mode was turned off, so `setVoiceMode(_:)` can tell when a quick off-and-on
-    /// cancelled the start it is waiting on.
-    @ObservationIgnored private var voiceModeOffCount = 0
+    /// cancelled the start it is waiting on. Tests read it to tell whether voice mode was turned off again.
+    @ObservationIgnored package private(set) var voiceModeOffCount = 0
     /// The chat push-to-talk was entered in. While it is set, what voice mode hears is sent there rather
     /// than to the current chat, so a hold still being sent when another chat opens (a notification
     /// tapped meanwhile) reaches the bot it was said to. Set by `setPushToTalk(true)`, and kept after
@@ -1030,6 +1030,9 @@ public final class AppModel {
             voiceLoop.isPushToTalk = true
             await setVoiceMode(true)
         } else {
+            // The sheet's dismissal also comes once voice mode has ended without it, as after a
+            // change of audio devices. Stopping the loop again then could cut off its stop cue.
+            guard isVoiceMode || voiceLoop.isPushToTalk else { return }
             await setVoiceMode(false)
         }
     }

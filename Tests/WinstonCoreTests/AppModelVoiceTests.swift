@@ -80,8 +80,7 @@ struct VoiceModeTests {
         #expect(model.voiceLoop.state == .listening(partial: ""))
 
         // AirPods connect.
-        harness.bed.audioDevices = airPods
-        harness.bed.reportRouteChange(isDeviceChange: true)
+        harness.bed.reportRouteChange(isDeviceChange: true, from: VoiceTestBed.builtInDevices, to: airPods)
 
         #expect(await eventually { !model.isVoiceMode })
         #expect(model.voiceLoop.state == .off)
@@ -308,21 +307,26 @@ struct PushToTalkModeTests {
         #expect(await eventually { harness.bed.recognizer.isCancelled })
     }
 
-    @Test func aChangeOfAudioDevicesLeavesPushToTalkForTextMode() async throws {
+    @Test func aChangeOfAudioDevicesLeavesPushToTalkAndTheSheetsDismissalStopsNothingMore() async throws {
         let harness = Harness()
         let model = harness.model
-        let builtIn = harness.bed.audioDevices
-        harness.bed.audioDevices = airPods
         await model.setPushToTalk(true)
         #expect(model.voiceLoop.isPushToTalk)
 
         // AirPods are taken out.
-        harness.bed.audioDevices = builtIn
-        harness.bed.reportRouteChange(isDeviceChange: true)
+        harness.bed.reportRouteChange(isDeviceChange: true, from: airPods, to: VoiceTestBed.builtInDevices)
 
         #expect(await eventually { !model.isVoiceMode })
         #expect(!model.voiceLoop.isPushToTalk)
         #expect(model.voiceLoop.state == .off)
+        let offs = model.voiceModeOffCount
+
+        // Leaving voice mode closes the sheet, whose dismissal leaves push-to-talk: it has
+        // nothing left to leave, so it doesn't stop the loop again under its stop cue.
+        await model.setPushToTalk(false)
+
+        #expect(model.voiceModeOffCount == offs)
+        #expect(!model.isVoiceMode)
     }
 
     @Test func aHoldGoesToTheChatItWasSaidInWhenANotificationOpensAnotherBeforeItIsSent() async throws {
