@@ -458,7 +458,10 @@ does.
 An IPA row has a Suggest button (sparkles), shown only while the suggester can
 run (`AppModel.canSuggestPronunciations`). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
-fills the row's IPA; Regenerate asks again. The suggester is a
+fills the row's IPA; Regenerate asks again, even while a request is under way.
+The play buttons are on only while a Kokoro voice is ready
+(`AppModel.canPlaySuggestions`): any other voice would say the same written word
+for every suggestion, so a note says to choose one instead. The suggester is a
 `PronunciationSuggester`, so another backend can be added without changing the
 settings screen: each says where its suggestions come from (`attribution`), and
 the list's footer shows it. The one there is, `OnDevicePronunciationSuggester`, asks
@@ -473,8 +476,9 @@ prompt asks), r to ɹ, g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and 
 slashes, tie bars and other diacritics dropped (ç stays ç), a syllabic
 consonant given ᵊ, and each stress mark moved from the start of its syllable to
 right before its vowel. A word written without spaces gets one word of
-phonemes: a space in its IPA only breaks syllables. Repeats are dropped, and every symbol is checked against the loaded
-Kokoro model's `vocab_index.json` (misaki's US symbols while no model is
+phonemes: a space in its IPA only breaks syllables. Repeats are dropped, and
+every symbol is checked against the loaded Kokoro model's `vocab_index.json`
+(misaki's US symbols while no model is
 ready); a suggestion with a symbol Kokoro doesn't have says so and can't be
 used. The model's IPA isn't held to IPA's symbols with a pattern guide: on
 macOS 27 the guides take no character classes or anchors, and an alternation of
