@@ -524,8 +524,14 @@ final class EchoLog {
         fields["sinceEngineStartMs"] = Self.milliseconds(since: start.engineStartTime, to: start.started)
         fields["sinceRouteChangeMs"] = Self.milliseconds(since: start.routeChangeTime, to: start.started)
         fields["sinceReplyEndMs"] = Self.milliseconds(since: start.replyEndTime, to: start.started)
-        fields["lastCue"] = start.lastCue.map { "\($0.cue)" } ?? "none"
-        if let lastCue = start.lastCue {
+        // A completion stamped before the start can reach the main actor after it: the cue, as
+        // its completion has told by now, if it stopped sounding before the reply started.
+        var startCue = start.lastCue
+        if let lastCue, lastCue.id == startCue?.id, let ended = lastCue.ended, ended <= start.started {
+            startCue = lastCue
+        }
+        fields["lastCue"] = startCue.map { "\($0.cue)" } ?? "none"
+        if let lastCue = startCue {
             fields["sinceCueScheduledMs"] = TimelineClock.milliseconds(from: lastCue.scheduled, to: start.started)
             // Nil while it still sounds, or hasn't reported stopping yet.
             fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: start.started)
