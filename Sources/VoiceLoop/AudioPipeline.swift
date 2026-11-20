@@ -191,9 +191,10 @@ final class Pipeline {
         engine.stop()
     }
 
-    /// Runs on the audio thread: measures the whole buffer's level for the echo log, mutes what
-    /// push-to-talk's gate doesn't keep, measures the loudness of what it keeps, records each
-    /// buffer's times for the timeline log, and converts it for the analyzer.
+    /// Runs on the audio thread: mutes what push-to-talk's gate doesn't keep, measures the
+    /// loudness of what it keeps, records each buffer's times for the timeline log, and
+    /// converts it for the analyzer. Last, once the analyzer has its buffer (or conversion has
+    /// failed), measures the whole buffer's level for the echo log.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
         continuation: AsyncStream<AnalyzerInput>.Continuation,
@@ -210,11 +211,6 @@ final class Pipeline {
             // the tap is called stands in for it.
             let captureTime = when.isHostTimeValid ? when.hostTime : TimelineClock.now()
             let frames = Int(buffer.frameLength)
-            // What voice processing let through, before the gate mutes any of it.
-            if let samples = buffer.floatChannelData?[0], buffer.format.sampleRate > 0 {
-                let duration = AVAudioTime.hostTime(forSeconds: Double(frames) / buffer.format.sampleRate)
-                levels.record(samples, count: frames, capturedAt: captureTime, duration: duration)
-            }
             let kept = gate.keptFrames(
                 buffer.frameLength,
                 sampleRate: buffer.format.sampleRate,
@@ -234,6 +230,15 @@ final class Pipeline {
                 audioTime: audioStart,
                 voice: reading
             )
+            // For the echo log, once everything above and below has run, also when conversion
+            // fails: what voice processing let through. The gate mutes only the converted copy,
+            // so the input buffer still holds every sample.
+            defer {
+                if let samples = buffer.floatChannelData?[0], buffer.format.sampleRate > 0 {
+                    let duration = AVAudioTime.hostTime(forSeconds: Double(frames) / buffer.format.sampleRate)
+                    levels.record(samples, count: frames, capturedAt: captureTime, duration: duration)
+                }
+            }
             guard let converted = convert(buffer, with: converter) else { return }
             if kept.count < frames {
                 let ratio = converter.outputFormat.sampleRate / converter.inputFormat.sampleRate
