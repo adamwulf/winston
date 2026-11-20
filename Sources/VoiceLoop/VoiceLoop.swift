@@ -507,6 +507,8 @@ public final class VoiceLoop {
                     }
                     #endif
                     self?.checkForPause()
+                    // After the pause check, so the echo log never delays it.
+                    self?.pollEchoLog()
                 }
             },
             Task { [weak self, weak pipeline] in
@@ -1058,9 +1060,6 @@ public final class VoiceLoop {
     private func checkForPause() {
         // What the audio and synthesizer threads recorded, written here on the main actor.
         pipeline?.timeline.writeRecorded()
-        if let pipeline {
-            echo.poll(pipeline)
-        }
         pauseDetector.pauseThreshold = pauseThreshold
         if pipeline?.voiceActivity.takeHeardVoice() == true {
             pauseDetector.heardVoice(at: .now)
@@ -1092,6 +1091,12 @@ public final class VoiceLoop {
         }
         updateListeningState()
         speakNextIfIdle()
+    }
+
+    /// Lets the echo log take the microphone's readings, and write its level line if one is due.
+    private func pollEchoLog() {
+        guard let pipeline else { return }
+        echo.poll(pipeline)
     }
 
     private func updateListeningState() {
