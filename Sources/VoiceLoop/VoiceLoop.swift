@@ -866,6 +866,12 @@ public final class VoiceLoop {
         if cue == .agentWorking {
             shiftedReplyWasCutOff = false
         }
+        pipeline.play(cue, leadIn: leadIn) { [weak self] in
+            // When it stopped sounding, before the hop to the main actor, for the echo log.
+            let ended = TimelineClock.now()
+            Task { @MainActor in self?.cueFinished(id, endedAt: ended) }
+        }
+        // Once it is scheduled, so logging it never delays it.
         echo.cueScheduled(
             cue,
             id: id,
@@ -874,11 +880,6 @@ public final class VoiceLoop {
             replyPlaying: currentSpeech != nil,
             on: pipeline
         )
-        pipeline.play(cue, leadIn: leadIn) { [weak self] in
-            // When it stopped sounding, before the hop to the main actor, for the echo log.
-            let ended = TimelineClock.now()
-            Task { @MainActor in self?.cueFinished(id, endedAt: ended) }
-        }
         return true
     }
 

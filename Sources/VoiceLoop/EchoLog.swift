@@ -317,17 +317,26 @@ final class EchoLog {
         String(format: "%.2f", value)
     }
 
-    /// The loudest sample and the RMS level of `cue` as it is rendered, in dBFS.
+    /// Each cue's level, measured the first time it is logged. A cue's sound is fixed.
+    private static var cueLevels: [SoundCue: (peakDb: Int, rmsDb: Int)] = [:]
+
+    /// The loudest sample and the RMS level of `cue` as it is rendered, in dBFS. Rendered once
+    /// per cue, after the first play has been scheduled, so measuring never delays a cue.
     private static func level(of cue: SoundCue) -> (peakDb: Int, rmsDb: Int) {
+        if let level = cueLevels[cue] {
+            return level
+        }
         let samples = cue.samples(sampleRate: 48_000)
-        guard !samples.isEmpty else { return (-120, -120) }
         var peak: Float = 0
         var sum: Float = 0
         for sample in samples {
             peak = max(peak, abs(sample))
             sum += sample * sample
         }
-        return (VoiceActivity.decibels(peak), VoiceActivity.decibels((sum / Float(samples.count)).squareRoot()))
+        let rms = samples.isEmpty ? 0 : (sum / Float(samples.count)).squareRoot()
+        let level = (peakDb: VoiceActivity.decibels(peak), rmsDb: VoiceActivity.decibels(rms))
+        cueLevels[cue] = level
+        return level
     }
 
     #if os(iOS)
