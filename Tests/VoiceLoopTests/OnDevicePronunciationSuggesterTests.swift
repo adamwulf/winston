@@ -56,7 +56,8 @@ import Testing
 /// The real on-device model, skipped unless it can run here (Apple Intelligence on and its model
 /// downloaded): it prints what it suggests for a few words, for a person to judge, as the
 /// suggestions settings would list. The phonemes are checked against misaki's US symbols, as
-/// they are while the Kokoro model isn't loaded.
+/// they are while the Kokoro model isn't loaded. A word the guardrails decline is reported, not
+/// failed; any other error fails.
 @Suite(
     .serialized,
     .enabled(if: OnDevicePronunciationSuggester().isAvailable, "the on-device language model isn't available"),
@@ -85,8 +86,14 @@ struct OnDevicePronunciationSuggesterRealModelTests {
             let generated: [OnDevicePronunciationSuggester.GeneratedPronunciation]
             do {
                 generated = try await suggester.generatedPronunciations(for: word)
+            } catch let reason as PronunciationSuggestionError where reason == .declined {
+                // The model's guardrails, which settings shows as a message. They decide afresh
+                // each time: "Nguyen" was declined once in five runs, and answered the others.
+                // Nothing turns them off for a @Generable answer.
+                report.append("\(word): declined by the model's guardrails")
+                continue
             } catch {
-                report.append("\(word): failed, \(OnDevicePronunciationSuggester.reason(for: error)) (\(error))")
+                report.append("\(word): failed, \(error)")
                 Issue.record(error, "\(word)")
                 continue
             }
