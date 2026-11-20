@@ -9,8 +9,10 @@ final class Presentations {
     var isShowingAlert = false
     var isShowingPicker = false
     var isShowingPushToTalk = false
+    /// A document's Quick Look preview, on iOS.
+    var isShowingPreview = false
 
     var isShowingAny: Bool {
-        isShowingSettings || isShowingAlert || isShowingPicker || isShowingPushToTalk
+        isShowingSettings || isShowingAlert || isShowingPicker || isShowingPushToTalk || isShowingPreview
     }
 }

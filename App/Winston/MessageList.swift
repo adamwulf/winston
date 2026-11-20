@@ -249,6 +249,7 @@ struct DocumentRow: View {
     let fileName: String
     let size: Int64
     #if os(iOS)
+    @Environment(Presentations.self) private var presentations
     @State private var previewURL: URL?
     #endif
 
@@ -280,6 +281,16 @@ struct DocumentRow: View {
         .quickLookPreview($previewURL)
         .onChange(of: model.notificationOpenCount) {
             previewURL = nil
+        }
+        // For the agent sheet, which waits while it shows.
+        .onChange(of: previewURL != nil) { _, isShowing in
+            presentations.isShowingPreview = isShowing
+        }
+        // Only this row's: another row's preview may be showing.
+        .onDisappear {
+            if previewURL != nil {
+                presentations.isShowingPreview = false
+            }
         }
         #endif
     }
