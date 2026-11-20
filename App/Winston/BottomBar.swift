@@ -46,12 +46,11 @@ struct BottomBar: View {
         .padding(.vertical, 8)
         .background(.bar)
         .onChange(of: model.notificationOpenCount) {
-            isPickingFile = false
-            isShowingPushToTalk = false
-            #if os(iOS)
-            isPickingPhoto = false
-            photoItem = nil
-            #endif
+            closePresentations()
+        }
+        // So the agent sheet for the file can show.
+        .onChange(of: model.openedFileCount) {
+            closePresentations()
         }
         // Closing it, however it closes, leaves push-to-talk for text mode.
         .sheet(isPresented: $isShowingPushToTalk, onDismiss: leavePushToTalk) {
@@ -63,6 +62,16 @@ struct BottomBar: View {
                 isShowingPushToTalk = false
             }
         }
+    }
+
+    /// Closes the pickers and push-to-talk, for a notification tap or a file opened in Winston.
+    private func closePresentations() {
+        isPickingFile = false
+        isShowingPushToTalk = false
+        #if os(iOS)
+        isPickingPhoto = false
+        photoItem = nil
+        #endif
     }
 
     // MARK: - Text mode

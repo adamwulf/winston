@@ -39,6 +39,10 @@ struct ChatScreen: View {
         .onChange(of: model.notificationOpenCount) {
             showingSettings = false
         }
+        // So the agent sheet for the file can show.
+        .onChange(of: model.openedFileCount) {
+            showingSettings = false
+        }
         #endif
         .safeAreaInset(edge: .top) {
             if let error = model.notificationErrorMessage {

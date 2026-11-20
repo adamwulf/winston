@@ -2,7 +2,8 @@ import SwiftUI
 import TelegramLink
 import WinstonCore
 
-/// The root view: missing credentials, login, or the chat screen.
+/// The root view: missing credentials, login, or the chat screen, and the sheet for files opened
+/// in Winston from another app.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
 
@@ -17,6 +18,27 @@ struct ContentView: View {
             }
         }
         .onAppear { model.start() }
+        // A file another app opened in Winston, as Info.plist's document types offer it: from the
+        // iOS share sheet, or with Open With or a drop on the Dock icon on the Mac. The only URLs
+        // Winston is handed: it has no URL scheme.
+        .onOpenURL { url in
+            model.openFile(at: url)
+        }
+        // This window takes it. Otherwise the Mac opens a new window for each file, sharing the
+        // one model.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
+        .sheet(isPresented: isPickingAgent) {
+            OpenedFileSheet()
+        }
+    }
+
+    /// Shows once Winston is logged in with its bot chats. Only the model closes it, once the
+    /// files are sent or cancelled: the sheet can't be swiped away.
+    private var isPickingAgent: Binding<Bool> {
+        Binding {
+            model.isPickingAgentForOpenedFiles
+        } set: { _ in
+        }
     }
 }
 
