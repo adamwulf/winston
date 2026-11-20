@@ -156,7 +156,10 @@ the message, the same one the other lines show.
 
 ## Build and test
 
-The first package resolve downloads TDLibFramework (about 375 MB).
+Building needs Xcode 27 or later: the code uses the iOS 27 and macOS 27 SDKs
+(Foundation Models' newer error types, behind availability checks), though it
+runs on iOS 26 and macOS 26. The first package resolve downloads
+TDLibFramework (about 375 MB).
 
 ```sh
 swift test --build-path .build
