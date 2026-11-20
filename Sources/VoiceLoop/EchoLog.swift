@@ -172,6 +172,8 @@ final class EchoLog {
         var lastCue: LastCue?
         /// The fed audio's position on the analyzer's timeline as it started.
         let audio: CMTime
+        /// The engine configuration it started on, whose snapshot names its route.
+        let configuration: Int
     }
 
     private struct CueStart {
@@ -232,10 +234,21 @@ final class EchoLog {
     /// Counts the engine configurations: a start, a restart, a configuration change or a route
     /// change begins a new one, whose latency can differ.
     private var configuration = 0
-    /// The playback latency of the current configuration, taken off the time-critical paths
-    /// once its engine is running. Nil from the moment a new configuration begins until then,
-    /// so a reply can only ever take the latency of the configuration it started on.
-    private var offsetSnapshot: (configuration: Int, offset: PlaybackOffset)?
+    /// What a configuration's replies play through, taken off the time-critical paths once its
+    /// engine is running.
+    private struct ConfigurationSnapshot {
+        let configuration: Int
+        let offset: PlaybackOffset
+        #if os(iOS)
+        /// The route and the microphone's data source and gain (`routeFields`).
+        let route: [String: CustomStringConvertible]
+        #endif
+    }
+
+    /// The current configuration's snapshot. Nil from the moment a new configuration begins
+    /// until it is taken, so a reply can only ever take the latency and route of the
+    /// configuration it started on.
+    private var snapshot: ConfigurationSnapshot?
     private var levelLimiter = RateLimiter(interval: EchoLog.levelInterval)
 
     /// The most events queued between two writes. A burst between polls brings a handful.
@@ -270,17 +283,22 @@ final class EchoLog {
         beginConfiguration()
     }
 
-    /// A new engine configuration begins: the last one's latency no longer holds. Cheap.
+    /// A new engine configuration begins: the last one's latency and route no longer hold.
+    /// Cheap.
     private func beginConfiguration() {
         configuration += 1
-        offsetSnapshot = nil
+        snapshot = nil
     }
 
-    /// Takes the current configuration's playback latency from `pipeline`, if its engine is
-    /// running. Off the time-critical paths.
+    /// Takes the current configuration's playback latency and route from `pipeline`, if its
+    /// engine is running. Off the time-critical paths.
     private func snapshotPlaybackOffset(_ pipeline: Pipeline) {
         guard pipeline.engine.isRunning else { return }
-        offsetSnapshot = (configuration, PlaybackOffset(pipeline))
+        #if os(iOS)
+        snapshot = ConfigurationSnapshot(configuration: configuration, offset: PlaybackOffset(pipeline), route: Self.routeFields())
+        #else
+        snapshot = ConfigurationSnapshot(configuration: configuration, offset: PlaybackOffset(pipeline))
+        #endif
     }
 
     /// Logs the state of `pipeline`'s engine, which started at `noteEngineStart()`: `reason` is
@@ -435,7 +453,8 @@ final class EchoLog {
             routeChangeTime: routeChangeTime,
             replyEndTime: replyEndTime,
             lastCue: lastCue,
-            audio: pipeline.fedAudio.time
+            audio: pipeline.fedAudio.time,
+            configuration: configuration
         )))
     }
 
@@ -536,11 +555,11 @@ final class EchoLog {
     private func absorbLevels(from pipeline: Pipeline) {
         let (readings, dropped) = pipeline.micLevels.drain()
         if var current = reply, current.pipeline === pipeline {
-            Self.absorb(readings, dropped: dropped, into: &current, offsetSnapshot: offsetSnapshot)
+            Self.absorb(readings, dropped: dropped, into: &current, snapshot: snapshot)
             reply = current
         }
         for index in endedReplies.indices where endedReplies[index].pipeline === pipeline {
-            Self.absorb(readings, dropped: dropped, into: &endedReplies[index], offsetSnapshot: offsetSnapshot)
+            Self.absorb(readings, dropped: dropped, into: &endedReplies[index], snapshot: snapshot)
         }
     }
 
@@ -548,16 +567,16 @@ final class EchoLog {
         _ readings: [MicrophoneLevels.Reading],
         dropped: Int,
         into reply: inout Reply,
-        offsetSnapshot: (configuration: Int, offset: PlaybackOffset)?
+        snapshot: ConfigurationSnapshot?
     ) {
         // Read after the readings were taken: if the first buffer hadn't been scheduled by now,
         // none of them was captured after it.
         if reply.playbackFrom == nil, !reply.playbackOffsetUnknown, let firstAudio = reply.firstAudio() {
             // The latency of the configuration it started on; if that has changed since (a
             // restart, a configuration or route change), its playback's latency is unknown.
-            if let offsetSnapshot, offsetSnapshot.configuration == reply.configuration {
-                reply.playbackOffset = offsetSnapshot.offset
-                reply.playbackFrom = firstAudio &+ offsetSnapshot.offset.hostTime
+            if let snapshot, snapshot.configuration == reply.configuration {
+                reply.playbackOffset = snapshot.offset
+                reply.playbackFrom = firstAudio &+ snapshot.offset.hostTime
             } else {
                 reply.playbackOffsetUnknown = true
             }
@@ -671,7 +690,16 @@ final class EchoLog {
         // range in `voice.timeline`. The fed audio lags the microphone by a tap buffer or so.
         fields["audioMs"] = Self.milliseconds(start.audio)
         #if os(iOS)
-        fields.merge(Self.routeContext()) { $1 }
+        // The route of the configuration it started on, as its snapshot took it; unknown if a
+        // new configuration (a route change, say) began before the line was written.
+        let session = AVAudioSession.sharedInstance()
+        if let snapshot, snapshot.configuration == start.configuration {
+            fields.merge(snapshot.route) { $1 }
+            fields["outputVolume"] = Self.volume(session.outputVolume)
+        } else {
+            fields["route"] = "unknown"
+        }
+        fields["otherAudioPlaying"] = session.isOtherAudioPlaying
         #endif
         logger.notice("reply started", context(pipeline, at: start.started, fields))
     }
@@ -814,12 +842,13 @@ final class EchoLog {
     }
 
     #if os(iOS)
-    /// The route a reply plays through and what the microphone hears it with: `route` is
-    /// `speaker`, `receiver`, `bluetooth`, `headphones`, `car`, `airPlay`, `usb`, `none` or
-    /// `other`, from the first output. Also the output volume, the input data source's name,
-    /// polar pattern and orientation, the input gain and whether it can be set, and whether
-    /// another app's audio plays, which no echo canceller hears as a reference.
-    private static func routeContext(_ session: AVAudioSession = .sharedInstance()) -> [String: CustomStringConvertible] {
+    /// The route replies play through and what the microphone hears them with, for a
+    /// configuration's snapshot: `route` is `speaker`, `receiver`, `bluetooth`, `headphones`,
+    /// `car`, `airPlay`, `usb`, `none` or `other`, from the first output. Also the ports, the
+    /// input data source's name, polar pattern and orientation, and the input gain and whether
+    /// it can be set. "reply started" adds the output volume and whether another app's audio
+    /// plays, which no echo canceller hears as a reference, as it is written.
+    private static func routeFields(_ session: AVAudioSession = .sharedInstance()) -> [String: CustomStringConvertible] {
         let route = session.currentRoute
         let source = session.inputDataSource
         func portTypes(_ ports: [AVAudioSessionPortDescription]) -> String {
@@ -829,17 +858,15 @@ final class EchoLog {
             "route": routeKind(route.outputs.first?.portType),
             "inputs": portTypes(route.inputs),
             "outputs": portTypes(route.outputs),
-            "outputVolume": volume(session.outputVolume),
             "inputGain": volume(session.inputGain),
             "inputGainSettable": session.isInputGainSettable,
             "inputDataSource": source?.dataSourceName ?? "none",
             "polarPattern": source?.selectedPolarPattern?.rawValue ?? "none",
             "micOrientation": source?.orientation?.rawValue ?? "none",
-            "otherAudioPlaying": session.isOtherAudioPlaying,
         ]
     }
 
-    /// The kind of output `port` is, for `routeContext`.
+    /// The kind of output `port` is, for `routeFields`.
     private static func routeKind(_ port: AVAudioSession.Port?) -> String {
         guard let port else { return "none" }
         switch port {
