@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import LogSupport
+import NaturalLanguage
 
 /// A word and how to say it: one of the pronunciations in settings. A respelling is said in place
 /// of the word by every voice; phonemes are said by the Kokoro voices, and the system voices say
@@ -48,12 +49,22 @@ public struct Pronunciation: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// Puts each pronunciation's replacement in place of its word: a respelling's text, or a phonetic
-/// pronunciation's placeholder (see `PhoneticPlaceholders`).
+/// pronunciation's placeholders (see `PhoneticPlaceholders`).
 struct PronunciationReplacer {
     private static let log = Logger(label: "voice.pronunciations")
 
+    /// What goes in place of a word.
+    private enum Replacement {
+        /// A respelling's text.
+        case text(String)
+        /// A phonetic pronunciation's placeholders: `plain`, which stand for all of the word,
+        /// and for a word that ends with sentence punctuation, `keepingPunctuation`, which keep it
+        /// after them for where it ends a sentence.
+        case placeholders(plain: String, keepingPunctuation: String?)
+    }
+
     /// What goes in place of each word.
-    private let replacements: [String: String]
+    private let replacements: [String: Replacement]
     /// Matches any of the words; nil when there are none.
     private let pattern: NSRegularExpression?
 
@@ -62,17 +73,20 @@ struct PronunciationReplacer {
     /// pronunciation takes its placeholders from `placeholders`, and is skipped if it has none
     /// there.
     init(_ pronunciations: [Pronunciation], placeholders: PhoneticPlaceholders = PhoneticPlaceholders()) {
-        var replacements: [String: String] = [:]
+        var replacements: [String: Replacement] = [:]
         for pronunciation in pronunciations {
             let word = pronunciation.word.trimmingCharacters(in: .whitespacesAndNewlines)
             let replacement = pronunciation.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !word.isEmpty, !replacement.isEmpty, replacements[word] == nil else { continue }
             switch pronunciation.mode {
             case .respelling:
-                replacements[word] = replacement
+                replacements[word] = .text(replacement)
             case .phonetic:
-                guard let text = placeholders.text(for: word, phonemes: replacement) else { continue }
-                replacements[word] = text
+                guard let plain = placeholders.text(for: word, phonemes: replacement, keepingPunctuation: false) else {
+                    continue
+                }
+                let kept = placeholders.text(for: word, phonemes: replacement, keepingPunctuation: true)
+                replacements[word] = .placeholders(plain: plain, keepingPunctuation: kept == plain ? nil : kept)
             }
         }
         self.replacements = replacements
@@ -96,17 +110,73 @@ struct PronunciationReplacer {
     }
 
     /// `text` with each word replaced. A replacement is not itself looked through for words.
+    ///
+    /// Placeholders never touch a letter or digit: a space goes between them and another
+    /// replacement that would ("👏👏" said as two placeholders), or they would read as one word.
+    /// A phonetic word's sentence punctuation ("Yahoo!") stays after its placeholders only where
+    /// it ends a sentence in `text`, so Kokoro's sentences end where they did; elsewhere ("Mr.
+    /// Smith") the placeholders stand for all of the word, as a respelling does.
     func replaced(in text: String) -> String {
         guard let pattern else { return text }
-        var result = text
-        // From the end, so the ranges before each replacement stay where they were.
-        for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
-            guard let range = Range(match.range, in: result), let replacement = replacements[String(result[range])] else {
+        var result = ""
+        // Whether `result` ends with a placeholder.
+        var endsWithPlaceholder = false
+        // Where `text`'s sentences end, as UTF-16 offsets, once a phonetic word needs them.
+        var sentenceEnds: Set<Int>?
+
+        func append(_ piece: some StringProtocol, isPlaceholders: Bool) {
+            guard let first = piece.first else { return }
+            if isPlaceholders || endsWithPlaceholder, let last = result.last,
+               Self.isLetterOrDigit(last), Self.isLetterOrDigit(first) {
+                result.append(" ")
+            }
+            result.append(contentsOf: piece)
+            endsWithPlaceholder = isPlaceholders && piece.last.map(Self.isLetterOrDigit) == true
+        }
+
+        var cursor = text.startIndex
+        for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            guard let range = Range(match.range, in: text), let replacement = replacements[String(text[range])] else {
                 continue
             }
-            result.replaceSubrange(range, with: replacement)
+            append(text[cursor..<range.lowerBound], isPlaceholders: false)
+            switch replacement {
+            case .text(let replacement):
+                append(replacement, isPlaceholders: false)
+            case .placeholders(let plain, let keepingPunctuation):
+                var placeholders = plain
+                if let keepingPunctuation {
+                    let ends = sentenceEnds ?? Self.sentenceEnds(in: text)
+                    sentenceEnds = ends
+                    if ends.contains(NSMaxRange(match.range)) {
+                        placeholders = keepingPunctuation
+                    }
+                }
+                append(placeholders, isPlaceholders: true)
+            }
+            cursor = range.upperBound
         }
+        append(text[cursor...], isPlaceholders: false)
         return result
+    }
+
+    private static func isLetterOrDigit(_ character: Character) -> Bool {
+        character.isLetter || character.isNumber
+    }
+
+    /// Where each of `text`'s sentences ends, without the spaces after it, as a UTF-16 offset:
+    /// the sentences `NLTokenizer` finds, as Kokoro's are found.
+    private static func sentenceEnds(in text: String) -> Set<Int> {
+        let tokenizer = NLTokenizer(unit: .sentence)
+        tokenizer.string = text
+        var ends: Set<Int> = []
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+            let sentence = text[range]
+            let end = sentence.lastIndex { !$0.isWhitespace }.map(text.index(after:)) ?? range.lowerBound
+            ends.insert(end.utf16Offset(in: text))
+            return true
+        }
+        return ends
     }
 }
 
@@ -119,8 +189,9 @@ struct PronunciationReplacer {
 /// between, so KokoroTTS can split a long sentence between them rather than inside one, where
 /// it would guess at the pieces from their spelling. In a message the first starts with a capital
 /// where the word does, since Kokoro's sentences are found by `NLTokenizer`, which reads a
-/// lowercase word after a full stop as the same sentence going on. For the same reason, sentence
-/// punctuation that ends the word (the "!" of "Yahoo!") stays in the message after them. A
+/// lowercase word after a full stop as the same sentence going on. For the same reason, a word
+/// that ends with sentence punctuation (the "!" of "Yahoo!") has a second set of placeholders,
+/// which keep it after them, for where it ends a sentence (see `PronunciationReplacer`). A
 /// placeholder is found whatever its case, and Kokoro looks words up in lowercase.
 ///
 /// Placeholders are kept by word and phonemes, not by pronunciation, and never forgotten: a
@@ -131,36 +202,30 @@ struct PronunciationReplacer {
 /// ends no contraction, so Kokoro's number and acronym rewriting and its phonemizer leave it
 /// whole.
 struct PhoneticPlaceholders: Sendable {
-    /// A word said with some phonemes, both trimmed.
+    /// A word said with some phonemes, both trimmed, and whether its placeholders keep the
+    /// sentence punctuation it ends with after them.
     private struct Key: Hashable {
         let word: String
         let phonemes: String
+        let keepsPunctuation: Bool
     }
 
-    /// The placeholders of one word said with some phonemes.
-    private struct Group {
-        /// What a message holds in the word's place: the placeholders, a space between, the
-        /// first with the word's capital if it starts with one, then the sentence punctuation the
-        /// word ends with, if any.
-        let text: String
-        /// What a system voice says for the placeholders: the word without the sentence
-        /// punctuation it ends with, which `text` keeps after them.
-        let written: String
-        /// The placeholders after the first, in order.
-        let rest: [String]
-    }
-
-    /// Each word and phonemes' first placeholder.
-    private var firstPlaceholders: [Key: String] = [:]
-    /// Each group, by its first placeholder.
-    private var groups: [String: Group] = [:]
-    /// Each placeholder's phonemes: one of its group's phoneme words.
+    /// What a message holds in place of each word said with some phonemes: the placeholders, a
+    /// space between, the first with the word's capital if it starts with one, and the sentence
+    /// punctuation the word ends with, if they keep it.
+    private var texts: [Key: String] = [:]
+    /// What a system voice says for each set of placeholders, by its first: the word, without the
+    /// punctuation they keep, which follows them.
+    private var writtenWords: [String: String] = [:]
+    /// Each placeholder's phonemes: one of the phonemes' words.
     private var phonemes: [String: String] = [:]
 
     /// What a message holds in place of `word` said with `phonemes`, once `add(word:phonemes:)`
-    /// has given them placeholders.
-    func text(for word: String, phonemes: String) -> String? {
-        firstPlaceholders[Key(word: word, phonemes: phonemes)].flatMap { groups[$0]?.text }
+    /// has given them placeholders. `keepingPunctuation` puts the sentence punctuation the word
+    /// ends with after the placeholders; a word that ends with none has the same text either way.
+    func text(for word: String, phonemes: String, keepingPunctuation: Bool) -> String? {
+        let keepsPunctuation = keepingPunctuation && !Self.sentencePunctuation(endingWith: word).isEmpty
+        return texts[Key(word: word, phonemes: phonemes, keepsPunctuation: keepsPunctuation)]
     }
 
     /// Gives each phonetic pronunciation with a word and phonemes its placeholders, unless it has
@@ -174,33 +239,38 @@ struct PhoneticPlaceholders: Sendable {
         }
     }
 
-    /// Gives `word` said with `phonemes` placeholders, unless it has them, and returns what a
-    /// message holds in its place. Both are trimmed and not empty.
+    /// Gives `word` said with `phonemes` placeholders, unless it has them: a set that stands for
+    /// all of it and, if it ends with sentence punctuation, a set that keeps that after them.
+    /// Returns what a message that is just the word holds, ending its sentence. Both are trimmed
+    /// and not empty.
     @discardableResult
     mutating func add(word: String, phonemes: String) -> String {
-        let key = Key(word: word, phonemes: phonemes)
-        if let first = firstPlaceholders[key], let group = groups[first] {
-            return group.text
+        let plain = add(Key(word: word, phonemes: phonemes, keepsPunctuation: false), punctuation: "")
+        let punctuation = Self.sentencePunctuation(endingWith: word)
+        guard !punctuation.isEmpty else { return plain }
+        return add(Key(word: word, phonemes: phonemes, keepsPunctuation: true), punctuation: punctuation)
+    }
+
+    /// Gives `key` placeholders, unless it has them, and returns what a message holds in its
+    /// place. `punctuation` is what it keeps after them.
+    private mutating func add(_ key: Key, punctuation: String) -> String {
+        if let text = texts[key] {
+            return text
         }
-        let phonemeWords = phonemes.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard !phonemeWords.isEmpty else { return word }
-        let placeholders = phonemeWords.indices.map { Self.placeholder(number: self.phonemes.count + $0) }
+        let phonemeWords = key.phonemes.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !phonemeWords.isEmpty else { return key.word }
+        let placeholders = phonemeWords.indices.map { Self.placeholder(number: phonemes.count + $0) }
         for (placeholder, phonemeWord) in zip(placeholders, phonemeWords) {
-            self.phonemes[placeholder] = phonemeWord
+            phonemes[placeholder] = phonemeWord
         }
-        let punctuation = String(word.reversed().prefix(while: Self.endsSentence).reversed())
         var first = placeholders[0]
-        if word.first?.isUppercase == true {
+        if key.word.first?.isUppercase == true {
             first = first.prefix(1).uppercased() + first.dropFirst()
         }
-        let group = Group(
-            text: ([first] + placeholders.dropFirst()).joined(separator: " ") + punctuation,
-            written: String(word.dropLast(punctuation.count)),
-            rest: Array(placeholders.dropFirst())
-        )
-        firstPlaceholders[key] = placeholders[0]
-        groups[placeholders[0]] = group
-        return group.text
+        let text = ([first] + placeholders.dropFirst()).joined(separator: " ") + punctuation
+        texts[key] = text
+        writtenWords[placeholders[0]] = String(key.word.dropLast(punctuation.count))
+        return text
     }
 
     /// The phonemes of each placeholder in `text`, by placeholder in lowercase: what Kokoro needs
@@ -208,8 +278,7 @@ struct PhoneticPlaceholders: Sendable {
     func phonemes(in text: String) -> [String: String] {
         guard !phonemes.isEmpty else { return [:] }
         var found: [String: String] = [:]
-        // A placeholder is a whole run of letters: a pronunciation's word matches only with no
-        // letter or digit beside it.
+        // A placeholder is a whole run of letters: no letter or digit ever touches one.
         for match in text.matches(of: #/\p{L}+/#) {
             let placeholder = match.output.lowercased()
             if let phonemeWord = phonemes[placeholder] {
@@ -219,39 +288,27 @@ struct PhoneticPlaceholders: Sendable {
         return found
     }
 
-    /// `text` with each group of placeholders back as its word, once, for the system voices. A
-    /// placeholder away from the rest of its group, which a message never has, is left out rather
-    /// than said.
+    /// `text` with each set of placeholders back as its word, once, for the system voices. The
+    /// placeholders after a set's first are left out: its word is said for the first.
     func written(_ text: String) -> String {
-        guard !groups.isEmpty else { return text }
-        // Words with a space between, so a group's placeholders are read together.
+        guard !writtenWords.isEmpty else { return text }
+        // Words with a space between, so the space before a placeholder left out goes with it.
         return text.replacing(#/\p{L}+(?: \p{L}+)*/#) { match in
-            var words: [String] = []
-            // The placeholders still to come of the group being read.
-            var expected: ArraySlice<String> = []
-            for word in match.output.split(separator: " ") {
-                let placeholder = word.lowercased()
-                if expected.first == placeholder {
-                    expected = expected.dropFirst()
-                    continue
-                }
-                expected = []
-                if let group = groups[placeholder] {
-                    if !group.written.isEmpty {
-                        words.append(group.written)
+            match.output.split(separator: " ")
+                .compactMap { word -> String? in
+                    let placeholder = word.lowercased()
+                    if let written = writtenWords[placeholder] {
+                        return written.isEmpty ? nil : written
                     }
-                    expected = group.rest[...]
-                } else if phonemes[placeholder] == nil {
-                    words.append(String(word))
+                    return phonemes[placeholder] == nil ? String(word) : nil
                 }
-            }
-            return words.joined(separator: " ")
+                .joined(separator: " ")
         }
     }
 
-    /// Whether `character` ends a sentence: what keeps a sentence of its own after a word.
-    private static func endsSentence(_ character: Character) -> Bool {
-        ".!?…‼⁇⁈⁉。！？".contains(character)
+    /// The sentence punctuation `word` ends with ("!" for "Yahoo!", "!?" for "What!?"), if any.
+    private static func sentencePunctuation(endingWith word: String) -> String {
+        String(word.reversed().prefix { ".!?…‼⁇⁈⁉。！？".contains($0) }.reversed())
     }
 
     /// The placeholder numbered `number`, 0 or more: "zqx", the number in letters (a to z, then

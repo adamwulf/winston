@@ -395,12 +395,13 @@ struct KokoroSpeakingTests {
 
         _ = await framesPlayed(saying: "I used Yahoo! Then I switched.", by: loop, on: bed)
 
+        // Placeholders 0 stand for all of "Yahoo!"; 1 keep its "!" after them.
         #expect(bed.kokoro.requests == [
             FakeKokoro.Request(
-                text: "I used \(placeholder(0, capital: true))!",
+                text: "I used \(placeholder(1, capital: true))!",
                 voice: "af_heart",
                 speed: 1,
-                pronunciations: [placeholder(0): "jˈɑhu"]
+                pronunciations: [placeholder(1): "jˈɑhu"]
             ),
             FakeKokoro.Request(text: "Then I switched.", voice: "af_heart", speed: 1),
         ])
@@ -415,6 +416,64 @@ struct KokoroSpeakingTests {
         #expect(await framesPlayed(saying: "I used Yahoo! Then I switched.", by: loop, on: bed) > 0)
 
         #expect(bed.systemVoiceTexts == ["I used Yahoo! Then I switched."])
+    }
+
+    @Test func anIPAWordsFullStopThatEndsNoSentenceMakesNoSentenceForKokoro() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Mr.", replacement: "mˈɪstəɹ", mode: .phonetic)]
+
+        _ = await framesPlayed(saying: "Mr. Smith paid 3.50 for it.", by: loop, on: bed)
+
+        let requests = bed.kokoro.requests
+        #expect(requests.count == 1)
+        #expect(requests.first?.text.hasPrefix("\(placeholder(0, capital: true)) Smith paid ") == true)
+        #expect(requests.first?.pronunciations == [placeholder(0): "mˈɪstəɹ"])
+    }
+
+    @Test func aSystemVoiceSaysAnIPAWordsFullStopThatEndsNoSentenceAsWritten() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "Mr.", replacement: "mˈɪstəɹ", mode: .phonetic)]
+
+        #expect(await framesPlayed(saying: "Mr. Smith paid 3.50 for it.", by: loop, on: bed) > 0)
+
+        #expect(bed.systemVoiceTexts == ["Mr. Smith paid 3.50 for it."])
+    }
+
+    @Test func kokoroIsGivenEachOfIPAWordsSideBySideAsAPlaceholderOfItsOwn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [
+            Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic),
+            Pronunciation(word: "👍", replacement: "thumbs up"),
+        ]
+
+        _ = await framesPlayed(saying: "Done 👏👏👍👏", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests == [FakeKokoro.Request(
+            text: "Done \(placeholder(0)) \(placeholder(0)) thumbs up \(placeholder(0))",
+            voice: "af_heart",
+            speed: 1,
+            pronunciations: [placeholder(0): "klˈæp"]
+        )])
+    }
+
+    @Test func aSystemVoiceSaysIPAWordsSideBySideAsWritten() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [
+            Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic),
+            Pronunciation(word: "👍", replacement: "thumbs up"),
+        ]
+
+        #expect(await framesPlayed(saying: "Done 👏👏👍👏", by: loop, on: bed) > 0)
+
+        #expect(bed.systemVoiceTexts == ["Done 👏 👏 thumbs up 👏"])
     }
 
     @Test func choosingAKokoroVoiceLoadsTheModelOnceAndASystemVoiceDoesNot() async throws {

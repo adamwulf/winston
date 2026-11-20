@@ -123,16 +123,49 @@ private func capitalP(_ number: Int) -> String {
         #expect(placeholders.written(said) == "I love New York City's food.")
     }
 
-    @Test func sentencePunctuationThatEndsAWordStaysAfterItsPlaceholdersAndIsSaidOnce() {
+    @Test func sentencePunctuationThatEndsAWordStaysAfterItsPlaceholdersWhereItEndsASentence() {
+        // Placeholders 0 stand for all of "Yahoo!"; 1 keep its "!" after them.
         let yahoo = Pronunciation(word: "Yahoo!", replacement: "jˈɑhu", mode: .phonetic)
         var placeholders = PhoneticPlaceholders()
 
         let said = say("I used Yahoo! Then I switched. Yahoo!!", with: [yahoo], placeholders: &placeholders)
 
-        #expect(said == "I used \(capitalP(0))! Then I switched. \(capitalP(0))!!")
-        #expect(KokoroText.sentences(in: said) == ["I used \(capitalP(0))!", "Then I switched.", "\(capitalP(0))!!"])
-        #expect(placeholders.phonemes(in: said) == [p(0): "jˈɑhu"])
+        // The second ends no sentence itself: the sentence goes on to the second "!".
+        #expect(said == "I used \(capitalP(1))! Then I switched. \(capitalP(0))!")
+        #expect(KokoroText.sentences(in: said) == ["I used \(capitalP(1))!", "Then I switched.", "\(capitalP(0))!"])
+        #expect(placeholders.phonemes(in: said) == [p(0): "jˈɑhu", p(1): "jˈɑhu"])
+        // Each "!" said once.
         #expect(placeholders.written(said) == "I used Yahoo! Then I switched. Yahoo!!")
+    }
+
+    @Test func sentencePunctuationThatEndsAWordButNoSentenceIsPartOfItsPlaceholders() {
+        let mister = Pronunciation(word: "Mr.", replacement: "mˈɪstəɹ", mode: .phonetic)
+        var placeholders = PhoneticPlaceholders()
+        let text = "Mr. Smith paid 3.50 for it."
+        #expect(KokoroText.sentences(in: text) == [text])
+
+        let said = say(text, with: [mister], placeholders: &placeholders)
+
+        #expect(said == "\(capitalP(0)) Smith paid 3.50 for it.")
+        #expect(KokoroText.sentences(in: said) == [said])
+        #expect(placeholders.phonemes(in: said) == [p(0): "mˈɪstəɹ"])
+        #expect(placeholders.written(said) == text)
+    }
+
+    @Test func noLetterOrDigitEverTouchesAPlaceholder() {
+        let clap = Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic)
+        let thumbs = Pronunciation(word: "👍", replacement: "thumbs up")
+        let ten = Pronunciation(word: "🔟", replacement: "10")
+        var placeholders = PhoneticPlaceholders()
+
+        let said = say("👏👏 👍👏🔟 (👏)", with: [clap, thumbs, ten], placeholders: &placeholders)
+
+        // A space where a placeholder would touch another, or a respelling's letter or digit.
+        #expect(said == "\(p(0)) \(p(0)) thumbs up \(p(0)) 10 (\(p(0)))")
+        #expect(placeholders.phonemes(in: said) == [p(0): "klˈæp"])
+        #expect(placeholders.written(said) == "👏 👏 thumbs up 👏 10 (👏)")
+        // Respellings alone are as they were.
+        #expect(say("👍👍🔟", with: [thumbs, ten], placeholders: &placeholders) == "thumbs upthumbs up10")
     }
 
     @Test func respellingsAndPhoneticWordsMatchTogetherLongestFirst() {
@@ -200,7 +233,8 @@ private func capitalP(_ number: Int) -> String {
 
         #expect(same == capitalP(0))
         #expect(other == capitalP(1))
-        #expect(placeholders.text(for: "Kokoro", phonemes: "kˈOkəɹO") == capitalP(0))
+        #expect(placeholders.text(for: "Kokoro", phonemes: "kˈOkəɹO", keepingPunctuation: false) == capitalP(0))
+        #expect(placeholders.text(for: "Kokoro", phonemes: "kˈOkəɹO", keepingPunctuation: true) == capitalP(0))
     }
 
     @Test func aPlaceholderAwayFromItsGroupIsNeverSaid() {

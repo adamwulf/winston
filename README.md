@@ -427,11 +427,14 @@ IPA word becomes made-up placeholder words (`PhoneticPlaceholders`), one for
 each word of its phonemes so KokoroTTS can cut a long sentence between them, and
 each sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro`
 adds to the loaded model with `addPronunciations` before rendering it. The
-system voices get the placeholders back as the word, as written. Sentence
-punctuation that ends the word ("Yahoo!") stays after the placeholders, so the
-sentence still ends there. Placeholders are kept by word and phonemes for the
-whole run, so a reply queued before its pronunciation was changed or removed
-still says what it was queued with, as a Say As reply does.
+system voices get the placeholders back as the word, as written. Where sentence
+punctuation that ends the word ("Yahoo!") ends a sentence in the message, it
+stays after the placeholders, so the sentence still ends there; elsewhere ("Mr.
+Smith") the placeholders stand for all of the word. A space keeps placeholders
+apart from any letter or digit beside them ("👏👏"). Placeholders are kept by
+word and phonemes for the whole run, so a reply queued before its pronunciation
+was changed or removed still says what it was queued with, as a Say As reply
+does.
 `AppModel` saves the pronunciations in the standard user defaults, under
 `pronunciations`; one saved before IPA existed is Say As.
 
