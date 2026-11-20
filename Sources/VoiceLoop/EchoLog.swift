@@ -232,8 +232,9 @@ final class EchoLog {
     /// Counts the engine configurations: a start, a restart, a configuration change or a route
     /// change begins a new one, whose latency can differ.
     private var configuration = 0
-    /// The playback latency of a configuration, taken off the time-critical paths once its
-    /// engine is running.
+    /// The playback latency of the current configuration, taken off the time-critical paths
+    /// once its engine is running. Nil from the moment a new configuration begins until then,
+    /// so a reply can only ever take the latency of the configuration it started on.
     private var offsetSnapshot: (configuration: Int, offset: PlaybackOffset)?
     private var levelLimiter = RateLimiter(interval: EchoLog.levelInterval)
 
@@ -266,7 +267,13 @@ final class EchoLog {
     func noteEngineStart() {
         engineStartTime = TimelineClock.now()
         repliesSinceEngineStart = 0
+        beginConfiguration()
+    }
+
+    /// A new engine configuration begins: the last one's latency no longer holds. Cheap.
+    private func beginConfiguration() {
         configuration += 1
+        offsetSnapshot = nil
     }
 
     /// Takes the current configuration's playback latency from `pipeline`, if its engine is
@@ -309,7 +316,7 @@ final class EchoLog {
     /// logged before: the loop calls it as the change comes, deals with the change, then calls
     /// `logConfigurationChange(_:of:handling:)`.
     func noteConfigurationChange() -> ConfigurationChange {
-        configuration += 1
+        beginConfiguration()
         return ConfigurationChange(
             time: TimelineClock.now(),
             before: engineState,
@@ -338,7 +345,7 @@ final class EchoLog {
     /// `voice.loop` says how it changed.
     func routeChanged(_ pipeline: Pipeline?) {
         routeChangeTime = TimelineClock.now()
-        configuration += 1
+        beginConfiguration()
         if let pipeline {
             snapshotPlaybackOffset(pipeline)
         }
