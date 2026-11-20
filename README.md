@@ -336,25 +336,39 @@ developer portal.
   on the window still go straight to the chat shown, as before.
 
 `AppModel.openFile(at:)` gives the file its place in the sheet at once, so
-files go in the order they were opened, and copies it off the main actor as
-the + button's Files does (security-scoped, coordinated, so an iCloud Drive
-file downloads first; a folder is turned down). Once Winston is logged in with
-its bot chats a sheet lists the agents and Cancel, and asks even with one
-agent. A file opened before then waits. Picking an agent sends the file there,
-without changing the chat shown: a still image as a photo (a JPEG of at most
-2560 px), anything else, an animated GIF included, as a document under its own
-name. Files opened together go to the same agent, in order.
+files go in the order they were opened, and copies it off the main actor into
+`tmp/OpenedFiles` as the + button's Files does (security-scoped, coordinated,
+so an iCloud Drive file downloads first; a folder is turned down). A file that
+can't be copied keeps its place with the error and Try Again, without holding
+up the others. Once Winston is logged in with its bot chats a sheet lists the
+agents and Cancel, and asks even with one agent. A file opened before then
+waits. Picking an agent sends the file there, without changing the chat
+shown: a still image as a photo (a JPEG of at most 2560 px), anything else, an
+animated GIF included, as a document under its own name, from a copy of
+TDLib's own. Files opened together go to the same agent, in order.
 
-Winston follows each upload until TDLib says it was sent or failed. A failure,
-whether TDLib turns the file down at once or its upload fails later, brings
-the sheet back with "Couldn't send *name* to *agent*" and the file kept for
-another pick; Cancel removes Winston's copy.
+A file Adam opens closes Settings and the pickers, as a notification tap does,
+but never push-to-talk, which could be in a hold: the sheet waits until
+push-to-talk, or an alert, closes.
+
+Winston follows each upload until TDLib says it was sent or failed, even when
+TDLib says so before its answer to the send arrives. A failure, whether TDLib
+turns the file down at once or its upload fails later, brings the sheet back
+with "Couldn't send *name* to *agent*" and the file kept, in its place, for
+another pick. A failure in the background closes nothing: the sheet waits for
+whatever is showing. Once a file is sent, or cancelled, Winston's copy and the
+file iOS handed over go. Uploads aren't followed across launches: a failure
+after a relaunch shows only in the chat. A logout removes the files of uploads
+under way, and each launch removes what opened files left at least a day ago.
 
 The logs (`label=app.model`) say `file opened` with its type, `opened file
 copied` with whether it goes as a photo or a document, `opened file handed to
 telegram` with the chat, then `opened file sent`, or `opened files cancelled`.
-Failures are `copying opened file failed`, `sending opened file failed` (turned
-down at once) and `opened file upload failed` (later). No file name is logged.
+Failures are `copying opened file failed` (then `retrying opened file copy` on
+Try Again), `sending opened file failed` (turned down at once) and `opened
+file upload failed` (later). At launch, `opened file leftovers removed` gives a
+count, and a logout during uploads logs `opened file uploads discarded`. No
+file name is logged.
 
 ## Push-to-talk
 
