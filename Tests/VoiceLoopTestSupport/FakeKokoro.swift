@@ -27,11 +27,14 @@ package final class FakeKokoro: KokoroEngine {
         package let text: String
         package let voice: String
         package let speed: Float
+        /// The phonemes it gave words in `text`, by word.
+        package let pronunciations: [String: String]
 
-        package init(text: String, voice: String, speed: Float) {
+        package init(text: String, voice: String, speed: Float, pronunciations: [String: String] = [:]) {
             self.text = text
             self.voice = voice
             self.speed = speed
+            self.pronunciations = pronunciations
         }
     }
 
@@ -255,11 +258,16 @@ package final class FakeKokoro: KokoroEngine {
         dictionary
     }
 
-    package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
+    package func synthesize(
+        _ text: String,
+        voice: String,
+        speed: Float,
+        pronunciations: [String: String]
+    ) async throws -> [Float] {
         // As `KokoroEngine` promises: a cancelled request renders nothing.
         try Task.checkCancellation()
         let (index, holds, isLoaded) = state.withLock { state in
-            state.requests.append(Request(text: text, voice: voice, speed: speed))
+            state.requests.append(Request(text: text, voice: voice, speed: speed, pronunciations: pronunciations))
             return (state.requests.count - 1, state.holdsSynthesis, state.loadedModel != nil)
         }
         guard isLoaded else { throw FakeKokoroError.notLoaded }

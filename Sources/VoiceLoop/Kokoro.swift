@@ -98,7 +98,12 @@ package protocol KokoroEngine: Sendable {
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.
-    func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float]
+    ///
+    /// `pronunciations` gives single lowercase words in `text` their phonemes, ahead of the
+    /// model's dictionaries: the placeholders of phonetic pronunciations (see
+    /// `PhoneticPlaceholders`). The loaded model keeps them, and a word given new phonemes takes
+    /// them; a model loaded later has none until a request gives them again.
+    func synthesize(_ text: String, voice: String, speed: Float, pronunciations: [String: String]) async throws -> [Float]
 }
 
 /// Where the Kokoro model is, for the settings screen.

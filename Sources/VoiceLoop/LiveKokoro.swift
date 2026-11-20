@@ -21,7 +21,15 @@ package actor LiveKokoro: KokoroEngine {
     private let directory: URL
     private let queue = DispatchSerialQueue(label: "voice.kokoro")
     /// The loaded model, and which one it is.
-    private var loaded: (variant: KokoroModelVariant, model: KokoroTTSModel)?
+    private var loaded: (variant: KokoroModelVariant, model: KokoroTTSModel)? {
+        didSet {
+            // Each load builds a new phonemizer, which has none of them.
+            addedPronunciations = [:]
+        }
+    }
+    /// The phonemes given to the loaded model's phonemizer, by word. KokoroTTS can add or change
+    /// one but not remove it.
+    private var addedPronunciations: [String: String] = [:]
     /// The models whose placement has been logged in this launch.
     private var placementLogged: Set<KokoroModelVariant> = []
 
@@ -342,11 +350,25 @@ package actor LiveKokoro: KokoroEngine {
         return words
     }
 
-    package func synthesize(_ text: String, voice: String, speed: Float) async throws -> [Float] {
+    package func synthesize(
+        _ text: String,
+        voice: String,
+        speed: Float,
+        pronunciations: [String: String]
+    ) async throws -> [Float] {
         // A request waits here while an earlier one renders. If its speech was stopped meanwhile
         // (a newer preview, say), rendering it would only delay the next one.
         try Task.checkCancellation()
         guard let model = loaded?.model else { throw KokoroEngineError.notLoaded }
+        // Here, in the actor, so it never runs while the model renders: KokoroTTS doesn't lock
+        // the dictionary it adds them to.
+        let new = pronunciations.filter { addedPronunciations[$0.key] != $0.value }
+        if !new.isEmpty {
+            model.addPronunciations(new)
+            addedPronunciations.merge(new) { $1 }
+            // Counts only: the words are placeholders, but the phonemes are the user's.
+            Self.log.info("kokoro pronunciations added", ["added": new.count, "total": addedPronunciations.count])
+        }
         return try model.synthesize(text: text, voice: voice, speed: speed)
     }
 }

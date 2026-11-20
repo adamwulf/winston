@@ -100,15 +100,22 @@ public final class VoiceLoop {
     public static let speechPitches: ClosedRange<Float> = 0.5...2.0
     /// The voice's normal pitch.
     public static let defaultSpeechPitch: Float = 1.0
-    /// Words said differently, by every voice: each is replaced in a message as it is queued
-    /// (see `Pronunciation`), before Kokoro's numbers and acronyms are spelled out.
+    /// Words said differently: each is replaced in a message as it is queued (see
+    /// `Pronunciation`), before Kokoro's numbers and acronyms are spelled out. A respelling is
+    /// said by every voice. A phonetic pronunciation's word is replaced by a placeholder that the
+    /// Kokoro voices say with its phonemes, and that the system voices say as the word.
     public var pronunciations: [Pronunciation] = [] {
         didSet {
             guard pronunciations != oldValue else { return }
-            pronunciationReplacer = PronunciationReplacer(pronunciations)
+            phoneticPlaceholders.update(with: pronunciations)
+            pronunciationReplacer = PronunciationReplacer(pronunciations, placeholders: phoneticPlaceholders)
         }
     }
     @ObservationIgnored private var pronunciationReplacer = PronunciationReplacer([])
+    /// The placeholders of every phonetic pronunciation this run, and of the latest
+    /// `preview(word:phonemes:)`. None is forgotten, so a message queued before its pronunciation
+    /// changed still finds its word.
+    @ObservationIgnored private var phoneticPlaceholders = PhoneticPlaceholders()
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
     /// echo cancellation (if it couldn't start), speech never interrupts a reply.
@@ -1375,10 +1382,11 @@ public final class VoiceLoop {
     }
 
     /// Kokoro doesn't stream, so `text` is rendered a sentence at a time off the main actor, and
-    /// each sentence is fed to `playback` once it's ready. Cancelling the returned task stops
-    /// it: no further sentence is rendered, and the caller cancels `playback` too, so the one
-    /// rendering then is dropped. If rendering fails, or the model is freed because another
-    /// voice was chosen, `systemVoice` is handed the rest of the text to say.
+    /// each sentence is fed to `playback` once it's ready. Each sentence's placeholders go to
+    /// Kokoro with their phonemes. Cancelling the returned task stops it: no further sentence is
+    /// rendered, and the caller cancels `playback` too, so the one rendering then is dropped. If
+    /// rendering fails, or the model is freed because another voice was chosen, `systemVoice` is
+    /// handed the rest of the text to say, placeholders and all.
     private func synthesizeWithKokoro(
         _ text: String,
         voice: String,
@@ -1389,6 +1397,7 @@ public final class VoiceLoop {
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
         let acronyms = KokoroAcronyms(dictionaryWords: kokoroModel.dictionaryWords)
+        let placeholders = phoneticPlaceholders
         return Task {
             // Kokoro can't pronounce digits, or acronyms its dictionary doesn't have. Only its
             // text is changed: the system voice gets the sentences as written.
@@ -1402,9 +1411,15 @@ public final class VoiceLoop {
                 }
                 let samples: [Float]
                 do {
-                    // Numbers first: their rules read the words around them as written.
+                    // Numbers first: their rules read the words around them as written. Both
+                    // leave placeholders as they are.
                     let spoken = acronyms.spelledOut(numbers.spelledOut(sentence))
-                    samples = try await engine.synthesize(spoken, voice: voice, speed: speed)
+                    samples = try await engine.synthesize(
+                        spoken,
+                        voice: voice,
+                        speed: speed,
+                        pronunciations: placeholders.phonemes(in: spoken)
+                    )
                 } catch {
                     guard !Task.isCancelled else { return }
                     // Codes only: KokoroTTS's messages can list voices and paths.
