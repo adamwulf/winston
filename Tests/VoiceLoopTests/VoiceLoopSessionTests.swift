@@ -643,6 +643,9 @@ struct SpeakingTests {
         loop.preview(longReply)
         #expect(await eventually { bed.audio.playedFrames > 0 })
         let previewEngine = try #require(bed.audio.engines.last)
+        // Starting stops the preview's engine before anything more renders, so none of the
+        // preview plays from here on.
+        let playedWhenStarted = bed.audio.playedFrames
 
         try await loop.start()
         defer { loop.stop() }
@@ -650,9 +653,7 @@ struct SpeakingTests {
         #expect(!previewEngine.isRunning)
         #expect(loop.state == .listening(partial: ""))
         #expect(bed.audio.engines.count == 2)
-        // Nothing more of the preview plays, through many passes.
-        #expect(await cutOffSpeechDiesAway(on: bed))
-        let playedWhenStarted = bed.audio.playedFrames
+        // Nothing more of the preview plays, through many passes of the new engine.
         try await settle()
         #expect(await renderPassesGoBy(20, on: bed))
         #expect(bed.audio.playedFrames == playedWhenStarted)
@@ -686,10 +687,11 @@ struct BargeInTests {
         #expect(await eventually { bed.audio.playedFrames > 0 })
         bed.recognizer.hear("Wait.", over: later, isFinal: true)
 
+        // The reply is cut off as the words show, so its sound dies away from there.
         #expect(await eventually { loop.state == .listening(partial: "Wait.") })
-        #expect(await nextUtterance(of: loop)?.text == "Wait.")
         #expect(await cutOffSpeechDiesAway(on: bed))
         let playedWhenInterrupted = bed.audio.playedFrames
+        #expect(await nextUtterance(of: loop)?.text == "Wait.")
 
         // The interrupted reply and the queued one are both gone, through many passes.
         try await settle()
