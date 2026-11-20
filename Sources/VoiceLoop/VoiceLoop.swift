@@ -179,6 +179,11 @@ public final class VoiceLoop {
     /// Follows the audio session's route changes while voice mode runs. Nil while it is off, so a
     /// start that finds it set is a rebuild.
     @ObservationIgnored private var routeChangeObserver: Task<Void, Never>?
+    #if os(iOS)
+    /// Log the audio session's secondary audio hint and the media services' loss and reset while
+    /// voice mode runs (see `observeAudioSessionForLogs()`). Empty while it is off.
+    @ObservationIgnored private var audioSessionLogObservers: [Task<Void, Never>] = []
+    #endif
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -365,6 +370,9 @@ public final class VoiceLoop {
         isStarting = true
         // Removed by `tearDown(.stop)`, which a start that fails also ends in.
         observeInputMute()
+        #if os(iOS)
+        observeAudioSessionForLogs()
+        #endif
         defer {
             isStarting = false
             // speak() queues while starting; if stop() came meanwhile, those replies are stale.
@@ -453,6 +461,12 @@ public final class VoiceLoop {
             analyzerRate: recognizer.audioFormat.sampleRate
         )
         pipeline.timeline.recognizerStarted(called: recognizerStart.called, returned: recognizerStart.returned)
+        #if os(iOS)
+        Self.log.notice("audio session at voice mode start", MediaDiagnostics.sessionContext().merging([
+            "rebuild": "\(isRebuild)",
+            "appState": MediaDiagnostics.appState,
+        ]) { $1 })
+        #endif
         #if os(macOS)
         // The rebuild may have come from the default input or output changing, which can show
         // only after the engine's configuration change, with nothing to say so after.
@@ -1210,6 +1224,9 @@ public final class VoiceLoop {
             resumeAfterInterruption = false
             recentEngineStops = []
             stopObservingInputMute()
+            #if os(iOS)
+            stopObservingAudioSessionForLogs()
+            #endif
             stopObservingRouteChanges()
             if state != .off {
                 Self.log.notice("voice mode stopped")
@@ -1414,6 +1431,64 @@ public final class VoiceLoop {
     }
 
     #if os(iOS)
+    /// Starts logging, while voice mode runs, the audio session's hint that secondary audio
+    /// should be silenced, and the media services being lost and reset, unless already started.
+    /// Logging only: voice mode doesn't act on them.
+    private func observeAudioSessionForLogs() {
+        guard audioSessionLogObservers.isEmpty else { return }
+        let hints = NotificationCenter.default.notifications(named: AVAudioSession.silenceSecondaryAudioHintNotification)
+            .map { notification -> String in
+                guard let raw = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+                      let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: raw) else { return "unknown" }
+                switch type {
+                case .begin: return "begin"
+                case .end: return "end"
+                @unknown default: return "\(raw)"
+                }
+            }
+        let losses = NotificationCenter.default.notifications(named: AVAudioSession.mediaServicesWereLostNotification)
+        let resets = NotificationCenter.default.notifications(named: AVAudioSession.mediaServicesWereResetNotification)
+        audioSessionLogObservers = [
+            Task { [weak self] in
+                for await hint in hints {
+                    guard let self, !Task.isCancelled else { return }
+                    Self.log.notice("audio session silence secondary audio hint", MediaDiagnostics.sessionContext().merging([
+                        "hint": hint,
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ]) { $1 })
+                }
+            },
+            Task { [weak self] in
+                for await _ in losses {
+                    guard let self, !Task.isCancelled else { return }
+                    // Without the session's details: its services are gone until the reset.
+                    Self.log.notice("media services were lost", [
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ])
+                }
+            },
+            Task { [weak self] in
+                for await _ in resets {
+                    guard let self, !Task.isCancelled else { return }
+                    Self.log.notice("media services were reset", MediaDiagnostics.sessionContext().merging([
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ]) { $1 })
+                }
+            },
+        ]
+    }
+
+    /// Stops the logging that `observeAudioSessionForLogs()` started, when voice mode stops.
+    private func stopObservingAudioSessionForLogs() {
+        for observer in audioSessionLogObservers {
+            observer.cancel()
+        }
+        audioSessionLogObservers = []
+    }
+
     /// Another app (a call, FaceTime, Music) can keep the session, and then iOS never sends
     /// the interruption's end. Coming back to the foreground retries instead. The retry may
     /// run while the interruption is still active (Adam returns mid-call, or the call UI
@@ -1428,6 +1503,17 @@ public final class VoiceLoop {
     }
 
     private func handleInterruption(_ event: InterruptionEvent?) {
+        let (message, shouldResume): (String, String) = switch event {
+        case .began: ("audio session interruption began", "n/a")
+        case .ended(let shouldResume): ("audio session interruption ended", "\(shouldResume)")
+        case nil: ("audio session interruption unreadable", "n/a")
+        }
+        Self.log.notice("\(message)", MediaDiagnostics.sessionContext().merging([
+            "shouldResume": shouldResume,
+            "voiceMode": voiceModeLogState,
+            "resumePending": resumeAfterInterruption,
+            "appState": MediaDiagnostics.appState,
+        ]) { $1 })
         switch event {
         case .began:
             // iOS has already stopped the engine and deactivated the session. Restart from
@@ -1704,12 +1790,18 @@ public final class VoiceLoop {
     /// another.
     private func routeChanged(_ change: AudioRouteChange) {
         let stops = change.isDeviceChange && change.previous != change.current
-        Self.log.notice("audio route changed", [
+        var fields: [String: CustomStringConvertible] = [
             "reason": change.reason,
             "before": change.previous.logDescription,
             "after": change.current.logDescription,
             "action": stops ? "stopVoiceMode" : change.isDeviceChange ? "keepListening" : "ignore",
-        ])
+        ]
+        #if os(iOS)
+        // The session as it is now, which may be a little later than `after`.
+        fields.merge(MediaDiagnostics.sessionContext()) { $1 }
+        fields["appState"] = MediaDiagnostics.appState
+        #endif
+        Self.log.notice("audio route changed", fields)
         if stops {
             stopForDeviceChange()
         }
