@@ -471,6 +471,15 @@ final class EchoLog {
         endedReplies.append(ended)
     }
 
+    /// Voice mode stopped: the last cue, reply end and route change belong to the session that
+    /// ended, so the next session's replies don't count from them. A rebuild keeps them. Lines
+    /// still waiting to be written keep what they noted.
+    func voiceModeStopped() {
+        lastCue = nil
+        replyEndTime = nil
+        routeChangeTime = nil
+    }
+
     /// A preview was playing on the preview player's own engine as voice mode starts; it is
     /// stopped before the microphone is opened.
     func previewStoppedForVoiceMode() {

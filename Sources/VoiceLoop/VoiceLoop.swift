@@ -1298,6 +1298,8 @@ public final class VoiceLoop {
             if state != .off {
                 Self.log.notice("voice mode stopped")
             }
+            // Here, as this session ends, not in the task below, which may run after a new start.
+            echo.voiceModeStopped()
         }
         state = kind == .stop ? .off : .listening(partial: "")
         if let endedPipeline {
