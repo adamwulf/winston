@@ -102,8 +102,10 @@ struct SpeechPlaybackTests {
         for _ in 0..<3 {
             playback.receive(try speechBuffer(seconds: 0.1))
         }
-        // The last buffer is held back until the synthesizer says there are no more.
-        try await Task.sleep(for: .milliseconds(100))
+        // The last buffer is held back until the synthesizer says there are no more. Had all three
+        // been scheduled, they (0.3 s: four passes, and one more through the pitch shift) would
+        // have played by now.
+        #expect(await renderPassesGoBy(10, on: bed))
         #expect(finished.count == 0)
         playback.synthesisFinished()
 
@@ -197,7 +199,9 @@ struct SpeechPlaybackTests {
         // The synthesizer keeps writing a cancelled utterance to its end.
         playback.receive(try speechBuffer(seconds: 0.1))
         playback.synthesisFinished()
-        try await Task.sleep(for: .milliseconds(250))
+        // Had either buffer been scheduled, both (0.2 s: three passes, and one more through the
+        // pitch shift) would have played by now.
+        #expect(await renderPassesGoBy(10, on: bed))
 
         #expect(finished.count == 0)
         #expect(bed.audio.playedFrames == 0)
