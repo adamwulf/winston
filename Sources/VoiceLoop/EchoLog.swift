@@ -44,9 +44,11 @@ final class EchoLog {
         let cue: SoundCue
         /// When it was scheduled, in host time.
         let scheduled: UInt64
-        /// When it stopped sounding, in host time: its completion, for a cue that played out or
-        /// was cut off. Nil until then.
+        /// When it stopped sounding, in host time: its completion, for a cue that played out, or
+        /// when a reply cut it off. Nil until then.
         var ended: UInt64?
+        /// Whether a reply cut it off.
+        var cutOff = false
     }
 
     private struct Reply {
@@ -149,10 +151,22 @@ final class EchoLog {
         logger.notice("cue played", context(pipeline, at: time, fields))
     }
 
-    /// Cue `id` stopped sounding at `hostTime`: it played out, or its player was stopped.
+    /// Cue `id` stopped sounding at `hostTime`: its completion ran, because it played out or its
+    /// player was stopped. The completion of a cue a reply cut off comes after the cut
+    /// (`cuesCutOff(ids:)`), and reaches the main actor later still, so the cut's time stands.
+    /// One from before the cut means the cue had played out already.
     func cueEnded(id: Int, at hostTime: UInt64) {
-        guard lastCue?.id == id, lastCue?.ended == nil else { return }
+        guard let cue = lastCue, cue.id == id else { return }
+        if let ended = cue.ended, ended <= hostTime { return }
         lastCue?.ended = hostTime
+        lastCue?.cutOff = false
+    }
+
+    /// The cue player was just stopped to make way for a reply, cutting off cues `ids`.
+    func cuesCutOff(ids: [Int]) {
+        guard let cue = lastCue, cue.ended == nil, ids.contains(cue.id) else { return }
+        lastCue?.ended = TimelineClock.now()
+        lastCue?.cutOff = true
     }
 
     // MARK: - Replies
@@ -187,6 +201,7 @@ final class EchoLog {
             fields["sinceCueScheduledMs"] = TimelineClock.milliseconds(from: lastCue.scheduled, to: started)
             // Nil while it still sounds, or hasn't reported stopping yet.
             fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: started)
+            fields["lastCueCutOff"] = lastCue.cutOff
         }
         fields["cuesUnfinished"] = cuesUnfinished.isEmpty ? "none" : cuesUnfinished.map { "\($0)" }.joined(separator: ",")
         fields["speechVolume"] = Self.volume(pipeline.speech.player.volume)
