@@ -211,8 +211,9 @@ final class Pipeline {
             let captureTime = when.isHostTimeValid ? when.hostTime : TimelineClock.now()
             let frames = Int(buffer.frameLength)
             // What voice processing let through, before the gate mutes any of it.
-            if let samples = buffer.floatChannelData?[0] {
-                levels.record(samples, count: frames, capturedAt: captureTime)
+            if let samples = buffer.floatChannelData?[0], buffer.format.sampleRate > 0 {
+                let duration = AVAudioTime.hostTime(forSeconds: Double(frames) / buffer.format.sampleRate)
+                levels.record(samples, count: frames, capturedAt: captureTime, duration: duration)
             }
             let kept = gate.keptFrames(
                 buffer.frameLength,

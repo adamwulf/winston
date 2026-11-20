@@ -70,7 +70,7 @@ import Testing
         let levels = MicrophoneLevels()
         func record(_ samples: [Float], at captureTime: UInt64) {
             samples.withUnsafeBufferPointer { buffer in
-                levels.record(buffer.baseAddress!, count: buffer.count, capturedAt: captureTime)
+                levels.record(buffer.baseAddress!, count: buffer.count, capturedAt: captureTime, duration: 4)
             }
         }
 
@@ -78,8 +78,8 @@ import Testing
         record([0, 0, 0, -0.25], at: 20)
         let first = levels.drain()
         #expect(first.readings == [
-            MicrophoneLevels.Reading(captureTime: 10, rms: 0.5, peak: 0.5),
-            MicrophoneLevels.Reading(captureTime: 20, rms: 0.125, peak: 0.25),
+            MicrophoneLevels.Reading(captureTime: 10, duration: 4, rms: 0.5, peak: 0.5),
+            MicrophoneLevels.Reading(captureTime: 20, duration: 4, rms: 0.125, peak: 0.25),
         ])
         #expect(first.dropped == 0)
         #expect(levels.drain().readings.isEmpty)
@@ -96,22 +96,28 @@ import Testing
         #expect(levels.drain().dropped == 0)
     }
 
-    @Test func aReplyCountsBuffersBeforeItsFirstSoundApartFromThoseAfter() {
+    @Test func aReplyCountsBuffersBeforeItCouldBeHeardApartFromThoseAfter() {
+        /// A buffer 100 host time units long.
         func reading(at captureTime: UInt64, rms: Float) -> MicrophoneLevels.Reading {
-            MicrophoneLevels.Reading(captureTime: captureTime, rms: rms, peak: rms * 2)
+            MicrophoneLevels.Reading(captureTime: captureTime, duration: 100, rms: rms, peak: rms * 2)
         }
         var levels = ReplyLevels(started: 1000)
 
-        // Before the setup: no reply's. Before the first sound: loud room noise, say a cough.
-        levels.add(reading(at: 900, rms: 0.5), firstAudio: nil)
-        levels.add(reading(at: 1100, rms: 0.1), firstAudio: nil)
-        // Taken once the first sound was scheduled at 1500: one buffer from before it.
-        levels.add(reading(at: 1400, rms: 0.01), firstAudio: 1500)
-        levels.add(reading(at: 1500, rms: 0.001), firstAudio: 1500)
-        levels.add(reading(at: 1600, rms: 0.002), firstAudio: 1500)
+        // Before the setup: no reply's. Before its first buffer was scheduled: loud room noise,
+        // say a cough during the render.
+        levels.add(reading(at: 900, rms: 0.5), playbackFrom: nil)
+        levels.add(reading(at: 1100, rms: 0.1), playbackFrom: nil)
+        // Taken once it could be heard from 1500 (scheduled, plus the output's latency): one
+        // buffer that ended before, one that spans it, and two after.
+        levels.add(reading(at: 1350, rms: 0.01), playbackFrom: 1500)
+        levels.add(reading(at: 1450, rms: 0.05), playbackFrom: 1500)
+        levels.add(reading(at: 1550, rms: 0.001), playbackFrom: 1500)
+        levels.add(reading(at: 1650, rms: 0.002), playbackFrom: 1500)
 
         #expect(levels.pre.buffers == 2)
         #expect(levels.pre.rmsDb == -20)
+        #expect(levels.onset.buffers == 1)
+        #expect(levels.onset.rmsDb == -26)
         #expect(levels.playback.buffers == 2)
         #expect(levels.playback.rmsDb == -54)
         #expect(levels.playback.sampleDb == -48)
@@ -119,16 +125,16 @@ import Testing
         let window = levels.takeWindow()
         #expect(window == levels.playback)
         #expect(levels.takeWindow() == nil)
-        levels.add(reading(at: 1700, rms: 0.0001), firstAudio: 1500)
+        levels.add(reading(at: 1750, rms: 0.0001), playbackFrom: 1500)
         #expect(levels.takeWindow()?.buffers == 1)
         #expect(levels.playback.buffers == 3)
 
-        // It ends at 1800. A buffer captured before the end, handed over after it, still counts;
+        // It ends at 1850. A buffer captured before the end, handed over after it, still counts;
         // one captured after it doesn't, and shows every earlier one has come.
-        levels.close(at: 1800)
-        levels.add(reading(at: 1750, rms: 0.3), firstAudio: 1500)
+        levels.close(at: 1850)
+        levels.add(reading(at: 1800, rms: 0.3), playbackFrom: 1500)
         #expect(!levels.hasReadingAfterEnd)
-        levels.add(reading(at: 1850, rms: 0.9), firstAudio: 1500)
+        levels.add(reading(at: 1900, rms: 0.9), playbackFrom: 1500)
         #expect(levels.hasReadingAfterEnd)
         #expect(levels.playback.buffers == 4)
         #expect(levels.playback.rmsDb == -10)

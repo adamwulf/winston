@@ -37,8 +37,11 @@ import Synchronization
 /// the route, and formatting all happen then. Each line is dated when its event happened.
 ///
 /// The levels come from each microphone buffer's reading (`MicrophoneLevels`), counted for a
-/// reply by when the buffer was captured: from its setup to its first sound (`pre…`), and from
-/// its first sound on (`mic…`, and the `mic level` lines), up to its end.
+/// reply by when the buffer was captured against `playbackFrom`, the earliest its sound can
+/// reach the microphone (its first buffer's scheduling plus the output latency, see
+/// `PlaybackOffset`): buffers from its setup that ended by then (`pre…`), the one that spans it
+/// (`onset…`), and those from then on (`mic…`, and the `mic level` lines), up to its end.
+/// "Into playback" times count from `playbackFrom` too.
 ///
 /// A line written while a pipeline runs carries `session` and `tMs`, as the `voice.timeline`
 /// lines do, so the two logs line up. Times since something happened are left out until it has.
@@ -106,8 +109,13 @@ final class EchoLog {
         let pipeline: Pipeline
         /// The microphone's levels while it was being said.
         var levels: ReplyLevels
-        /// Whether a `mic level` line has seen its first sound yet.
-        var sawFirstAudio = false
+        /// How long after its first buffer was scheduled its sound can reach the microphone;
+        /// read once that has happened.
+        var playbackOffset: PlaybackOffset?
+        /// Its first buffer's scheduling plus `playbackOffset`, in host time; nil until then.
+        var playbackFrom: UInt64?
+        /// Whether a `mic level` line has seen its playback start yet.
+        var sawPlaybackStart = false
         /// Microphone buffers whose readings were lost because the main actor fell behind.
         var droppedBuffers = 0
         /// Results that came while it played.
@@ -411,11 +419,15 @@ final class EchoLog {
     }
 
     private static func absorb(_ readings: [MicrophoneLevels.Reading], dropped: Int, into reply: inout Reply) {
-        // Read after the readings were taken: if the first sound hadn't been scheduled by now,
+        // Read after the readings were taken: if the first buffer hadn't been scheduled by now,
         // none of them was captured after it.
-        let firstAudio = reply.firstAudio()
+        if reply.playbackFrom == nil, let firstAudio = reply.firstAudio() {
+            let offset = PlaybackOffset(reply.pipeline)
+            reply.playbackOffset = offset
+            reply.playbackFrom = firstAudio &+ offset.hostTime
+        }
         for reading in readings {
-            reply.levels.add(reading, firstAudio: firstAudio)
+            reply.levels.add(reading, playbackFrom: reply.playbackFrom)
         }
         reply.droppedBuffers += dropped
     }
@@ -454,10 +466,10 @@ final class EchoLog {
     }
 
     private func writeLevelLine(for pipeline: Pipeline) {
-        guard let current = reply, current.pipeline === pipeline, let firstAudio = current.firstAudio() else { return }
-        if !current.sawFirstAudio {
-            reply?.sawFirstAudio = true
-            levelLimiter.restart(at: firstAudio)
+        guard let current = reply, current.pipeline === pipeline, let playbackFrom = current.playbackFrom else { return }
+        if !current.sawPlaybackStart {
+            reply?.sawPlaybackStart = true
+            levelLimiter.restart(at: playbackFrom)
         }
         let time = TimelineClock.now()
         guard current.levels.window.buffers > 0, levelLimiter.allows(at: time),
@@ -467,7 +479,7 @@ final class EchoLog {
             "sampleDb": window.sampleDb,
             "buffers": window.buffers,
             "intoReplyMs": TimelineClock.milliseconds(from: current.started, to: time),
-            "intoPlaybackMs": TimelineClock.milliseconds(from: firstAudio, to: time),
+            "intoPlaybackMs": TimelineClock.milliseconds(from: playbackFrom, to: time),
         ]
         fields["reply"] = current.number
         logger.notice("mic level", context(pipeline, at: time, fields))
@@ -533,13 +545,11 @@ final class EchoLog {
         fields["reply"] = result.replyNumber
         let replied = reply?.serial == result.replySerial ? reply : endedReplies.first { $0.serial == result.replySerial }
         if let replied {
-            if let firstAudio = replied.firstAudio(), firstAudio <= result.time {
-                fields["intoPlaybackMs"] = TimelineClock.milliseconds(from: firstAudio, to: result.time)
+            if let playbackFrom = replied.playbackFrom, playbackFrom <= result.time {
+                fields["intoPlaybackMs"] = TimelineClock.milliseconds(from: playbackFrom, to: result.time)
             }
-            // The loudest levels so far, as the line is written: before the first sound, and
-            // since.
-            fields.merge(Self.levelFields(replied.levels.pre, prefix: "pre")) { $1 }
-            fields.merge(Self.levelFields(replied.levels.playback, prefix: "mic")) { $1 }
+            // The loudest levels so far, as the line is written.
+            fields.merge(Self.levelFields(replied.levels, playbackOffset: replied.playbackOffset)) { $1 }
         }
         logger.notice("result during reply", context(result.pipeline, at: result.time, fields))
     }
@@ -554,18 +564,17 @@ final class EchoLog {
         fields["voiceStarts"] = end.voiceStarts
         fields["voiceActive"] = end.voiceActive
         fields["results"] = ended.results
-        if let firstResult = ended.firstResultTime, let firstAudio, firstAudio <= firstResult {
-            fields["firstResultIntoPlaybackMs"] = TimelineClock.milliseconds(from: firstAudio, to: firstResult)
+        if let firstResult = ended.firstResultTime, let playbackFrom = ended.playbackFrom, playbackFrom <= firstResult {
+            fields["firstResultIntoPlaybackMs"] = TimelineClock.milliseconds(from: playbackFrom, to: firstResult)
         }
         fields["replyMs"] = TimelineClock.milliseconds(from: ended.started, to: end.time)
         fields["setupTMs"] = clock.milliseconds(at: ended.started)
+        // When its first buffer was scheduled; it could be heard `playbackOffsetMs` later.
         fields["firstAudioTMs"] = firstAudio.map { clock.milliseconds(at: $0) }
         fields["synthMs"] = firstAudio.map { TimelineClock.milliseconds(from: ended.started, to: $0) }
-        fields["playedMs"] = firstAudio.map { TimelineClock.milliseconds(from: $0, to: end.time) }
-        // Before its first sound, and from then on, the stretch no `mic level` line covered
-        // included.
-        fields.merge(Self.levelFields(ended.levels.pre, prefix: "pre")) { $1 }
-        fields.merge(Self.levelFields(ended.levels.playback, prefix: "mic")) { $1 }
+        fields["playedMs"] = ended.playbackFrom.map { TimelineClock.milliseconds(from: $0, to: end.time) }
+        // The stretch no `mic level` line covered included.
+        fields.merge(Self.levelFields(ended.levels, playbackOffset: ended.playbackOffset)) { $1 }
         // False if the line was written before a buffer captured after the end came: after
         // `readingsGrace`, or because the pipeline went.
         fields["levelsComplete"] = ended.levels.hasReadingAfterEnd
@@ -596,6 +605,20 @@ final class EchoLog {
     private static func levelFields(_ levels: LevelSummary, prefix: String) -> [String: CustomStringConvertible] {
         guard levels.buffers > 0 else { return [:] }
         return [prefix + "RmsDb": levels.rmsDb, prefix + "SampleDb": levels.sampleDb]
+    }
+
+    /// A reply's levels before it could be heard (`pre…`), across that moment (`onset…`), and
+    /// after it (`mic…`), with where the split was: `playbackFrom` names what it adds up, and
+    /// `playbackOffsetMs` is the latency added to the first buffer's scheduling.
+    private static func levelFields(_ levels: ReplyLevels, playbackOffset: PlaybackOffset?) -> [String: CustomStringConvertible] {
+        var fields = levelFields(levels.pre, prefix: "pre")
+        fields.merge(levelFields(levels.onset, prefix: "onset")) { $1 }
+        fields.merge(levelFields(levels.playback, prefix: "mic")) { $1 }
+        if let playbackOffset {
+            fields["playbackFrom"] = playbackOffset.source
+            fields["playbackOffsetMs"] = String(format: "%.1f", playbackOffset.seconds * 1000)
+        }
+        return fields
     }
 
     /// Milliseconds from `start` to `end`; nil without a start.
@@ -679,6 +702,32 @@ final class EchoLog {
     #endif
 }
 
+/// How long after a reply's first buffer is scheduled on the player its sound can reach the
+/// microphone: the output's latency, and on iOS the I/O buffer too, since the buffer is mixed
+/// in at the next render pass. Read off the time-critical paths.
+struct PlaybackOffset: Equatable {
+    /// In seconds.
+    let seconds: Double
+    /// What it adds to the first buffer's scheduling, for the log's `playbackFrom`.
+    let source: String
+
+    var hostTime: UInt64 {
+        AVAudioTime.hostTime(forSeconds: seconds)
+    }
+
+    @MainActor init(_ pipeline: Pipeline) {
+        #if os(iOS)
+        let session = AVAudioSession.sharedInstance()
+        let seconds = session.outputLatency + session.ioBufferDuration
+        source = "firstScheduled+outputLatency+ioBuffer"
+        #else
+        let seconds = pipeline.engine.outputNode.presentationLatency
+        source = "firstScheduled+outputLatency"
+        #endif
+        self.seconds = seconds.isFinite && seconds > 0 ? seconds : 0
+    }
+}
+
 /// Lets an event through at most once per interval, by the host clock: for log lines that
 /// would otherwise come with every poll.
 struct RateLimiter {
@@ -725,8 +774,10 @@ final class MicrophoneLevels: @unchecked Sendable {
 
     /// One buffer's levels.
     struct Reading: Sendable, Equatable {
-        /// When it was captured, in host time.
+        /// When its first frame was captured, in host time.
         let captureTime: UInt64
+        /// How long it lasts, in host time units.
+        let duration: UInt64
         /// Its RMS level, on a full scale of 1.
         let rms: Float
         /// Its loudest sample, the same way.
@@ -738,6 +789,8 @@ final class MicrophoneLevels: @unchecked Sendable {
 
     /// Each slot's capture time.
     private let times: UnsafeMutablePointer<UInt64>
+    /// Each slot's duration.
+    private let durations: UnsafeMutablePointer<UInt64>
     /// Each slot's RMS level and loudest sample, as their bit patterns.
     private let levels: UnsafeMutablePointer<UInt64>
     /// Readings written since the start. Only the writer changes it.
@@ -750,18 +803,21 @@ final class MicrophoneLevels: @unchecked Sendable {
     init() {
         times = .allocate(capacity: Self.capacity)
         times.initialize(repeating: 0, count: Self.capacity)
+        durations = .allocate(capacity: Self.capacity)
+        durations.initialize(repeating: 0, count: Self.capacity)
         levels = .allocate(capacity: Self.capacity)
         levels.initialize(repeating: 0, count: Self.capacity)
     }
 
     deinit {
         times.deallocate()
+        durations.deallocate()
         levels.deallocate()
     }
 
-    /// Runs on the audio thread for each microphone buffer: `count` samples, the first captured
-    /// at `captureTime` (host time).
-    func record(_ samples: UnsafePointer<Float>, count: Int, capturedAt captureTime: UInt64) {
+    /// Runs on the audio thread for each microphone buffer: `count` samples lasting `duration`
+    /// (host time units), the first captured at `captureTime` (host time).
+    func record(_ samples: UnsafePointer<Float>, count: Int, capturedAt captureTime: UInt64, duration: UInt64) {
         guard count > 0 else { return }
         var sum: Float = 0
         var peak: Float = 0
@@ -778,6 +834,7 @@ final class MicrophoneLevels: @unchecked Sendable {
         }
         let slot = next % Self.capacity
         times[slot] = captureTime
+        durations[slot] = duration
         levels[slot] = UInt64(rms.bitPattern) << 32 | UInt64(peak.bitPattern)
         written.store(next &+ 1, ordering: .releasing)
     }
@@ -794,6 +851,7 @@ final class MicrophoneLevels: @unchecked Sendable {
             let bits = levels[slot]
             readings.append(Reading(
                 captureTime: times[slot],
+                duration: durations[slot],
                 rms: Float(bitPattern: UInt32(truncatingIfNeeded: bits >> 32)),
                 peak: Float(bitPattern: UInt32(truncatingIfNeeded: bits))
             ))
@@ -826,16 +884,21 @@ struct LevelSummary: Equatable {
     var sampleDb: Int { VoiceActivity.decibels(peak) }
 }
 
-/// One reply's microphone levels, by when each buffer was captured: from the reply's setup to
-/// its first sound (`pre`), and from its first sound on (`playback`, and `window`, since the
-/// last `mic level` line), up to its end once it has one. A buffer captured before the setup,
-/// or at or after the end, isn't the reply's.
+/// One reply's microphone levels, by when each buffer was captured against `playbackFrom`, the
+/// earliest the reply's sound can reach the microphone: buffers that ended by then (`pre`),
+/// the one that spans it (`onset`), and those that began at or after it (`playback`, and
+/// `window`, since the last `mic level` line). Only buffers captured from the reply's setup up
+/// to its end, once it has one, are the reply's.
 struct ReplyLevels: Equatable {
     /// When the reply was set up, in host time.
     let started: UInt64
     /// When it ended, in host time; nil while it is being said.
     private(set) var end: UInt64?
+    /// Room noise and the user, before the reply could be heard.
     private(set) var pre = LevelSummary()
+    /// Partly before and partly after.
+    private(set) var onset = LevelSummary()
+    /// After the reply could be heard: what echo cancellation let through, the user, and noise.
     private(set) var playback = LevelSummary()
     private(set) var window = LevelSummary()
 
@@ -852,19 +915,25 @@ struct ReplyLevels: Equatable {
         end = time
     }
 
-    /// Counts `reading` before or after the reply's first sound, which was scheduled at
-    /// `firstAudio` (host time), or hadn't been when the reading was taken if nil.
-    mutating func add(_ reading: MicrophoneLevels.Reading, firstAudio: UInt64?) {
+    /// Counts `reading` against `playbackFrom` (host time): nil if the reply's first buffer
+    /// hadn't been scheduled when the reading was taken, so every reading counts as `pre`.
+    mutating func add(_ reading: MicrophoneLevels.Reading, playbackFrom: UInt64?) {
         if let end, reading.captureTime >= end {
             hasReadingAfterEnd = true
             return
         }
         guard reading.captureTime >= started else { return }
-        if let firstAudio, reading.captureTime >= firstAudio {
+        guard let playbackFrom else {
+            pre.add(reading)
+            return
+        }
+        if reading.captureTime >= playbackFrom {
             playback.add(reading)
             window.add(reading)
-        } else {
+        } else if reading.captureTime &+ reading.duration <= playbackFrom {
             pre.add(reading)
+        } else {
+            onset.add(reading)
         }
     }
 
