@@ -28,6 +28,24 @@ struct PronunciationSuggestionTests {
         #expect(harness.model.canSuggestPronunciations)
     }
 
+    @Test func suggestionsPlayOnlyWhileAKokoroVoiceIsReady() async {
+        let harness = Harness()
+        let model = harness.model
+
+        // A system voice would say the same written word for every suggestion.
+        #expect(!model.canPlaySuggestions)
+        harness.bed.kokoro.loadBehavior = .waits
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { harness.bed.kokoro.loads == 1 })
+        // Until its model is ready, a Kokoro voice is spoken for by a system voice.
+        #expect(!model.canPlaySuggestions)
+        harness.bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        #expect(model.canPlaySuggestions)
+        model.voiceIdentifier = nil
+        #expect(!model.canPlaySuggestions)
+    }
+
     @Test func theListLoadsThenShowsEachSuggestionOnceCheckedAgainstMisakisSymbols() async throws {
         let harness = Harness()
         harness.suggester.holdsAnswers = true

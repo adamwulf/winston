@@ -1090,6 +1090,13 @@ public final class AppModel {
         pronunciationSuggester.isAvailable
     }
 
+    /// Whether the suggestion list's play buttons can tell its suggestions apart: a Kokoro voice is
+    /// chosen and its model is ready, so each plays its phonemes. Any other voice would say the
+    /// same written word for every one.
+    public var canPlaySuggestions: Bool {
+        voiceLoop.saysPhonemes
+    }
+
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
     /// asks nothing until its `generate()` is called. Each candidate is checked against the
     /// phoneme symbols Kokoro has as the suggester answers.

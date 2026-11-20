@@ -41,7 +41,8 @@ struct PronunciationSuggestButton: View {
 /// The suggested phonemes for a pronunciation's word: a spinner while they load, then each with
 /// its respelling and note, a play button, and Use, which fills the pronunciation's IPA and
 /// closes the list. One with a symbol Kokoro doesn't have says so, and can't be played or used.
-/// Regenerate asks again. A popover on the Mac and the iPad, a sheet on the iPhone.
+/// The play buttons work only with a ready Kokoro voice, and a note says so otherwise. Regenerate
+/// asks again. A popover on the Mac and the iPad, a sheet on the iPhone.
 private struct PronunciationSuggestionsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -111,6 +112,11 @@ private struct PronunciationSuggestionsView: View {
                     ForEach(candidates) { candidate in
                         row(for: candidate)
                     }
+                    if !model.canPlaySuggestions {
+                        Text(playNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             } header: {
                 Text("Suggestions for \(suggestions.word)")
@@ -142,7 +148,13 @@ private struct PronunciationSuggestionsView: View {
                 }
             }
             Spacer()
-            PlayButton(help: "Play Suggestion", accessibilityLabel: "Play suggestion", isEnabled: candidate.isUsable) {
+            // Only a ready Kokoro voice says the phonemes: any other would say the same written
+            // word for every suggestion.
+            PlayButton(
+                help: "Play Suggestion",
+                accessibilityLabel: "Play suggestion",
+                isEnabled: candidate.isUsable && model.canPlaySuggestions
+            ) {
                 model.previewPronunciation(word: suggestions.word, phonemes: candidate.suggestion.phonemes)
             }
             Button("Use") {
@@ -154,6 +166,15 @@ private struct PronunciationSuggestionsView: View {
             .buttonStyle(.bordered)
             .disabled(!candidate.isUsable)
             .help("Use these phonemes")
+        }
+    }
+
+    /// Why the play buttons are off, while `AppModel.canPlaySuggestions` is false.
+    private var playNote: LocalizedStringKey {
+        if model.voiceLoop.chosenVoice?.engine == .kokoro {
+            "The suggestions play once the Kokoro voice model is ready."
+        } else {
+            "Choose a Kokoro voice to hear the suggestions."
         }
     }
 

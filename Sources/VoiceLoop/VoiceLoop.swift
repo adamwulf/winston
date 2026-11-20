@@ -704,6 +704,12 @@ public final class VoiceLoop {
         preview(spoken: phoneticPlaceholders.add(word: word, phonemes: phonemes))
     }
 
+    /// Whether `preview(word:phonemes:)` says the phonemes: a Kokoro voice is chosen and its model
+    /// is ready. Otherwise it says the word as written, whatever the phonemes.
+    public var saysPhonemes: Bool {
+        readyKokoroVoice() != nil
+    }
+
     /// The phoneme symbols the Kokoro voices can say, for checking suggested phonemes: while the
     /// model is ready, those in its vocabulary; otherwise, or if it can't be read, misaki's
     /// American English symbols, which Kokoro's dictionaries use.
