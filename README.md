@@ -332,8 +332,9 @@ developer portal.
   file, and only that one, once it is sent or cancelled. The Photos app's
   share sheet lists only share extensions, so it won't show Winston: Save to
   Files, then share from Files.
-- Mac: Open With in Finder, or a file dropped on the Dock icon. Files dropped
-  on the window still go straight to the chat shown, as before.
+- Mac: Open With in Finder, or a file dropped on the Dock icon, which brings
+  the chat window forward, even from behind Settings. Files dropped on the
+  window still go straight to the chat shown, as before.
 
 `AppModel.openFile(at:)` gives the file its place in the sheet at once, so
 files go in the order they were opened, and copies it off the main actor into
@@ -358,8 +359,9 @@ with "Couldn't send *name* to *agent*" and the file kept, in its place, for
 another pick. A failure in the background closes nothing: the sheet waits for
 whatever is showing. Once a file is sent, or cancelled, Winston's copy and the
 file iOS handed over go. Uploads aren't followed across launches: a failure
-after a relaunch shows only in the chat. A logout removes the files of uploads
-under way, and each launch removes what opened files left at least a day ago.
+after a relaunch shows only in the chat. Logging out removes the files of
+uploads under way; quitting keeps them, for TDLib to send on the next launch.
+Each launch removes what opened files left at least a day ago.
 
 The logs (`label=app.model`) say `file opened` with its type, `opened file
 copied` with whether it goes as a photo or a document, `opened file handed to
