@@ -139,8 +139,9 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
-    /// Words every voice says differently, as `VoiceLoop.pronunciations`, in the order settings
-    /// lists them. Persisted.
+    /// Words said differently, as `VoiceLoop.pronunciations`, in the order settings lists them: a Say As
+    /// entry by every voice, an IPA entry by the Kokoro voices only (the system voices say its word as
+    /// written). Persisted.
     public var pronunciations: [Pronunciation] {
         didSet {
             do {
