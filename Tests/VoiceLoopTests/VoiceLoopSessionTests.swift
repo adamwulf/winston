@@ -1245,6 +1245,9 @@ struct SoundCueTests {
         // Listening ends at once; the engine runs on only to play the stop cue.
         #expect(loop.state == .off)
         #expect(engine.isRunning)
+        // The stop cue (170 ms, two passes) renders now, before an await lets the engine's
+        // teardown timer run: however slow the machine, the cue has played before the engine stops.
+        bed.audio.render(passes: 4)
         #expect(await eventually { bed.recognizer.isCancelled })
         #expect(await eventually { !engine.isRunning })
         // The whole stop cue played: the same taps as the start cue, in the other order.
@@ -1714,6 +1717,7 @@ struct WorkingCueTests {
         let beforeAlone = bed.audio.playedFrames
         loop.speak("Done.")
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         #expect(await staysSilent(on: bed))
         let reply = bed.audio.playedFrames - beforeAlone
         let taps = soundingFrames(of: .agentWorking)
@@ -1984,6 +1988,9 @@ struct WorkingCueTests {
 
         #expect(loop.state == .off)
         #expect(engine.isRunning)
+        // The stop cue (170 ms, two passes) renders now, before an await lets the engine's
+        // teardown timer run: however slow the machine, the cue has played before the engine stops.
+        bed.audio.render(passes: 4)
         #expect(await eventually { !engine.isRunning })
         let stopCue = soundingFrames(of: .listeningStopped)
         #expect(abs(bed.audio.playedFrames - played - stopCue) <= stopCue / 10)
@@ -2385,8 +2392,8 @@ struct PushToTalkTests {
     @Test func aPressAndAReleaseEachPlayTheirCueAndOpeningOrClosingPlaysNone() async throws {
         let bed = VoiceTestBed()
         let loop = try await pushToTalkLoop(on: bed, soundCues: true)
-        try await settle()
-        // Starting isn't a press: Adam can't talk yet.
+        // Starting isn't a press: Adam can't talk yet. A start cue, had it played, would have by now.
+        #expect(await cuesPlayOut(on: bed))
         #expect(bed.audio.playedFrames == 0)
 
         loop.beginTalking()
