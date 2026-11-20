@@ -155,9 +155,16 @@ public final class VoiceLoop {
     /// with its own chime; on macOS the loop mutes it, through `microphoneGate`. Either way the
     /// stop cue plays on mute and the start cue on unmute. What was said before a mute is sent
     /// after the pause, as usual. Stopping voice mode unmutes it.
+    ///
+    /// The system makes the press a mute only during a call, so voice mode also takes it as a
+    /// media remote command (play, pause or play/pause), which mutes or unmutes it the same way.
+    /// See `installRemoteCommands()`.
     public private(set) var isInputMuted = false
     /// Follows the AirPods mute while voice mode runs (see `isInputMuted`). Nil while it is off.
     @ObservationIgnored private var inputMuteObserver: Task<Void, Never>?
+    /// Takes the media remote commands while voice mode runs (see `installRemoteCommands()`).
+    /// Nil while it is off, and in tests that don't set `VoiceEnvironment.makeNowPlaying`.
+    @ObservationIgnored private var nowPlaying: (any NowPlaying)?
     /// Called when voice mode ends because the audio input or output device changed, such as
     /// AirPods connecting or being taken out, right after `state` turns `.off`, so the app can
     /// leave voice mode as if Adam had. Not called for any other stop. Voice mode doesn't start
@@ -1469,6 +1476,7 @@ public final class VoiceLoop {
             Self.log.error("input mute handler failed to install", error.logContext())
         }
         #endif
+        installRemoteCommands()
     }
 
     /// Stops following the AirPods mute, and unmutes the microphone, when voice mode stops.
@@ -1495,6 +1503,11 @@ public final class VoiceLoop {
         #endif
         microphoneGate.setMuted(false)
         isInputMuted = false
+        if let nowPlaying {
+            nowPlaying.remove()
+            self.nowPlaying = nil
+            Self.log.notice("remote commands removed", ["platform": Self.platform])
+        }
         Self.log.notice("input mute observer removed", ["platform": Self.platform])
     }
 
@@ -1504,7 +1517,56 @@ public final class VoiceLoop {
         Self.log.notice("input mute changed", ["muted": isMuted, "platform": Self.platform])
         guard isMuted != isInputMuted else { return }
         isInputMuted = isMuted
+        nowPlaying?.setMuted(isMuted)
         play(isMuted ? .listeningStopped : .listeningStarted)
+    }
+
+    /// Takes a press of the AirPods stem as a media remote command too, while voice mode runs.
+    /// The system makes the press the input mute gesture above only during a call (a CallKit
+    /// call on iOS); otherwise a press may come to the Now Playing app as play, pause or
+    /// play/pause. Each of them toggles the mute (`toggleInputMute()`). Voice mode shows as
+    /// playing, and as paused while muted, so the press after a mute may come as play.
+    ///
+    /// What can keep the commands from coming (from Apple's guidance; only a device can tell):
+    /// - iOS sends them only to the Now Playing app, and a session that mixes with other audio
+    ///   can't be it. `activateAudioSession` sets `.mixWithOthers` while `pausesOtherAudio` is
+    ///   off ("Pause Other Audio" in the app's settings), so that must be on.
+    /// - The Now Playing app is one that has started playing audio; voice mode's start cue does.
+    /// - With the microphone in use the AirPods are on HFP, and their press may then go out as
+    ///   a call control, which only a CallKit call receives, rather than as a media command.
+    /// - On macOS the Now Playing app is chosen by `MPNowPlayingInfoCenter.playbackState`.
+    private func installRemoteCommands() {
+        guard let nowPlaying = environment.makeNowPlaying?() else { return }
+        nowPlaying.install(isMuted: isInputMuted) { [weak self] command in
+            self?.remoteCommandReceived(command)
+        }
+        self.nowPlaying = nowPlaying
+        Self.log.notice("remote commands installed", ["platform": Self.platform, "pausesOtherAudio": pausesOtherAudio])
+    }
+
+    /// A press of the AirPods stem came as a media remote command: toggles the mute.
+    private func remoteCommandReceived(_ command: RemoteCommand) {
+        Self.log.notice("remote command received", ["command": command.rawValue, "muted": isInputMuted, "platform": Self.platform])
+        // Voice mode may have stopped since the press.
+        guard nowPlaying != nil else { return }
+        toggleInputMute()
+        Self.log.notice("remote command handled", ["command": command.rawValue, "muted": isInputMuted, "platform": Self.platform])
+    }
+
+    /// Mutes the microphone, or unmutes it if muted, as the AirPods mute gesture would: through
+    /// `AVAudioApplication`, which mutes the input on iOS and calls the mute handler, which mutes
+    /// `microphoneGate`, on macOS. Shows the change and plays its cue at once, since the mute
+    /// notification may come late or not at all (iOS sends it only while the session records);
+    /// when it comes, it finds nothing changed, so the cue plays once.
+    private func toggleInputMute() {
+        let muted = !isInputMuted
+        do {
+            try environment.setInputMuted(muted)
+        } catch {
+            Self.log.warning("toggling the input mute failed", error.logContext(["muted": "\(muted)", "platform": Self.platform]))
+            return
+        }
+        inputMuteChanged(muted)
     }
 
     // MARK: - Audio devices

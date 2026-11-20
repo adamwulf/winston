@@ -65,6 +65,14 @@ package struct VoiceEnvironment: Sendable {
     /// Told the text of each utterance the system voice is about to say. Nothing in the app;
     /// tests can't hear the system voice, so they read what it was given here.
     package var systemVoiceWillSay: @MainActor @Sendable (String) -> Void
+    /// Mutes or unmutes the app's audio input, as `AVAudioApplication.setInputMuted(_:)` does:
+    /// on iOS the system mutes it, and on macOS it calls the loop's mute handler. Nothing unless
+    /// a test sets it, since the mute belongs to the whole process, which the tests share.
+    package var setInputMuted: @MainActor @Sendable (Bool) throws -> Void
+    /// The media remote commands and Now Playing info for one voice mode session, which take a
+    /// press of the AirPods stem (see `VoiceLoop.isInputMuted`). Nil unless a test sets it, so
+    /// the tests don't make themselves the system's Now Playing app.
+    package var makeNowPlaying: (@MainActor @Sendable () -> any NowPlaying)?
 
     package init(
         requestPermissions: @escaping @MainActor @Sendable () async throws -> Void,
@@ -79,7 +87,9 @@ package struct VoiceEnvironment: Sendable {
         now: @escaping @MainActor @Sendable () -> Date,
         kokoroUnchosenSince: @escaping @MainActor @Sendable () -> Date?,
         setKokoroUnchosenSince: @escaping @MainActor @Sendable (Date?) -> Void,
-        systemVoiceWillSay: @escaping @MainActor @Sendable (String) -> Void = { _ in }
+        systemVoiceWillSay: @escaping @MainActor @Sendable (String) -> Void = { _ in },
+        setInputMuted: @escaping @MainActor @Sendable (Bool) throws -> Void = { _ in },
+        makeNowPlaying: (@MainActor @Sendable () -> any NowPlaying)? = nil
     ) {
         self.requestPermissions = requestPermissions
         self.makeRecognizer = makeRecognizer
@@ -94,5 +104,28 @@ package struct VoiceEnvironment: Sendable {
         self.kokoroUnchosenSince = kokoroUnchosenSince
         self.setKokoroUnchosenSince = setKokoroUnchosenSince
         self.systemVoiceWillSay = systemVoiceWillSay
+        self.setInputMuted = setInputMuted
+        self.makeNowPlaying = makeNowPlaying
     }
+}
+
+/// A media remote command that voice mode takes as a press of the AirPods stem.
+package enum RemoteCommand: String, Sendable {
+    case togglePlayPause
+    case play
+    case pause
+}
+
+/// The system's media remote commands and Now Playing info, for one voice mode session. In the
+/// app, `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter`; see `LiveVoiceEnvironment.swift`.
+@MainActor
+package protocol NowPlaying: AnyObject {
+    /// Starts taking the play, pause and play/pause commands, calling `handler` on the main actor
+    /// with each one, and shows voice mode as Now Playing: paused while `isMuted`, playing
+    /// otherwise.
+    func install(isMuted: Bool, handler: @escaping @MainActor @Sendable (RemoteCommand) -> Void)
+    /// Shows voice mode as paused while muted, and as playing otherwise.
+    func setMuted(_ isMuted: Bool)
+    /// Stops taking the commands, and clears the Now Playing info.
+    func remove()
 }

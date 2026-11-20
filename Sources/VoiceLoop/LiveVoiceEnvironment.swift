@@ -4,6 +4,7 @@ import CoreAudio
 #endif
 import Logging
 import LogSupport
+import MediaPlayer
 import Speech
 
 // The real permission prompts, speech model, audio hardware, clock and user defaults behind
@@ -28,12 +29,62 @@ extension VoiceEnvironment {
         systemVoices: { VoiceLoop.systemVoices(language: $0) },
         now: { Date.now },
         kokoroUnchosenSince: { UserDefaults.standard.object(forKey: kokoroUnchosenSinceKey) as? Date },
-        setKokoroUnchosenSince: { UserDefaults.standard.set($0, forKey: kokoroUnchosenSinceKey) }
+        setKokoroUnchosenSince: { UserDefaults.standard.set($0, forKey: kokoroUnchosenSinceKey) },
+        setInputMuted: { try AVAudioApplication.shared.setInputMuted($0) },
+        makeNowPlaying: { LiveNowPlaying() }
     )
 }
 
 /// Where `VoiceEnvironment.live` keeps `kokoroUnchosenSince` in the standard user defaults.
 private let kokoroUnchosenSinceKey = "kokoroUnchosenSince"
+
+/// `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter`, for `VoiceEnvironment.makeNowPlaying`.
+@MainActor
+private final class LiveNowPlaying: NowPlaying {
+    /// The commands taken, each with the target that removes its handler.
+    private var targets: [(command: MPRemoteCommand, target: Any)] = []
+
+    func install(isMuted: Bool, handler: @escaping @MainActor @Sendable (RemoteCommand) -> Void) {
+        let center = MPRemoteCommandCenter.shared()
+        let commands: [(MPRemoteCommand, RemoteCommand)] = [
+            (center.togglePlayPauseCommand, .togglePlayPause),
+            (center.playCommand, .play),
+            (center.pauseCommand, .pause),
+        ]
+        targets = commands.map { command, name in
+            command.isEnabled = true
+            let target = command.addTarget { @Sendable _ in
+                // MediaPlayer doesn't say which thread it calls from.
+                Task { @MainActor in handler(name) }
+                return .success
+            }
+            return (command, target)
+        }
+        setMuted(isMuted)
+    }
+
+    func setMuted(_ isMuted: Bool) {
+        let center = MPNowPlayingInfoCenter.default()
+        center.nowPlayingInfo = [
+            MPMediaItemPropertyTitle: "Winston voice mode",
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPNowPlayingInfoPropertyIsLiveStream: true,
+            MPNowPlayingInfoPropertyPlaybackRate: isMuted ? 0.0 : 1.0,
+        ]
+        // macOS picks its Now Playing app by this; iOS by the audio session.
+        center.playbackState = isMuted ? .paused : .playing
+    }
+
+    func remove() {
+        for (command, target) in targets {
+            command.removeTarget(target)
+        }
+        targets = []
+        let center = MPNowPlayingInfoCenter.default()
+        center.nowPlayingInfo = nil
+        center.playbackState = .stopped
+    }
+}
 
 #if os(iOS)
 /// A notification observer, to remove from another thread when its stream ends.
