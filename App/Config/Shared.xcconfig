@@ -11,6 +11,15 @@ CURRENT_PROJECT_VERSION = 1
 PUSH_ENVIRONMENT = production
 PUSH_ENVIRONMENT[config=Debug] = development
 
+// With Info.plist's document types. NO on iOS: iOS hands Winston a copy of a file opened in it,
+// in Documents/Inbox, which Winston removes, rather than the file in place. App Store Connect
+// warns about an iOS app with document types that leaves this out (ITMS-90737). YES on the Mac,
+// which hands over the file itself: the Mac build refuses NO, and without a Mac value of its own
+// it fails the same way, as of Xcode 27.2.
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=iphoneos*] = NO
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=iphonesimulator*] = NO
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=macosx*] = YES
+
 // Push is off: the App ID doesn't have Push Notifications yet, so no profile carries
 // aps-environment and App Store export fails. Config/iOS.entitlements holds that entitlement
 // but isn't signed in. To turn push on, follow plans/enable-push.md.
