@@ -160,6 +160,10 @@ enum MisakiPhonemes {
                 symbols += [isRhotic(consonant) ? "ə" : "ᵊ", consonant]
             case "-", "‿":
                 symbols.append(".")
+            case "˞":
+                // The rhotic hook: ə˞ and ɜ˞ are ɚ and ɝ, a vowel and an r.
+                guard !symbols.isEmpty else { continue }
+                symbols.append("ɹ")
             case "ː", "ˑ":
                 // A long e or o is the vowel of "say" or "go", even before an r: kɔˈroːro is
                 // Kokoro, not "kor-or-o".
@@ -177,9 +181,11 @@ enum MisakiPhonemes {
         return symbols
     }
 
-    /// Two IPA symbols that misaki writes as one.
+    /// Two IPA symbols that misaki writes as one, in one syllable: a syllable break between them
+    /// keeps them apart.
     private static let pairs: [String: String] = [
-        "eɪ": "A",
+        // "ei" too, as "ei̯" is once its non-syllabic mark is taken out.
+        "eɪ": "A", "ei": "A",
         "aɪ": "I", "ai": "I", "ɑɪ": "I", "ʌɪ": "I",
         "aʊ": "W", "au": "W", "ɑʊ": "W", "æʊ": "W",
         "ɔɪ": "Y", "oɪ": "Y", "ɔi": "Y",
@@ -193,7 +199,7 @@ enum MisakiPhonemes {
         "g": ["ɡ"],
         "ɚ": ["ə", "ɹ"], "ɝ": ["ɜ", "ɹ"],
         // On their own, in American English: the vowels of "bed" and "father", and the reduced
-        // vowels. The vowel of "say" is eɪ, or eː (see `symbols(in:)`).
+        // vowels. The vowel of "say" is eɪ or ei (see `pairs`), or eː (see `symbols(in:)`).
         "e": ["ɛ"], "a": ["ɑ"], "ɒ": ["ɑ"], "ɐ": ["ə"], "ɨ": ["ᵻ"], "ʉ": ["u"],
         "ɫ": ["l"], "ʍ": ["w"],
         ".": [],

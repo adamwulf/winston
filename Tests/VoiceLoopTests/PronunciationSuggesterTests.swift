@@ -96,6 +96,20 @@ import Testing
         #expect(misaki("ˈbɛr") == "bˈɛɹ")
     }
 
+    @Test func eiInOneSyllableIsTheVowelOfSayAndAcrossASyllableBreakTwoVowels() {
+        #expect(misaki("ˈbeik") == "bˈAk")
+        // ei̯, with its non-syllabic mark.
+        #expect(misaki("ˈbei\u{032F}k") == "bˈAk")
+        // Deity.
+        #expect(misaki("ˈde.ɪ.ti") == "dˈɛɪti")
+        #expect(misaki("ˈde.i.ti") == "dˈɛiti")
+    }
+
+    @Test func aRhoticHookIsAnR() {
+        #expect(misaki("ˈbʌtə˞") == "bˈʌtəɹ")
+        #expect(misaki("ˈbɜ˞d") == "bˈɜɹd")
+    }
+
     @Test func oIsTheVowelOfOrBeforeAnRAndOfGoElsewhere() {
         #expect(misaki("ˈfor") == "fˈɔɹ")
         #expect(misaki("ˈɡo") == "ɡˈO")
