@@ -12,8 +12,10 @@ import Synchronization
 ///   an engine has started (`reason=start`), a new one has replaced it (`rebuild`), or it has
 ///   started again after it stopped itself (`restart`), each written after the start's or the
 ///   restart's work is done. A start's line says what its start check did (`startCheck`).
-/// - `engine configuration changed`: the same, at each `AVAudioEngineConfigurationChange`, with
-///   the values that changed since the line before (`<key>Before`, `changed`).
+/// - `engine configuration changed`: the same, for each `AVAudioEngineConfigurationChange`, dated
+///   when it came and read once the loop has dealt with it (`handling`), with the values that
+///   changed since the line before it (`<key>Before`, `changed`). `voice.loop`'s "audio engine
+///   stopped" gives the formats as the engine stopped.
 /// - `cue played`: each cue the loop plays, with its level.
 /// - `reply started`: how long since the engine started, the route changed, the last reply ended
 ///   and the last cue stopped sounding; the volumes; the route and, on iOS, the microphone's
@@ -235,16 +237,40 @@ final class EchoLog {
         logger.notice("engine audio state", context(pipeline, at: time, fields))
     }
 
-    /// `pipeline`'s engine posted `AVAudioEngineConfigurationChange`. Logs its state now against
-    /// the state last logged, before the loop starts it again.
-    func configurationChanged(_ pipeline: Pipeline) {
-        let time = TimelineClock.now()
+    /// An `AVAudioEngineConfigurationChange`, noted as it came.
+    struct ConfigurationChange {
+        /// In host time.
+        fileprivate let time: UInt64
+        /// The engine's state as last logged.
+        fileprivate let before: EngineAudioState?
+        fileprivate let engineStartTime: UInt64?
+        fileprivate let routeChangeTime: UInt64?
+    }
+
+    /// An engine posted `AVAudioEngineConfigurationChange`. Only notes the time and what was
+    /// logged before: the loop calls it as the change comes, deals with the change, then calls
+    /// `logConfigurationChange(_:of:handling:)`.
+    func noteConfigurationChange() -> ConfigurationChange {
+        ConfigurationChange(
+            time: TimelineClock.now(),
+            before: engineState,
+            engineStartTime: engineStartTime,
+            routeChangeTime: routeChangeTime
+        )
+    }
+
+    /// Logs `change` to `pipeline`'s engine, dated when it came: the engine's state now, once the
+    /// loop has dealt with it, against the state logged before it. `handling` says what the loop
+    /// did: `none` (the engine ran on), `restarted`, `replaced` (a rebuild follows), `stopped`
+    /// (voice mode ended) or `devicesChanged` (voice mode ended for new devices).
+    func logConfigurationChange(_ change: ConfigurationChange, of pipeline: Pipeline, handling: String) {
         let state = EngineAudioState(pipeline)
-        var fields = engineState.map { state.fields(changedFrom: $0) } ?? state.fields
+        var fields = change.before.map { state.fields(changedFrom: $0) } ?? state.fields
         engineState = state
-        fields["sinceEngineStartMs"] = Self.milliseconds(since: engineStartTime, to: time)
-        fields["sinceRouteChangeMs"] = Self.milliseconds(since: routeChangeTime, to: time)
-        logger.notice("engine configuration changed", context(pipeline, at: time, fields))
+        fields["handling"] = handling
+        fields["sinceEngineStartMs"] = Self.milliseconds(since: change.engineStartTime, to: change.time)
+        fields["sinceRouteChangeMs"] = Self.milliseconds(since: change.routeChangeTime, to: change.time)
+        logger.notice("engine configuration changed", context(pipeline, at: change.time, fields))
     }
 
     /// The iOS audio route changed. "audio route changed" in `voice.loop` says how.

@@ -518,18 +518,23 @@ public final class VoiceLoop {
                 // starts), unless the devices changed: that ends voice mode.
                 for await _ in configurationChanges {
                     guard let self, let pipeline, self.pipeline === pipeline else { return }
-                    self.echo.configurationChanged(pipeline)
+                    // Only the time: the echo log writes the change once it has been dealt with.
+                    let change = self.echo.noteConfigurationChange()
                     #if os(macOS)
                     // On the Mac a change of the default input or output can show here, in the
                     // 100 ms check above, or at the end of a rebuild. On iOS the route change
                     // says whether a device came or went (`routeChanged(_:)`).
                     if self.stopIfDevicesChanged(source: "configurationChange") {
+                        self.echo.logConfigurationChange(change, of: pipeline, handling: "devicesChanged")
                         return
                     }
                     #endif
+                    var handling = "none"
                     if !pipeline.engine.isRunning {
                         self.engineStopped(pipeline, source: "configurationChange")
+                        handling = self.pipeline === pipeline ? "restarted" : self.state == .off ? "stopped" : "replaced"
                     }
+                    self.echo.logConfigurationChange(change, of: pipeline, handling: handling)
                 }
             },
         ]
