@@ -48,6 +48,67 @@ struct JPEGForSendingTests {
             try await PhotoFiles.jpegForSending(from: Data())
         }
     }
+
+    @Test func anImageFileIsReEncodedAndScaledDownAsItsDataIs() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "wide.png")
+        try imageData(width: 4000, height: 2000).write(to: file)
+
+        let jpeg = try await PhotoFiles.jpegForSending(fromFileAt: file)
+        defer { try? FileManager.default.removeItem(at: jpeg) }
+
+        #expect(try imageFileInfo(at: jpeg) == ImageFileInfo(type: UTType.jpeg.identifier, width: 2560, height: 1280))
+        #expect(jpeg.deletingLastPathComponent().pathComponents == URL.temporaryDirectory.pathComponents)
+    }
+
+    @Test func aFileThatIsNotAnImageIsUnreadable() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "notes.txt")
+        try Data("not an image".utf8).write(to: file)
+
+        await #expect(throws: PhotoFiles.Failure.unreadableImage) {
+            try await PhotoFiles.jpegForSending(fromFileAt: file)
+        }
+    }
+}
+
+/// Which opened files go as a photo: a still image ImageIO reads.
+@Suite(.timeLimit(.minutes(1)))
+struct IsStillImageTests {
+    @Test func aStillImageIs() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        for type in [UTType.png, .jpeg, .gif, .tiff] {
+            let file = folder.appending(path: "still").appendingPathExtension(for: type)
+            try imageData(width: 40, height: 30, type: type).write(to: file)
+
+            #expect(await PhotoFiles.isStillImage(at: file), "\(type.identifier)")
+        }
+    }
+
+    @Test func anAnimatedGIFIsNot() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appending(path: "dancing.gif")
+        try imageData(width: 40, height: 30, type: .gif, frames: 3).write(to: file)
+
+        #expect(await !PhotoFiles.isStillImage(at: file))
+    }
+
+    @Test func aPDFATextFileAndAMissingFileAreNot() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let pdf = folder.appending(path: "manual.pdf")
+        try pdfData().write(to: pdf)
+        let text = folder.appending(path: "notes.txt")
+        try Data("not an image".utf8).write(to: text)
+
+        #expect(await !PhotoFiles.isStillImage(at: pdf))
+        #expect(await !PhotoFiles.isStillImage(at: text))
+        #expect(await !PhotoFiles.isStillImage(at: folder.appending(path: "gone.png")))
+    }
 }
 
 /// Decoding an image file to show in the chat.

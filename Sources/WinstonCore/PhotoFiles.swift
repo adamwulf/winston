@@ -16,6 +16,30 @@ public enum PhotoFiles {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw Failure.unreadableImage
         }
+        return try jpeg(from: source)
+    }
+
+    /// The same, from an image file, which ImageIO reads without loading it all first.
+    @concurrent
+    public static func jpegForSending(fromFileAt url: URL) async throws -> URL {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw Failure.unreadableImage
+        }
+        return try jpeg(from: source)
+    }
+
+    /// Whether a file is a still image `jpegForSending` converts: of an image type ImageIO reads,
+    /// with one frame. Not a PDF, which ImageIO may read but isn't an image type, nor an animated
+    /// GIF or PNG or a multi-page TIFF, whose JPEG would keep only the first frame.
+    @concurrent
+    public static func isStillImage(at url: URL) async -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let type = CGImageSourceGetType(source) as String?,
+              UTType(type)?.conforms(to: .image) == true else { return false }
+        return CGImageSourceGetCount(source) == 1
+    }
+
+    private static func jpeg(from source: CGImageSource) throws -> URL {
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         let width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
         let height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0

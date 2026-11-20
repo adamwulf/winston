@@ -17,18 +17,7 @@ func makeTemporaryFolder() throws -> URL {
 /// A solid red image of `width` by `height` stored pixels, encoded as `type`. `orientation` is
 /// the EXIF orientation stored with it, as a camera does when the phone is held sideways.
 func imageData(width: Int, height: Int, type: UTType = .png, orientation: Int? = nil) throws -> Data {
-    let context = try #require(CGContext(
-        data: nil,
-        width: width,
-        height: height,
-        bitsPerComponent: 8,
-        bytesPerRow: 0,
-        space: CGColorSpaceCreateDeviceRGB(),
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ))
-    context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
-    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-    let image = try #require(context.makeImage())
+    let image = try solidRedImage(width: width, height: height)
     let data = NSMutableData()
     let destination = try #require(CGImageDestinationCreateWithData(
         data as CFMutableData,
@@ -40,6 +29,51 @@ func imageData(width: Int, height: Int, type: UTType = .png, orientation: Int? =
     CGImageDestinationAddImage(destination, image, properties)
     try #require(CGImageDestinationFinalize(destination))
     return data as Data
+}
+
+/// `frames` solid red frames of `width` by `height`, encoded as `type`: an animated GIF, say.
+func imageData(width: Int, height: Int, type: UTType, frames: Int) throws -> Data {
+    let image = try solidRedImage(width: width, height: height)
+    let data = NSMutableData()
+    let destination = try #require(CGImageDestinationCreateWithData(
+        data as CFMutableData,
+        type.identifier as CFString,
+        frames,
+        nil
+    ))
+    for _ in 0..<frames {
+        CGImageDestinationAddImage(destination, image, nil)
+    }
+    try #require(CGImageDestinationFinalize(destination))
+    return data as Data
+}
+
+/// A one-page PDF, which ImageIO can read but isn't an image type.
+func pdfData() throws -> Data {
+    let data = NSMutableData()
+    let consumer = try #require(CGDataConsumer(data: data as CFMutableData))
+    var box = CGRect(x: 0, y: 0, width: 100, height: 100)
+    let context = try #require(CGContext(consumer: consumer, mediaBox: &box, nil))
+    context.beginPDFPage(nil)
+    context.fill(box)
+    context.endPDFPage()
+    context.closePDF()
+    return data as Data
+}
+
+private func solidRedImage(width: Int, height: Int) throws -> CGImage {
+    let context = try #require(CGContext(
+        data: nil,
+        width: width,
+        height: height,
+        bitsPerComponent: 8,
+        bytesPerRow: 0,
+        space: CGColorSpaceCreateDeviceRGB(),
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ))
+    context.setFillColor(red: 1, green: 0, blue: 0, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return try #require(context.makeImage())
 }
 
 /// What ImageIO reads from an image file.

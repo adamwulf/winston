@@ -27,7 +27,14 @@ final class Harness {
     ///   - settings: values already in the user defaults when the model starts up.
     ///   - soundCues: whether the voice loop plays its sound cues. Off by default, so the only
     ///     sound in voice mode is what is spoken.
-    init(fake: FakeTDLib = FakeTDLib(), settings: [String: Any] = [:], soundCues: Bool = false) {
+    ///   - openedFileInbox: the folder standing in for iOS's Documents/Inbox, where the system
+    ///     puts a file it opens in Winston. None by default, as on the Mac.
+    init(
+        fake: FakeTDLib = FakeTDLib(),
+        settings: [String: Any] = [:],
+        soundCues: Bool = false,
+        openedFileInbox: URL? = nil
+    ) {
         self.fake = fake
         for (key, value) in settings {
             testDefaults.defaults.set(value, forKey: key)
@@ -36,7 +43,8 @@ final class Harness {
             link: fake.makeLink(typingTimeout: .seconds(60)),
             voiceLoop: bed.makeLoop(soundCues: soundCues),
             defaults: testDefaults.defaults,
-            pronunciationSuggester: suggester
+            pronunciationSuggester: suggester,
+            openedFileInbox: openedFileInbox
         )
     }
 
