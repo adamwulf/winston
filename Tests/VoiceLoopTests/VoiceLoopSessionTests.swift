@@ -1892,6 +1892,30 @@ struct WorkingCueTests {
         #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
     }
 
+    @Test func tapsWaitLongerOnlyAfterAShiftedReplyIsCutOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        loop.speechPitch = 2
+
+        // A shifted reply that plays to its end leaves the usual 0.1 s lead-in.
+        loop.speak("Done.")
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(loop.workingCueLeadIn == 0.1)
+
+        // One cut off mid-sound runs on out of the shift: the next taps wait 0.13 s.
+        let before = bed.audio.playedFrames
+        loop.speak("One. Two. Three. Four.")
+        #expect(await eventually { bed.audio.playedFrames > before })
+        loop.stopSpeaking()
+        #expect(loop.workingCueLeadIn == 0.13)
+
+        // Those taps take it, and the ones after them are back to 0.1 s.
+        loop.isAgentWorking = true
+        #expect(loop.hasPlayedWorkingCue)
+        #expect(loop.workingCueLeadIn == 0.1)
+    }
+
     @Test func aReplyThatStartsWhileTheTapsPlayCutsThemOffAndTheyPlayAfterIt() async throws {
         let bed = VoiceTestBed()
         let loop = try await recordingKokoroLoopWithCues(on: bed)

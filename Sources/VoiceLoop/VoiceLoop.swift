@@ -213,6 +213,18 @@ public final class VoiceLoop {
     /// Whether `SoundCue.agentWorking` has played since `isAgentWorking` last turned on. A play
     /// that was cut off before it finished, by a reply or by the engine stopping, doesn't count.
     @ObservationIgnored package private(set) var hasPlayedWorkingCue = false
+    /// Whether a reply was cut off with the pitch shift on, and neither another reply nor the
+    /// working cue has played since: see `workingCueLeadIn`.
+    @ObservationIgnored private var shiftedReplyWasCutOff = false
+
+    /// How long the working taps would wait before starting if they played now, in seconds. A
+    /// reply that has just ended or been cut off can still be on its way out of the pitch shift,
+    /// which keeps sounding as it empties, and offline it holds a render pass of it (see
+    /// `SpeechOutput.completion`): `SpeechOutput.pitchShiftTail`. A shifted reply cut off
+    /// mid-sound runs on longer, so the taps after one wait `SpeechOutput.cutOffPitchShiftTail`.
+    package var workingCueLeadIn: Double {
+        shiftedReplyWasCutOff ? SpeechOutput.cutOffPitchShiftTail : SpeechOutput.pitchShiftTail
+    }
 
     /// One element per finished utterance. Iterate it from one long-lived task (for example
     /// the app model): it has a single consumer, and cancelling that iteration ends the
@@ -815,13 +827,11 @@ public final class VoiceLoop {
         lastCueID += 1
         let id = lastCueID
         unfinishedCues.append((id, cue))
-        // The working cue can follow a reply that has just ended or been cut off: some of it can
-        // still be on its way out of the pitch shift then, which keeps sounding as it empties,
-        // and offline it holds a render pass of it (see `SpeechOutput.completion`). The taps
-        // start after that. A shifted reply cut off mid-sound runs on longer
-        // (`SpeechOutput.cutOffPitchShiftTail`), so with the shift on they wait for that.
-        let tail = pipeline.speech.pitchShift.bypass ? SpeechOutput.pitchShiftTail : SpeechOutput.cutOffPitchShiftTail
-        let leadIn = cue == .agentWorking ? tail : 0
+        // The working cue starts once the reply before it is out of the pitch shift.
+        let leadIn = cue == .agentWorking ? workingCueLeadIn : 0
+        if cue == .agentWorking {
+            shiftedReplyWasCutOff = false
+        }
         pipeline.play(cue, leadIn: leadIn) { [weak self] in
             Task { @MainActor in self?.cueFinished(id) }
         }
@@ -1154,6 +1164,8 @@ public final class VoiceLoop {
             speechQueue.insert(currentSpeech.text, at: 0)
         }
         silence(consumingEcho: true, reason: "teardown")
+        // Its engine goes, and with it whatever the shift was still holding.
+        shiftedReplyWasCutOff = false
         if kind == .stop {
             speechQueue.removeAll()
             // A hold ends with voice mode. Through a rebuild it carries on.
@@ -1665,6 +1677,8 @@ public final class VoiceLoop {
             Task { @MainActor in self?.speechFinished(playback) }
         }
         currentSpeech = playback
+        // Taps after this reply follow how it ends, not how the one before did.
+        shiftedReplyWasCutOff = false
         state = .speaking
         // The reply's log reports what the microphone heard while it played.
         _ = pipeline.voiceActivity.takePeakDecibels()
@@ -1803,6 +1817,7 @@ public final class VoiceLoop {
     /// says why, for the logs.
     private func silence(consumingEcho: Bool, reason: String) {
         guard let currentSpeech else { return }
+        shiftedReplyWasCutOff = pipeline.map { !$0.speech.pitchShift.bypass } ?? false
         pipeline?.timeline.speechStopRequested(reason: reason)
         logReplyEnded(currentSpeech, reason: reason)
         self.currentSpeech = nil
