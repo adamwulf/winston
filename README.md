@@ -423,11 +423,15 @@ voice says in its place, or IPA, Kokoro phonemes in Kokoro's notation (IPA with
 capitals for the diphthongs A, I, O, W and Y, as in `kˈOkəɹO` for "Kokoro";
 KokoroTTS drops a symbol it doesn't have). IPA is for the Kokoro voices only:
 KokoroTTS takes phonemes for single lowercase words and can't forget them, so an
-IPA word becomes a made-up placeholder word (`PhoneticPlaceholders`), and each
-sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro` adds
-to the loaded model with `addPronunciations` before rendering it. The system
-voices get each placeholder back as its word, as written. A placeholder lasts
-the run, so a reply queued before its pronunciation was removed still says it.
+IPA word becomes made-up placeholder words (`PhoneticPlaceholders`), one for
+each word of its phonemes so KokoroTTS can cut a long sentence between them, and
+each sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro`
+adds to the loaded model with `addPronunciations` before rendering it. The
+system voices get the placeholders back as the word, as written. Sentence
+punctuation that ends the word ("Yahoo!") stays after the placeholders, so the
+sentence still ends there. Placeholders are kept by word and phonemes for the
+whole run, so a reply queued before its pronunciation was changed or removed
+still says what it was queued with, as a Say As reply does.
 `AppModel` saves the pronunciations in the standard user defaults, under
 `pronunciations`; one saved before IPA existed is Say As.
 

@@ -487,9 +487,9 @@ struct PronunciationPreviewTests {
         #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
 
         let requests = harness.bed.kokoro.requests
-        let placeholder = try #require(requests.first?.text)
-        #expect(requests.map(\.text) == [placeholder, placeholder])
-        #expect(requests.map(\.pronunciations) == [[placeholder: "kˈOkəɹO"], [placeholder: "kəkˈɔɹO"]])
+        #expect(requests.map { Array($0.pronunciations.values) } == [["kˈOkəɹO"], ["kəkˈɔɹO"]])
+        // Each is the placeholder Kokoro was given the phonemes for, with the word's capital.
+        #expect(requests.allSatisfy { [$0.text.lowercased()] == Array($0.pronunciations.keys) && $0.text.first?.isUppercase == true })
         #expect(harness.bed.systemVoiceTexts.isEmpty)
     }
 
@@ -508,14 +508,27 @@ struct PronunciationPreviewTests {
     @Test func ipaPhonemesOrTheirWordLeftBlankSayNothingAndWhatIsBeingSaidCarriesOn() async throws {
         let harness = Harness()
         let model = harness.model
+        let bed = harness.bed
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
         await model.setVoiceMode(true)
+        // Held while Kokoro renders it, so a cut-off would drop it.
+        bed.kokoro.holdsSynthesis = true
         model.previewVoice()
-        #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
 
         model.previewPronunciation(word: "Kokoro", phonemes: "  ")
         model.previewPronunciation(word: " ", phonemes: "kˈOkəɹO")
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
 
         #expect(model.voiceLoop.state == .speaking)
+        #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
+        try await settle(.milliseconds(50))
+        // The voice preview was the only thing said, and all of it played.
+        #expect(bed.kokoro.requests.map(\.text) == ["This is how I sound with the Heart voice."])
+        let sentenceFrames = Int(FakeKokoro.secondsPerSentence * 48_000)
+        #expect(abs(bed.audio.playedFrames - sentenceFrames) <= sentenceFrames / 20)
     }
 }
 

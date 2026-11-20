@@ -59,7 +59,7 @@ struct PronunciationReplacer {
 
     /// Words and replacements are trimmed, and one left blank is skipped: it is still being
     /// typed. Of two with the same word, the first counts, whatever their modes. A phonetic
-    /// pronunciation takes its placeholder from `placeholders`, and is skipped if it has none
+    /// pronunciation takes its placeholders from `placeholders`, and is skipped if it has none
     /// there.
     init(_ pronunciations: [Pronunciation], placeholders: PhoneticPlaceholders = PhoneticPlaceholders()) {
         var replacements: [String: String] = [:]
@@ -71,13 +71,8 @@ struct PronunciationReplacer {
             case .respelling:
                 replacements[word] = replacement
             case .phonetic:
-                guard let placeholder = placeholders.placeholder(for: pronunciation.id) else { continue }
-                // With the word's capital, if it starts with one: Kokoro's sentences are found
-                // by `NLTokenizer`, which reads a lowercase word after a full stop as the same
-                // sentence going on.
-                replacements[word] = word.first?.isUppercase == true
-                    ? placeholder.prefix(1).uppercased() + placeholder.dropFirst()
-                    : placeholder
+                guard let text = placeholders.text(for: word, phonemes: replacement) else { continue }
+                replacements[word] = text
             }
         }
         self.replacements = replacements
@@ -115,72 +110,148 @@ struct PronunciationReplacer {
     }
 }
 
-/// The made-up words that stand in for phonetic pronunciations' words in a message, and the word
-/// and phonemes each stands for. KokoroTTS can be given phonemes for single lowercase words only,
-/// and can't forget them, so the Kokoro voices are given each placeholder with its phonemes
-/// (`phonemes(in:)`), and the system voices get the words back (`written(_:)`).
+/// The made-up words that stand in for phonetic pronunciations' words in a message, and what they
+/// stand for. KokoroTTS can be given phonemes for single lowercase words only, and can't forget
+/// them, so the Kokoro voices are given each placeholder with its phonemes (`phonemes(in:)`), and
+/// the system voices get the words back (`written(_:)`).
+///
+/// A word said with some phonemes has a placeholder for each of the phonemes' words, a space
+/// between, so KokoroTTS can split a long sentence between them rather than inside one, where
+/// it would guess at the pieces from their spelling. In a message the first starts with a capital
+/// where the word does, since Kokoro's sentences are found by `NLTokenizer`, which reads a
+/// lowercase word after a full stop as the same sentence going on. For the same reason, sentence
+/// punctuation that ends the word (the "!" of "Yahoo!") stays in the message after them. A
+/// placeholder is found whatever its case, and Kokoro looks words up in lowercase.
+///
+/// Placeholders are kept by word and phonemes, not by pronunciation, and never forgotten: a
+/// message queued before its pronunciation was changed or removed still says the word it was
+/// queued with, with the phonemes it had then, as a respelling's text is fixed once queued.
 ///
 /// A placeholder is lowercase ASCII letters, a prefix no word has and a letter after them that
 /// ends no contraction, so Kokoro's number and acronym rewriting and its phonemizer leave it
-/// whole. In a message it starts with a capital where its word does (see `PronunciationReplacer`);
-/// it is found either way, and Kokoro looks words up in lowercase. Each phonetic pronunciation
-/// keeps its placeholder for the run, and a placeholder is never forgotten: a message queued
-/// before its pronunciation was changed or removed still says the word, with the pronunciation's
-/// latest phonemes.
+/// whole.
 struct PhoneticPlaceholders: Sendable {
-    /// Stands in for the word of `VoiceLoop.preview(word:phonemes:)`, whose word and phonemes
-    /// are the latest preview's.
-    static let preview = placeholder(number: 0)
-
-    /// Each phonetic pronunciation's placeholder, by its id.
-    private var placeholders: [UUID: String] = [:]
-    /// The word and phonemes each placeholder stands for, trimmed.
-    private var entries: [String: (word: String, phonemes: String)] = [:]
-
-    /// The placeholder of the phonetic pronunciation with `id`, if it has a word and phonemes.
-    func placeholder(for id: UUID) -> String? {
-        placeholders[id]
+    /// A word said with some phonemes, both trimmed.
+    private struct Key: Hashable {
+        let word: String
+        let phonemes: String
     }
 
-    /// Gives each phonetic pronunciation with a word and phonemes a placeholder, if it has none
-    /// yet, and records its word and phonemes as they are now.
-    mutating func update(with pronunciations: [Pronunciation]) {
+    /// The placeholders of one word said with some phonemes.
+    private struct Group {
+        /// What a message holds in the word's place: the placeholders, a space between, the
+        /// first with the word's capital if it starts with one, then the sentence punctuation the
+        /// word ends with, if any.
+        let text: String
+        /// What a system voice says for the placeholders: the word without the sentence
+        /// punctuation it ends with, which `text` keeps after them.
+        let written: String
+        /// The placeholders after the first, in order.
+        let rest: [String]
+    }
+
+    /// Each word and phonemes' first placeholder.
+    private var firstPlaceholders: [Key: String] = [:]
+    /// Each group, by its first placeholder.
+    private var groups: [String: Group] = [:]
+    /// Each placeholder's phonemes: one of its group's phoneme words.
+    private var phonemes: [String: String] = [:]
+
+    /// What a message holds in place of `word` said with `phonemes`, once `add(word:phonemes:)`
+    /// has given them placeholders.
+    func text(for word: String, phonemes: String) -> String? {
+        firstPlaceholders[Key(word: word, phonemes: phonemes)].flatMap { groups[$0]?.text }
+    }
+
+    /// Gives each phonetic pronunciation with a word and phonemes its placeholders, unless it has
+    /// them.
+    mutating func add(_ pronunciations: [Pronunciation]) {
         for pronunciation in pronunciations where pronunciation.mode == .phonetic {
             let word = pronunciation.word.trimmingCharacters(in: .whitespacesAndNewlines)
             let phonemes = pronunciation.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !word.isEmpty, !phonemes.isEmpty else { continue }
-            let placeholder = placeholders[pronunciation.id] ?? Self.placeholder(number: placeholders.count + 1)
-            placeholders[pronunciation.id] = placeholder
-            entries[placeholder] = (word, phonemes)
+            add(word: word, phonemes: phonemes)
         }
     }
 
-    /// Makes `preview` stand for `word` said with `phonemes`.
-    mutating func setPreview(word: String, phonemes: String) {
-        entries[Self.preview] = (word, phonemes)
+    /// Gives `word` said with `phonemes` placeholders, unless it has them, and returns what a
+    /// message holds in its place. Both are trimmed and not empty.
+    @discardableResult
+    mutating func add(word: String, phonemes: String) -> String {
+        let key = Key(word: word, phonemes: phonemes)
+        if let first = firstPlaceholders[key], let group = groups[first] {
+            return group.text
+        }
+        let phonemeWords = phonemes.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !phonemeWords.isEmpty else { return word }
+        let placeholders = phonemeWords.indices.map { Self.placeholder(number: self.phonemes.count + $0) }
+        for (placeholder, phonemeWord) in zip(placeholders, phonemeWords) {
+            self.phonemes[placeholder] = phonemeWord
+        }
+        let punctuation = String(word.reversed().prefix(while: Self.endsSentence).reversed())
+        var first = placeholders[0]
+        if word.first?.isUppercase == true {
+            first = first.prefix(1).uppercased() + first.dropFirst()
+        }
+        let group = Group(
+            text: ([first] + placeholders.dropFirst()).joined(separator: " ") + punctuation,
+            written: String(word.dropLast(punctuation.count)),
+            rest: Array(placeholders.dropFirst())
+        )
+        firstPlaceholders[key] = placeholders[0]
+        groups[placeholders[0]] = group
+        return group.text
     }
 
-    /// The phonemes of each placeholder in `text`, by placeholder: what Kokoro needs to say it.
+    /// The phonemes of each placeholder in `text`, by placeholder in lowercase: what Kokoro needs
+    /// to say it.
     func phonemes(in text: String) -> [String: String] {
-        guard !entries.isEmpty else { return [:] }
-        var phonemes: [String: String] = [:]
+        guard !phonemes.isEmpty else { return [:] }
+        var found: [String: String] = [:]
         // A placeholder is a whole run of letters: a pronunciation's word matches only with no
         // letter or digit beside it.
         for match in text.matches(of: #/\p{L}+/#) {
             let placeholder = match.output.lowercased()
-            if let entry = entries[placeholder] {
-                phonemes[placeholder] = entry.phonemes
+            if let phonemeWord = phonemes[placeholder] {
+                found[placeholder] = phonemeWord
             }
         }
-        return phonemes
+        return found
     }
 
-    /// `text` with each placeholder back as its word, for the system voices.
+    /// `text` with each group of placeholders back as its word, once, for the system voices. A
+    /// placeholder away from the rest of its group, which a message never has, is left out rather
+    /// than said.
     func written(_ text: String) -> String {
-        guard !entries.isEmpty else { return text }
-        return text.replacing(#/\p{L}+/#) { match in
-            entries[match.output.lowercased()]?.word ?? String(match.output)
+        guard !groups.isEmpty else { return text }
+        // Words with a space between, so a group's placeholders are read together.
+        return text.replacing(#/\p{L}+(?: \p{L}+)*/#) { match in
+            var words: [String] = []
+            // The placeholders still to come of the group being read.
+            var expected: ArraySlice<String> = []
+            for word in match.output.split(separator: " ") {
+                let placeholder = word.lowercased()
+                if expected.first == placeholder {
+                    expected = expected.dropFirst()
+                    continue
+                }
+                expected = []
+                if let group = groups[placeholder] {
+                    if !group.written.isEmpty {
+                        words.append(group.written)
+                    }
+                    expected = group.rest[...]
+                } else if phonemes[placeholder] == nil {
+                    words.append(String(word))
+                }
+            }
+            return words.joined(separator: " ")
         }
+    }
+
+    /// Whether `character` ends a sentence: what keeps a sentence of its own after a word.
+    private static func endsSentence(_ character: Character) -> Bool {
+        ".!?…‼⁇⁈⁉。！？".contains(character)
     }
 
     /// The placeholder numbered `number`, 0 or more: "zqx", the number in letters (a to z, then

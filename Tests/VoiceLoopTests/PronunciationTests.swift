@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import VoiceLoop
 
-/// The pronunciations in settings: words said differently, by every voice.
+/// Respellings, the pronunciations in settings said by every voice: other text in a word's place.
 @Suite struct PronunciationTests {
     private func say(_ text: String, with pronunciations: [(String, String)]) -> String {
         PronunciationReplacer(pronunciations.map { Pronunciation(word: $0.0, replacement: $0.1) }).replaced(in: text)
@@ -66,60 +66,86 @@ import Testing
     }
 }
 
-/// Phonetic pronunciations: each word is replaced by a placeholder that Kokoro is given the
+/// The placeholder numbered `number`, in lowercase, as Kokoro is given it: the first one given
+/// out is 0.
+private func p(_ number: Int) -> String {
+    PhoneticPlaceholders.placeholder(number: number)
+}
+
+/// The placeholder numbered `number` as a message holds it for a word that starts with a capital.
+private func capitalP(_ number: Int) -> String {
+    let placeholder = p(number)
+    return placeholder.prefix(1).uppercased() + placeholder.dropFirst()
+}
+
+/// Phonetic pronunciations: each word is replaced by placeholders that Kokoro is given the
 /// phonemes for, and that the system voices get back as the word.
 @Suite struct PhoneticPronunciationTests {
-    /// `text` as Kokoro gets it, with `pronunciations`' placeholders recorded in `placeholders`.
+    /// `text` as Kokoro gets it, with `pronunciations`' placeholders added to `placeholders`.
     private func say(_ text: String, with pronunciations: [Pronunciation], placeholders: inout PhoneticPlaceholders) -> String {
-        placeholders.update(with: pronunciations)
+        placeholders.add(pronunciations)
         return PronunciationReplacer(pronunciations, placeholders: placeholders).replaced(in: text)
     }
 
-    /// `placeholder` as it stands for a word that starts with a capital.
-    private func capitalized(_ placeholder: String) -> String {
-        placeholder.prefix(1).uppercased() + placeholder.dropFirst()
-    }
-
-    @Test func aPhoneticWordBecomesItsPlaceholderOnlyWithTheSameCaseAndOnlyWhole() throws {
+    @Test func aPhoneticWordBecomesItsPlaceholderOnlyWithTheSameCaseAndOnlyWhole() {
         let kokoro = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
         var placeholders = PhoneticPlaceholders()
 
         let said = say("Kokoro, not kokoro or Kokoros. Kokoro's voice.", with: [kokoro], placeholders: &placeholders)
 
-        let placeholder = try #require(placeholders.placeholder(for: kokoro.id))
-        let p = capitalized(placeholder)
-        #expect(said == "\(p), not kokoro or Kokoros. \(p)'s voice.")
-        #expect(placeholders.phonemes(in: said) == [placeholder: "kˈOkəɹO"])
+        #expect(said == "\(capitalP(0)), not kokoro or Kokoros. \(capitalP(0))'s voice.")
+        #expect(placeholders.phonemes(in: said) == [p(0): "kˈOkəɹO"])
         #expect(placeholders.written(said) == "Kokoro, not kokoro or Kokoros. Kokoro's voice.")
     }
 
-    @Test func aPlaceholderStartsWithACapitalOnlyWhereItsWordDoesSoSentencesAreStillFound() throws {
+    @Test func aPlaceholderStartsWithACapitalOnlyWhereItsWordDoesSoSentencesAreStillFound() {
         let kokoro = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
         let ios = Pronunciation(word: "iOS", replacement: "ˌIˌOˈɛs", mode: .phonetic)
         var placeholders = PhoneticPlaceholders()
 
         let said = say("Not iOS. Kokoro is next.", with: [kokoro, ios], placeholders: &placeholders)
 
-        let kokoroPlaceholder = try #require(placeholders.placeholder(for: kokoro.id))
-        let iosPlaceholder = try #require(placeholders.placeholder(for: ios.id))
-        #expect(said == "Not \(iosPlaceholder). \(capitalized(kokoroPlaceholder)) is next.")
-        #expect(KokoroText.sentences(in: said) == ["Not \(iosPlaceholder).", "\(capitalized(kokoroPlaceholder)) is next."])
-        #expect(placeholders.phonemes(in: said) == [kokoroPlaceholder: "kˈOkəɹO", iosPlaceholder: "ˌIˌOˈɛs"])
+        #expect(said == "Not \(p(1)). \(capitalP(0)) is next.")
+        #expect(KokoroText.sentences(in: said) == ["Not \(p(1)).", "\(capitalP(0)) is next."])
+        #expect(placeholders.phonemes(in: said) == [p(0): "kˈOkəɹO", p(1): "ˌIˌOˈɛs"])
         #expect(placeholders.written(said) == "Not iOS. Kokoro is next.")
     }
 
-    @Test func respellingsAndPhoneticWordsMatchTogetherLongestFirst() throws {
+    @Test func eachPhonemeWordHasAPlaceholderOfItsOwnAndASystemVoiceGetsTheWordOnce() {
+        let city = Pronunciation(word: "New York City", replacement: "nˈu  jˈɔɹk sˈɪɾi", mode: .phonetic)
+        var placeholders = PhoneticPlaceholders()
+
+        let said = say("I love New York City's food.", with: [city], placeholders: &placeholders)
+
+        // Only the first takes the capital. KokoroTTS can cut a long sentence between them.
+        #expect(said == "I love \(capitalP(0)) \(p(1)) \(p(2))'s food.")
+        #expect(placeholders.phonemes(in: said) == [p(0): "nˈu", p(1): "jˈɔɹk", p(2): "sˈɪɾi"])
+        #expect(placeholders.written(said) == "I love New York City's food.")
+    }
+
+    @Test func sentencePunctuationThatEndsAWordStaysAfterItsPlaceholdersAndIsSaidOnce() {
+        let yahoo = Pronunciation(word: "Yahoo!", replacement: "jˈɑhu", mode: .phonetic)
+        var placeholders = PhoneticPlaceholders()
+
+        let said = say("I used Yahoo! Then I switched. Yahoo!!", with: [yahoo], placeholders: &placeholders)
+
+        #expect(said == "I used \(capitalP(0))! Then I switched. \(capitalP(0))!!")
+        #expect(KokoroText.sentences(in: said) == ["I used \(capitalP(0))!", "Then I switched.", "\(capitalP(0))!!"])
+        #expect(placeholders.phonemes(in: said) == [p(0): "jˈɑhu"])
+        #expect(placeholders.written(said) == "I used Yahoo! Then I switched. Yahoo!!")
+    }
+
+    @Test func respellingsAndPhoneticWordsMatchTogetherLongestFirst() {
         let city = Pronunciation(word: "New York City", replacement: "nˈu jˈɔɹk sˈɪɾi", mode: .phonetic)
         let state = Pronunciation(word: "New York", replacement: "NY")
         var placeholders = PhoneticPlaceholders()
 
         let said = say("New York City and New York", with: [state, city], placeholders: &placeholders)
 
-        let placeholder = try #require(placeholders.placeholder(for: city.id))
-        #expect(said == "\(capitalized(placeholder)) and NY")
+        #expect(said == "\(capitalP(0)) \(p(1)) \(p(2)) and NY")
     }
 
-    @Test func ofTwoWithTheSameWordTheFirstCountsWhateverItsMode() throws {
+    @Test func ofTwoWithTheSameWordTheFirstCountsWhateverItsMode() {
         let phonetic = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
         let respelling = Pronunciation(word: "Kokoro", replacement: "Coco")
         var placeholders = PhoneticPlaceholders()
@@ -127,8 +153,7 @@ import Testing
         let phoneticFirst = say("Kokoro", with: [phonetic, respelling], placeholders: &placeholders)
         let respellingFirst = say("Kokoro", with: [respelling, phonetic], placeholders: &placeholders)
 
-        let placeholder = try #require(placeholders.placeholder(for: phonetic.id))
-        #expect(phoneticFirst == capitalized(placeholder))
+        #expect(phoneticFirst == capitalP(0))
         #expect(respellingFirst == "Coco")
     }
 
@@ -140,47 +165,51 @@ import Testing
         var placeholders = PhoneticPlaceholders()
 
         #expect(say("Kokoro", with: pronunciations, placeholders: &placeholders) == "Kokoro")
-        #expect(pronunciations.allSatisfy { placeholders.placeholder(for: $0.id) == nil })
+        #expect(placeholders.phonemes(in: p(0)) == [:])
     }
 
-    @Test func eachPronunciationKeepsItsPlaceholderAndItsLatestWordAndPhonemes() throws {
+    @Test func queuedTextKeepsTheWordAndPhonemesItWasQueuedWith() {
         var kokoro = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
-        let other = Pronunciation(word: "Winston", replacement: "wˈɪnstən", mode: .phonetic)
-        var placeholders = PhoneticPlaceholders()
-        placeholders.update(with: [kokoro, other])
-        let placeholder = try #require(placeholders.placeholder(for: kokoro.id))
-        #expect(placeholders.placeholder(for: other.id) != placeholder)
-
-        kokoro.word = "Kokoro TTS"
-        kokoro.replacement = "kˈOkəɹO tˌitˌiˈɛs"
-        placeholders.update(with: [other, kokoro])
-
-        #expect(placeholders.placeholder(for: kokoro.id) == placeholder)
-        #expect(placeholders.phonemes(in: placeholder) == [placeholder: "kˈOkəɹO tˌitˌiˈɛs"])
-        #expect(placeholders.written(placeholder) == "Kokoro TTS")
-    }
-
-    @Test func aRemovedPronunciationsPlaceholderStillSaysItsWord() throws {
-        let kokoro = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
         var placeholders = PhoneticPlaceholders()
         let queued = say("Kokoro.", with: [kokoro], placeholders: &placeholders)
 
-        placeholders.update(with: [])
+        kokoro.word = "Coco"
+        let renamed = say("Coco.", with: [kokoro], placeholders: &placeholders)
+        kokoro.replacement = "kˈOkO"
+        let changed = say("Coco.", with: [kokoro], placeholders: &placeholders)
+        placeholders.add([])
 
-        let placeholder = try #require(placeholders.placeholder(for: kokoro.id))
-        #expect(placeholders.phonemes(in: queued) == [placeholder: "kˈOkəɹO"])
+        #expect([queued, renamed, changed] == ["\(capitalP(0)).", "\(capitalP(1)).", "\(capitalP(2))."])
+        #expect(placeholders.phonemes(in: queued) == [p(0): "kˈOkəɹO"])
         #expect(placeholders.written(queued) == "Kokoro.")
+        #expect(placeholders.phonemes(in: renamed) == [p(1): "kˈOkəɹO"])
+        #expect(placeholders.written(renamed) == "Coco.")
+        #expect(placeholders.phonemes(in: changed) == [p(2): "kˈOkO"])
     }
 
-    @Test func thePreviewPlaceholderSaysTheLatestPreviewsWordAndPhonemes() {
-        let preview = PhoneticPlaceholders.preview
+    @Test func theSameWordAndPhonemesKeepTheirPlaceholdersWhereverTheyComeFrom() {
         var placeholders = PhoneticPlaceholders()
+        placeholders.add([
+            Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic),
+            Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic),
+        ])
 
-        placeholders.setPreview(word: "Kokoro", phonemes: "kˈOkəɹO")
-        placeholders.setPreview(word: "Kokoro", phonemes: "kəkˈɔɹO")
+        // A preview of the same, and of other phonemes, such as a suggestion being tried.
+        let same = placeholders.add(word: "Kokoro", phonemes: "kˈOkəɹO")
+        let other = placeholders.add(word: "Kokoro", phonemes: "kəkˈɔɹO")
 
-        #expect(placeholders.phonemes(in: preview) == [preview: "kəkˈɔɹO"])
-        #expect(placeholders.written(preview) == "Kokoro")
+        #expect(same == capitalP(0))
+        #expect(other == capitalP(1))
+        #expect(placeholders.text(for: "Kokoro", phonemes: "kˈOkəɹO") == capitalP(0))
+    }
+
+    @Test func aPlaceholderAwayFromItsGroupIsNeverSaid() {
+        var placeholders = PhoneticPlaceholders()
+        placeholders.add(word: "New York City", phonemes: "nˈu jˈɔɹk sˈɪɾi")
+
+        #expect(placeholders.written("\(p(1)) \(p(2)) here") == "here")
+        #expect(placeholders.written("\(capitalP(0)) here") == "New York City here")
+        #expect(placeholders.written("\(capitalP(0)) \(p(2)) here") == "New York City here")
     }
 
     @Test func placeholdersAreDistinctAndLowercaseASCIILetters() {
@@ -194,22 +223,26 @@ import Testing
 
     @Test func textWithoutPlaceholdersIsLeftAlone() {
         var placeholders = PhoneticPlaceholders()
-        placeholders.update(with: [Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)])
+        placeholders.add([Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)])
 
-        #expect(placeholders.phonemes(in: "Kokoro said zqx and q.") == [:])
-        #expect(placeholders.written("Kokoro said zqx and q.") == "Kokoro said zqx and q.")
+        #expect(placeholders.phonemes(in: "Kokoro said zqx and  q.") == [:])
+        #expect(placeholders.written("Kokoro said zqx and  q.") == "Kokoro said zqx and  q.")
     }
 
-    @Test func placeholdersComeThroughKokorosNumbersAndAcronymsWhole() throws {
+    @Test func placeholdersComeThroughKokorosNumbersAndAcronymsWhole() {
         let kokoro = Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic)
+        let city = Pronunciation(word: "New York City", replacement: "nˈu jˈɔɹk sˈɪɾi", mode: .phonetic)
         var placeholders = PhoneticPlaceholders()
-        let said = say("Kokoro-5 and Kokoro's API, 3rd Kokoro (Kokoro).", with: [kokoro], placeholders: &placeholders)
-        let placeholder = try #require(placeholders.placeholder(for: kokoro.id))
+        let said = say(
+            "Kokoro-5 and Kokoro's API, 3rd Kokoro (Kokoro) in New York City-2.",
+            with: [kokoro, city],
+            placeholders: &placeholders
+        )
 
         let spoken = KokoroAcronyms(dictionaryWords: ["and"]).spelledOut(KokoroNumbers().spelledOut(said))
 
-        let p = capitalized(placeholder)
-        #expect(spoken == "\(p) five and \(p)'s eh P eye, third \(p) (\(p)).")
-        #expect(placeholders.phonemes(in: spoken) == [placeholder: "kˈOkəɹO"])
+        let k = capitalP(0)
+        #expect(spoken == "\(k) five and \(k)'s eh P eye, third \(k) (\(k)) in \(capitalP(1)) \(p(2)) \(p(3)) two.")
+        #expect(placeholders.phonemes(in: spoken) == [p(0): "kˈOkəɹO", p(1): "nˈu", p(2): "jˈɔɹk", p(3): "sˈɪɾi"])
     }
 }

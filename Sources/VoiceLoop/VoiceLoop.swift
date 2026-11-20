@@ -102,19 +102,20 @@ public final class VoiceLoop {
     public static let defaultSpeechPitch: Float = 1.0
     /// Words said differently: each is replaced in a message as it is queued (see
     /// `Pronunciation`), before Kokoro's numbers and acronyms are spelled out. A respelling is
-    /// said by every voice. A phonetic pronunciation's word is replaced by a placeholder that the
-    /// Kokoro voices say with its phonemes, and that the system voices say as the word.
+    /// said by every voice. A phonetic pronunciation's word is replaced by placeholders that the
+    /// Kokoro voices say with its phonemes, and that the system voices say as the word. Either
+    /// way, a message keeps what it was queued with.
     public var pronunciations: [Pronunciation] = [] {
         didSet {
             guard pronunciations != oldValue else { return }
-            phoneticPlaceholders.update(with: pronunciations)
+            phoneticPlaceholders.add(pronunciations)
             pronunciationReplacer = PronunciationReplacer(pronunciations, placeholders: phoneticPlaceholders)
         }
     }
     @ObservationIgnored private var pronunciationReplacer = PronunciationReplacer([])
-    /// The placeholders of every phonetic pronunciation this run, and of the latest
-    /// `preview(word:phonemes:)`. None is forgotten, so a message queued before its pronunciation
-    /// changed still finds its word.
+    /// The placeholders of every word and phonemes of a phonetic pronunciation or a
+    /// `preview(word:phonemes:)` this run. None is forgotten, so a message queued before its
+    /// pronunciation changed still says what it was queued with.
     @ObservationIgnored private var phoneticPlaceholders = PhoneticPlaceholders()
     /// While speaking, transcripts with fewer words than this are ignored instead of
     /// interrupting. Raise it if the app's own voice leaks through echo cancellation. Without
@@ -624,11 +625,12 @@ public final class VoiceLoop {
     /// Says `word` with `phonemes`, as a phonetic `Pronunciation` would have it, saved or not, as
     /// `preview(asWritten:)` otherwise does: for hearing a phonetic pronunciation in settings. A
     /// Kokoro voice whose model is ready says the phonemes; any other voice says the word as
-    /// written. Nothing when either is empty.
+    /// written. Both are trimmed; nothing when either is blank.
     public func preview(word: String, phonemes: String) {
+        let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phonemes = phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !word.isEmpty, !phonemes.isEmpty else { return }
-        phoneticPlaceholders.setPreview(word: word, phonemes: phonemes)
-        preview(spoken: PhoneticPlaceholders.preview)
+        preview(spoken: phoneticPlaceholders.add(word: word, phonemes: phonemes))
     }
 
     /// Says `text`, ready to say as it is, for `preview(_:)`, `preview(asWritten:)` and
