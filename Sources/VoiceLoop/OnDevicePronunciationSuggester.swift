@@ -20,13 +20,17 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     }
 
     public func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
-        try await generatedPronunciations(for: word).map(Self.suggestion(from:))
+        try await generatedPronunciations(for: word).map { Self.suggestion(from: $0, for: word) }
     }
 
-    /// `pronunciation` in Kokoro's notation.
-    static func suggestion(from pronunciation: GeneratedPronunciation) -> PronunciationSuggestion {
-        PronunciationSuggestion(
-            phonemes: MisakiPhonemes.fromIPA(pronunciation.ipa),
+    /// `pronunciation` of `word` in Kokoro's notation. The model sometimes puts a space between
+    /// the syllables of one word ("ˈwɪn stən"), which Kokoro would say as two, so the IPA of a
+    /// word without spaces is made one word.
+    static func suggestion(from pronunciation: GeneratedPronunciation, for word: String) -> PronunciationSuggestion {
+        let isOneWord = !word.trimmingCharacters(in: .whitespacesAndNewlines).contains(where: \.isWhitespace)
+        let ipa = isOneWord ? pronunciation.ipa.filter { !$0.isWhitespace } : pronunciation.ipa
+        return PronunciationSuggestion(
+            phonemes: MisakiPhonemes.fromIPA(ipa),
             respelling: pronunciation.respelling,
             note: pronunciation.note
         )
@@ -73,12 +77,24 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     /// fails rather than runs on.
     private static let maximumResponseTokens = 800
 
+    /// With rules and a worked example: without them, the model often wrote the same IPA several
+    /// times, each with a made-up note on stress.
     private static let instructions = """
-        You help a text-to-speech voice say words and names the way an American English speaker \
-        would. Given a word, suggest different ways to say it, the most likely first. Each must \
-        sound different from the others: a different stressed syllable, vowel, or sound. For a \
-        name or a word from another language, include how Americans usually say it and how it \
-        is said in its own language.
+        You help a text-to-speech voice say words and names correctly for American listeners. \
+        Given a word, list different ways people say it, the most likely first.
+
+        Rules:
+        - Every pronunciation must sound different from the others. Never repeat one.
+        - If you know only one way to say the word, make the others its likeliest other \
+        readings: as it is spelled, with the stress on another syllable, or with another vowel.
+        - For a name or a word from another language, give the way its speakers say it first.
+        - For a word made of two words, say each part as the word it comes from.
+        - The IPA must say exactly what its respelling says.
+
+        Example, for Joaquin, three pronunciations:
+        respelling wah-KEEN; ipa wɑˈkin; note Spanish name, the usual way
+        respelling hwah-KEEN; ipa hwɑˈkin; note closer to Spanish
+        respelling JOH-uh-kin; ipa ˈdʒoʊəkɪn; note read as it is spelled
         """
 
     /// What the model's answer to `suggestions(for:)` is: its pronunciations.
@@ -92,15 +108,15 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     /// follows from it.
     @Generable
     struct GeneratedPronunciation {
-        @Guide(description: "The word respelled in plain English letters, a hyphen between syllables, the stressed syllable in capitals, such as WIN-stun")
+        @Guide(description: "The pronunciation respelled in plain English letters, a hyphen between syllables, the stressed syllable in capitals, such as wah-KEEN")
         var respelling: String
         // Not held to IPA's symbols with a pattern guide: on macOS 27, the model takes neither a
         // character class nor anchors, and the alternation it does take, (?:p|b|…|ˈ|ˌ| )+, made
         // a request take 36 to 104 s rather than about 2. A symbol Kokoro doesn't have makes a
         // suggestion unusable instead (see `PronunciationCandidate`).
-        @Guide(description: "The same pronunciation in standard IPA for American English, with ˈ at the start of the stressed syllable and ˌ at the start of a syllable with secondary stress, such as ˈwɪnstən")
+        @Guide(description: "The same pronunciation in standard IPA for American English, with ˈ at the start of the stressed syllable and ˌ at the start of a syllable with secondary stress, such as wɑˈkin")
         var ipa: String
-        @Guide(description: "A few words on what sets it apart, such as: stress on the 2nd syllable")
+        @Guide(description: "A few words on who says it this way or where it comes from, such as: Spanish name, the usual way")
         var note: String
     }
 
