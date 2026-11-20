@@ -114,8 +114,9 @@ struct PronunciationReplacer {
     /// Placeholders never touch a letter or digit: a space goes between them and another
     /// replacement that would ("👏👏" said as two placeholders), or they would read as one word.
     /// A phonetic word's sentence punctuation ("Yahoo!") stays after its placeholders only where
-    /// it ends a sentence in `text`, so Kokoro's sentences end where they did; elsewhere ("Mr.
-    /// Smith") the placeholders stand for all of the word, as a respelling does.
+    /// it ends a sentence in `text`, perhaps with closing quotes or brackets after it, so Kokoro's
+    /// sentences end where they did; elsewhere ("Mr. Smith") the placeholders stand for all of
+    /// the word, as a respelling does.
     func replaced(in text: String) -> String {
         guard let pattern else { return text }
         var result = ""
@@ -148,7 +149,7 @@ struct PronunciationReplacer {
                 if let keepingPunctuation {
                     let ends = sentenceEnds ?? Self.sentenceEnds(in: text)
                     sentenceEnds = ends
-                    if ends.contains(NSMaxRange(match.range)) {
+                    if Self.endsSentence(at: range.upperBound, in: text, sentenceEnds: ends) {
                         placeholders = keepingPunctuation
                     }
                 }
@@ -162,6 +163,37 @@ struct PronunciationReplacer {
 
     private static func isLetterOrDigit(_ character: Character) -> Bool {
         character.isLetter || character.isNumber
+    }
+
+    /// Whether a sentence of `text` ends at `index`, or after nothing but closing quotes and
+    /// brackets there: in `She shouted “Yahoo!” Then she left.`, the first sentence ends after
+    /// the quote.
+    private static func endsSentence(at index: String.Index, in text: String, sentenceEnds: Set<Int>) -> Bool {
+        var index = index
+        while true {
+            if sentenceEnds.contains(index.utf16Offset(in: text)) {
+                return true
+            }
+            guard index < text.endIndex, closes(text[index]) else {
+                return false
+            }
+            index = text.index(after: index)
+        }
+    }
+
+    /// Whether `character` closes a quote or a bracket: `”`, `’`, `»`, `)`, `]`, `}` and the
+    /// like, or a straight quote, which after a word closes one.
+    private static func closes(_ character: Character) -> Bool {
+        if character == "\"" || character == "'" {
+            return true
+        }
+        guard let scalar = character.unicodeScalars.first else { return false }
+        switch scalar.properties.generalCategory {
+        case .closePunctuation, .finalPunctuation:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Where each of `text`'s sentences ends, without the spaces after it, as a UTF-16 offset:

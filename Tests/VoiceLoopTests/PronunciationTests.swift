@@ -152,6 +152,30 @@ private func capitalP(_ number: Int) -> String {
         #expect(placeholders.written(said) == text)
     }
 
+    @Test(arguments: [
+        ("She shouted “Yahoo!” Then she left.", "She shouted “", "” Then she left."),
+        ("She shouted \"Yahoo!\" Then she left.", "She shouted \"", "\" Then she left."),
+        ("(I used Yahoo!) Then I switched.", "(I used ", ") Then I switched."),
+    ])
+    func sentencePunctuationStaysAfterThePlaceholdersWhereTheSentenceEndsAfterAClosingQuoteOrBracket(
+        text: String,
+        before: String,
+        after: String
+    ) {
+        // Placeholders 0 stand for all of "Yahoo!"; 1 keep its "!" after them.
+        let yahoo = Pronunciation(word: "Yahoo!", replacement: "jˈɑhu", mode: .phonetic)
+        var placeholders = PhoneticPlaceholders()
+        #expect(KokoroText.sentences(in: text).count == 2)
+
+        let said = say(text, with: [yahoo], placeholders: &placeholders)
+
+        #expect(said == before + capitalP(1) + "!" + after)
+        // The first sentence ends after the closing quote or bracket, as it did.
+        let firstSentence = before + capitalP(1) + "!" + String(after.prefix(1))
+        #expect(KokoroText.sentences(in: said) == [firstSentence, String(after.dropFirst(2))])
+        #expect(placeholders.written(said) == text)
+    }
+
     @Test func noLetterOrDigitEverTouchesAPlaceholder() {
         let clap = Pronunciation(word: "👏", replacement: "klˈæp", mode: .phonetic)
         let thumbs = Pronunciation(word: "👍", replacement: "thumbs up")
