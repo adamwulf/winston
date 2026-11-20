@@ -2,7 +2,8 @@
 import Logging
 import LogSupport
 
-/// Plays speech while the voice loop is off, for voice previews in settings. Each preview gets
+/// Plays speech while the voice loop is off, for voice previews in settings, and the stop cue
+/// when a change of audio devices ends voice mode (`play(_:)`). Each preview gets
 /// an engine of its own that plays straight to the speaker, through the same pitch shift as
 /// replies. On iOS it uses a playback session, so the silent switch doesn't mute it, and other
 /// apps' audio is turned down while it plays.
@@ -89,6 +90,17 @@ final class PreviewPlayer {
         #endif
         current = Preview(engine: engine, output: output, playback: playback, watchers: watchers)
         return playback
+    }
+
+    /// Plays `cue` once, as a preview at normal pitch, cutting off the preview playing. For the
+    /// stop cue when voice mode ends because the audio devices changed: the loop's own engine is
+    /// gone by then, and this one only plays, to whatever output is current.
+    func play(_ cue: SoundCue) throws {
+        let playback = try play(pitch: 1)
+        if let format = current?.output.format, let buffer = cue.buffer(in: format) {
+            playback.receive(buffer)
+        }
+        playback.synthesisFinished()
     }
 
     /// Stops the preview playing, if there is one.

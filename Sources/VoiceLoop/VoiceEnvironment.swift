@@ -39,6 +39,13 @@ package struct VoiceEnvironment: Sendable {
     package var makeEngine: @MainActor @Sendable () throws -> AVAudioEngine
     /// Turns on voice processing (echo cancellation) for the engine's microphone.
     package var enableVoiceProcessing: @MainActor @Sendable (AVAudioInputNode) throws -> Void
+    /// The audio devices in use now: on iOS the audio session's route, on the Mac the default
+    /// input and output.
+    package var audioDevices: @MainActor @Sendable () -> AudioDevices
+    /// Each route change of the iOS audio session, with the route before and after it, until its
+    /// iteration is cancelled. Nothing on the Mac, where voice mode watches the default input and
+    /// output instead.
+    package var audioRouteChanges: @MainActor @Sendable () -> AsyncStream<AudioRouteChange>
     /// Speaks with the Kokoro voices, once its model has downloaded and loaded.
     package var kokoro: any KokoroEngine
     /// The language voices are offered for, as `AVSpeechSynthesisVoice.currentLanguageCode()`
@@ -64,6 +71,8 @@ package struct VoiceEnvironment: Sendable {
         makeRecognizer: @escaping @MainActor @Sendable () async throws -> any Recognizer,
         makeEngine: @escaping @MainActor @Sendable () throws -> AVAudioEngine,
         enableVoiceProcessing: @escaping @MainActor @Sendable (AVAudioInputNode) throws -> Void,
+        audioDevices: @escaping @MainActor @Sendable () -> AudioDevices,
+        audioRouteChanges: @escaping @MainActor @Sendable () -> AsyncStream<AudioRouteChange>,
         kokoro: any KokoroEngine,
         languageCode: @escaping @MainActor @Sendable () -> String,
         systemVoices: @escaping @MainActor @Sendable (String) -> [VoiceOption],
@@ -76,6 +85,8 @@ package struct VoiceEnvironment: Sendable {
         self.makeRecognizer = makeRecognizer
         self.makeEngine = makeEngine
         self.enableVoiceProcessing = enableVoiceProcessing
+        self.audioDevices = audioDevices
+        self.audioRouteChanges = audioRouteChanges
         self.kokoro = kokoro
         self.languageCode = languageCode
         self.systemVoices = systemVoices

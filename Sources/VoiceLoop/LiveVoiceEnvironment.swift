@@ -1,4 +1,7 @@
 @preconcurrency import AVFoundation
+#if os(macOS)
+import CoreAudio
+#endif
 import Logging
 import LogSupport
 import Speech
@@ -18,6 +21,8 @@ extension VoiceEnvironment {
         makeRecognizer: { try await LiveSpeech.makeRecognizer() },
         makeEngine: { AVAudioEngine() },
         enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) },
+        audioDevices: { LiveAudioDevices.current() },
+        audioRouteChanges: { LiveAudioDevices.routeChanges() },
         kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory)),
         languageCode: { AVSpeechSynthesisVoice.currentLanguageCode() },
         systemVoices: { VoiceLoop.systemVoices(language: $0) },
@@ -29,6 +34,77 @@ extension VoiceEnvironment {
 
 /// Where `VoiceEnvironment.live` keeps `kokoroUnchosenSince` in the standard user defaults.
 private let kokoroUnchosenSinceKey = "kokoroUnchosenSince"
+
+#if os(iOS)
+/// A notification observer, to remove from another thread when its stream ends.
+private final class ObserverToken: @unchecked Sendable {
+    let observer: any NSObjectProtocol
+
+    init(_ observer: any NSObjectProtocol) {
+        self.observer = observer
+    }
+}
+#endif
+
+/// The audio session's route on iOS, the system's default input and output on the Mac.
+@MainActor
+private enum LiveAudioDevices {
+    static func current() -> AudioDevices {
+        #if os(iOS)
+        AudioDevices(AVAudioSession.sharedInstance().currentRoute)
+        #else
+        AudioDevices(
+            inputs: defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
+            outputs: defaultDevice(kAudioHardwarePropertyDefaultOutputDevice)
+        )
+        #endif
+    }
+
+    nonisolated static func routeChanges() -> AsyncStream<AudioRouteChange> {
+        let (stream, continuation) = AsyncStream.makeStream(of: AudioRouteChange.self)
+        #if os(iOS)
+        // On the thread that posts the notification, so the current route is read as it was right
+        // after this change.
+        let observer = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { notification in
+            let reason = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ?? .unknown
+            let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            continuation.yield(AudioRouteChange(
+                reason,
+                previous: previous.map(AudioDevices.init) ?? AudioDevices(inputs: [], outputs: []),
+                current: AudioDevices(AVAudioSession.sharedInstance().currentRoute)
+            ))
+        }
+        let token = ObserverToken(observer)
+        continuation.onTermination = { _ in
+            NotificationCenter.default.removeObserver(token.observer)
+        }
+        #else
+        continuation.finish()
+        #endif
+        return stream
+    }
+
+    #if os(macOS)
+    /// The default device that `selector` names, by its device ID. None if there is none.
+    private static func defaultDevice(_ selector: AudioObjectPropertySelector) -> [AudioDevices.Device] {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var device = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+        guard status == noErr, device != kAudioObjectUnknown else { return [] }
+        return [AudioDevices.Device(id: "\(device)", kind: "\(device)")]
+    }
+    #endif
+}
 
 /// A `SpeechAnalyzer` running a `SpeechTranscriber`.
 private struct LiveRecognizer: Recognizer {

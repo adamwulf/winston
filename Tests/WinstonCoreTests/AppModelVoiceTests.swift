@@ -10,6 +10,12 @@ import WinstonCore
 // offline audio engine, and `bed.audio.playedFrames` is how much sound came out of the speaker.
 // Speech takes real time, so the replies spoken here are short.
 
+/// AirPods, as the iOS route names them during a call: microphone and output both.
+private let airPods = AudioDevices(
+    inputs: [.init(id: "airpods-hfp", kind: "BluetoothHFP")],
+    outputs: [.init(id: "airpods-hfp", kind: "BluetoothHFP")]
+)
+
 /// Voice mode: what is heard goes to the bot, and the bot's replies are spoken.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -63,6 +69,20 @@ struct VoiceModeTests {
         await model.setVoiceMode(false)
 
         #expect(!model.isVoiceMode)
+        #expect(model.voiceLoop.state == .off)
+        #expect(await eventually { harness.bed.recognizer.isCancelled })
+    }
+
+    @Test func aChangeOfAudioDevicesLeavesVoiceMode() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setVoiceMode(true)
+        #expect(model.voiceLoop.state == .listening(partial: ""))
+
+        // AirPods connect.
+        harness.bed.reportRouteChange(isDeviceChange: true, from: VoiceTestBed.builtInDevices, to: airPods)
+
+        #expect(await eventually { !model.isVoiceMode })
         #expect(model.voiceLoop.state == .off)
         #expect(await eventually { harness.bed.recognizer.isCancelled })
     }
@@ -285,6 +305,28 @@ struct PushToTalkModeTests {
         #expect(!model.voiceLoop.isPushToTalk)
         #expect(model.voiceLoop.state == .off)
         #expect(await eventually { harness.bed.recognizer.isCancelled })
+    }
+
+    @Test func aChangeOfAudioDevicesLeavesPushToTalkAndTheSheetsDismissalStopsNothingMore() async throws {
+        let harness = Harness()
+        let model = harness.model
+        await model.setPushToTalk(true)
+        #expect(model.voiceLoop.isPushToTalk)
+
+        // AirPods are taken out.
+        harness.bed.reportRouteChange(isDeviceChange: true, from: airPods, to: VoiceTestBed.builtInDevices)
+
+        #expect(await eventually { !model.isVoiceMode })
+        #expect(!model.voiceLoop.isPushToTalk)
+        #expect(model.voiceLoop.state == .off)
+        let offs = model.voiceModeOffCount
+
+        // Leaving voice mode closes the sheet, whose dismissal leaves push-to-talk: it has
+        // nothing left to leave, so it doesn't stop the loop again under its stop cue.
+        await model.setPushToTalk(false)
+
+        #expect(model.voiceModeOffCount == offs)
+        #expect(!model.isVoiceMode)
     }
 
     @Test func aHoldGoesToTheChatItWasSaidInWhenANotificationOpensAnotherBeforeItIsSent() async throws {
