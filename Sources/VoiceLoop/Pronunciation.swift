@@ -72,7 +72,12 @@ struct PronunciationReplacer {
                 replacements[word] = replacement
             case .phonetic:
                 guard let placeholder = placeholders.placeholder(for: pronunciation.id) else { continue }
-                replacements[word] = placeholder
+                // With the word's capital, if it starts with one: Kokoro's sentences are found
+                // by `NLTokenizer`, which reads a lowercase word after a full stop as the same
+                // sentence going on.
+                replacements[word] = word.first?.isUppercase == true
+                    ? placeholder.prefix(1).uppercased() + placeholder.dropFirst()
+                    : placeholder
             }
         }
         self.replacements = replacements
@@ -117,9 +122,11 @@ struct PronunciationReplacer {
 ///
 /// A placeholder is lowercase ASCII letters, a prefix no word has and a letter after them that
 /// ends no contraction, so Kokoro's number and acronym rewriting and its phonemizer leave it
-/// whole. Each phonetic pronunciation keeps its placeholder for the run, and a placeholder is
-/// never forgotten: a message queued before its pronunciation was changed or removed still says
-/// the word, with the pronunciation's latest phonemes.
+/// whole. In a message it starts with a capital where its word does (see `PronunciationReplacer`);
+/// it is found either way, and Kokoro looks words up in lowercase. Each phonetic pronunciation
+/// keeps its placeholder for the run, and a placeholder is never forgotten: a message queued
+/// before its pronunciation was changed or removed still says the word, with the pronunciation's
+/// latest phonemes.
 struct PhoneticPlaceholders: Sendable {
     /// Stands in for the word of `VoiceLoop.preview(word:phonemes:)`, whose word and phonemes
     /// are the latest preview's.
@@ -160,9 +167,9 @@ struct PhoneticPlaceholders: Sendable {
         // A placeholder is a whole run of letters: a pronunciation's word matches only with no
         // letter or digit beside it.
         for match in text.matches(of: #/\p{L}+/#) {
-            let word = String(match.output)
-            if let entry = entries[word] {
-                phonemes[word] = entry.phonemes
+            let placeholder = match.output.lowercased()
+            if let entry = entries[placeholder] {
+                phonemes[placeholder] = entry.phonemes
             }
         }
         return phonemes
@@ -172,7 +179,7 @@ struct PhoneticPlaceholders: Sendable {
     func written(_ text: String) -> String {
         guard !entries.isEmpty else { return text }
         return text.replacing(#/\p{L}+/#) { match in
-            entries[String(match.output)]?.word ?? String(match.output)
+            entries[match.output.lowercased()]?.word ?? String(match.output)
         }
     }
 
