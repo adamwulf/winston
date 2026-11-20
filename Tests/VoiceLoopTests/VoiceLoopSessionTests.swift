@@ -69,14 +69,6 @@ private func settle(_ duration: Duration = .milliseconds(250)) async throws {
     try await Task.sleep(for: duration)
 }
 
-/// Waits while the offline engine renders `passes` more passes, however long the machine takes
-/// to get round to them. Whether they did.
-@MainActor
-private func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool {
-    let start = bed.audio.renderPasses
-    return await eventually { bed.audio.renderPasses >= start + passes }
-}
-
 /// Tells the loop its engine's hardware configuration changed, as AVAudioEngine does.
 @MainActor
 private func postConfigurationChange(for engine: AVAudioEngine) {

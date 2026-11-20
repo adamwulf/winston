@@ -161,3 +161,12 @@ package func eventually(
     }
     return true
 }
+
+/// Waits while the offline engines render `passes` more passes, however long the machine takes
+/// to get round to them. Whether they did. Each pass is 4096 frames, about 85 ms of audio: the
+/// engines' clock, for a wait on how much audio has played rather than how much time has passed.
+@MainActor
+package func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool {
+    let start = bed.audio.renderPasses
+    return await eventually { bed.audio.renderPasses >= start + passes }
+}
