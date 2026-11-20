@@ -170,3 +170,13 @@ package func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool
     let start = bed.audio.renderPasses
     return await eventually { bed.audio.renderPasses >= start + passes }
 }
+
+/// Waits while the last render pass of speech that has just finished reaches the speaker.
+/// Offline, a reply or preview counts as played once its player has rendered its last buffer,
+/// and the pitch shift after the player pulls it a pass ahead of the output (see
+/// `SpeechOutput.completion`), so that pass comes out one pass later. Waits for twice that.
+/// Whether it did.
+@MainActor
+package func lastPassPlays(on bed: VoiceTestBed) async -> Bool {
+    await renderPassesGoBy(2, on: bed)
+}

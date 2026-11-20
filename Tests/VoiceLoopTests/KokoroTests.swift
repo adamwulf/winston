@@ -123,10 +123,7 @@ private func framesPlayed(saying text: String, by loop: VoiceLoop, on bed: Voice
     loop.speak(text)
     #expect(loop.state == .speaking)
     #expect(await eventually { loop.state == .listening(partial: "") })
-    // The pitch shift pulls the player a render pass ahead of the speaker, so the reply's
-    // last pass is rendered just after it counts as played. Waits for twice that, counted in
-    // passes, not time: a busy machine can take far longer than usual to render them.
-    #expect(await renderPassesGoBy(2, on: bed))
+    #expect(await lastPassPlays(on: bed))
     return bed.audio.playedFrames - before
 }
 
