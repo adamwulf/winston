@@ -42,6 +42,10 @@ import Testing
         )
     }
 
+    @Test func itCreditsAppleIntelligenceOnThisDevice() {
+        #expect(OnDevicePronunciationSuggester().attribution == "Suggested by Apple Intelligence on this device.")
+    }
+
     @Test func itsIPAIsInKokorosNotationWithItsRespellingAndNote() {
         #expect(suggestion("ˈwɪn.stən", for: "Winston") == PronunciationSuggestion(phonemes: "wˈɪnstən", respelling: "WIN-stun", note: "the usual way"))
     }

@@ -19,6 +19,10 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         SystemLanguageModel.default.isAvailable
     }
 
+    public var attribution: String {
+        "Suggested by Apple Intelligence on this device."
+    }
+
     public func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
         try await generatedPronunciations(for: word).map { Self.suggestion(from: $0, for: word) }
     }

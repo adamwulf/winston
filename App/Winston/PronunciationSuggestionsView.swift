@@ -121,7 +121,8 @@ private struct PronunciationSuggestionsView: View {
             } header: {
                 Text("Suggestions for \(suggestions.word)")
             } footer: {
-                Text("Suggested by Apple Intelligence on this device, and often wrong: play each before you use it. Kokoro voices play the phonemes; other voices say the word as written.")
+                // Where they come from, in the suggester's own words.
+                Text(suggestions.attribution + " " + String(localized: "Suggestions are often wrong: play each before you use it."))
             }
         }
         .formStyle(.grouped)

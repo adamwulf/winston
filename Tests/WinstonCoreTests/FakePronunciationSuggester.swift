@@ -18,6 +18,8 @@ final class FakePronunciationSuggester: PronunciationSuggester {
 
     private let state = Mutex(State())
 
+    let attribution = "Suggested by the fake suggester."
+
     var isAvailable: Bool {
         get { state.withLock { $0.isAvailable } }
         set { state.withLock { $0.isAvailable = newValue } }

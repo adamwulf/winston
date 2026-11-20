@@ -29,6 +29,12 @@ struct PronunciationSuggestionTests {
         #expect(harness.model.canSuggestPronunciations)
     }
 
+    @Test func theListSaysWhereTheSuggestionsComeFromInTheSuggestersWords() {
+        let harness = Harness()
+
+        #expect(harness.model.pronunciationSuggestions(for: "Winston").attribution == "Suggested by the fake suggester.")
+    }
+
     @Test func suggestionsPlayOnlyWhileAKokoroVoiceIsReady() async {
         let harness = Harness()
         let model = harness.model

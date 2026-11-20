@@ -26,6 +26,8 @@ public final class PronunciationSuggestions: Identifiable {
     /// The word, trimmed.
     public let word: String
     public private(set) var phase: Phase = .loading
+    /// Where the suggestions come from, for the list's footer: the suggester's own words.
+    public var attribution: String { suggester.attribution }
     @ObservationIgnored private let suggester: any PronunciationSuggester
     /// The phoneme symbols Kokoro has, read after each request: `VoiceLoop.kokoroPhonemeSymbols()`.
     @ObservationIgnored private let symbols: @MainActor () async -> Set<Character>

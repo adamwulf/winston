@@ -7,6 +7,9 @@ public protocol PronunciationSuggester: Sendable {
     /// Whether it can suggest now. The on-device model, for one, isn't there on a device without
     /// Apple Intelligence, while it is turned off, or while its model downloads.
     var isAvailable: Bool { get }
+    /// A sentence saying where its suggestions come from, for the suggestion list's footer, such
+    /// as "Suggested by Apple Intelligence on this device."
+    var attribution: String { get }
     /// A few ways to say `word`, the most likely first, with their phonemes in Kokoro's notation
     /// (see `Pronunciation.Mode.phonetic`). They may repeat each other or hold symbols Kokoro
     /// doesn't have: `PronunciationCandidate.candidates(from:symbols:)` sorts that out. Throws a

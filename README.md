@@ -457,7 +457,8 @@ run (`AppModel.canSuggestPronunciations`). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
 fills the row's IPA; Regenerate asks again. The suggester is a
 `PronunciationSuggester`, so another backend can be added without changing the
-settings screen. The one there is, `OnDevicePronunciationSuggester`, asks
+settings screen: each says where its suggestions come from (`attribution`), and
+the list's footer shows it. The one there is, `OnDevicePronunciationSuggester`, asks
 Apple's on-device model (`SystemLanguageModel.default`; no network, no key),
 which isn't there without Apple Intelligence, while it is turned off, or while
 its model downloads. The model knows standard IPA far better than Kokoro's
