@@ -161,3 +161,34 @@ package func eventually(
     }
     return true
 }
+
+/// Waits while the offline engines render `passes` more passes, however long the machine takes
+/// to get round to them. Whether they did. Each pass is `OfflineAudio.framesPerPass` frames,
+/// 4096 (about 85 ms of audio) unless the test changed it: the engines' clock, for a wait on how
+/// much audio has played rather than how much time has passed.
+@MainActor
+package func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool {
+    let start = bed.audio.renderPasses
+    return await eventually { bed.audio.renderPasses >= start + passes }
+}
+
+/// Waits while the last render pass of speech that has just finished reaches the speaker.
+/// Offline, a reply or preview counts as played once its player has rendered its last buffer,
+/// and the pitch shift after the player pulls it a pass ahead of the output (see
+/// `SpeechOutput.completion`), so that pass comes out one pass later. Waits for twice that.
+/// Whether it did.
+@MainActor
+package func lastPassPlays(on bed: VoiceTestBed) async -> Bool {
+    await renderPassesGoBy(2, on: bed)
+}
+
+/// Waits while the sound cues the loop has started play out, with any queued behind them. The
+/// longest run is the start cue with the working taps after it: 570 ms with the taps' lead-in,
+/// under eight passes of 4096 frames however they fall. Waits for twice that, 65,536 frames,
+/// in as many passes as that takes. Whether they were rendered.
+@MainActor
+package func cuesPlayOut(on bed: VoiceTestBed) async -> Bool {
+    let frames = 16 * 4096
+    let framesPerPass = Int(bed.audio.framesPerPass)
+    return await renderPassesGoBy((frames + framesPerPass - 1) / framesPerPass, on: bed)
+}

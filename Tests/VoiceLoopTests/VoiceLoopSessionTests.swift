@@ -69,12 +69,22 @@ private func settle(_ duration: Duration = .milliseconds(250)) async throws {
     try await Task.sleep(for: duration)
 }
 
-/// Waits while the offline engine renders `passes` more passes, however long the machine takes
-/// to get round to them. Whether they did.
+/// Waits while the sound of speech that was just cut off dies away. A stopped player's sound runs
+/// on for two render passes: the pitch shift holds one pass of it, then the engine fades it out.
+/// Waits for twice that, counted in passes, not time. Whether they were rendered.
 @MainActor
-private func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool {
-    let start = bed.audio.renderPasses
-    return await eventually { bed.audio.renderPasses >= start + passes }
+private func cutOffSpeechDiesAway(on bed: VoiceTestBed) async -> Bool {
+    await renderPassesGoBy(4, on: bed)
+}
+
+/// Whether the loop kept `engine` running for at least the whole stop cue after `stopped`, when
+/// the test called `stop()`. By the clock, which the loop's teardown timer runs on and which never
+/// runs fast; the tests render the cue themselves, so its frames can't show how long it was kept.
+@MainActor
+private func keptRunningThroughTheStopCue(_ engine: AVAudioEngine, since stopped: ContinuousClock.Instant) -> Bool {
+    let cue = Duration.seconds(Double(SoundCue.listeningStopped.samples(sampleRate: 48_000).count) / 48_000)
+    guard let engineStopped = (engine as? OfflineEngine)?.lastStopped else { return false }
+    return engineStopped - stopped >= cue
 }
 
 /// Tells the loop its engine's hardware configuration changed, as AVAudioEngine does.
@@ -447,6 +457,7 @@ struct SpeakingTests {
         }
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
@@ -534,10 +545,7 @@ struct SpeakingTests {
         loop.stopSpeaking()
 
         #expect(loop.state == .listening(partial: ""))
-        // The stopped player's sound runs on for two render passes: the pitch shift holds one
-        // pass of it, then the engine fades it out. Waits for twice that, counted in passes, not
-        // time: a busy machine can take far longer than usual to render them.
-        #expect(await renderPassesGoBy(4, on: bed))
+        #expect(await cutOffSpeechDiesAway(on: bed))
         let playedWhenStopped = bed.audio.playedFrames
         // Nothing more plays, neither the rest of the reply nor the queued one, through many
         // more passes.
@@ -587,6 +595,7 @@ struct SpeakingTests {
 
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         // Only the preview played after that: neither long reply carried on.
         #expect(abs(bed.audio.playedFrames - playedBeforePreview - previewAlone) <= previewAlone / 4)
     }
@@ -644,6 +653,9 @@ struct SpeakingTests {
         loop.preview(longReply)
         #expect(await eventually { bed.audio.playedFrames > 0 })
         let previewEngine = try #require(bed.audio.engines.last)
+        // Starting stops the preview's engine before anything more renders, so none of the
+        // preview plays from here on.
+        let playedWhenStarted = bed.audio.playedFrames
 
         try await loop.start()
         defer { loop.stop() }
@@ -651,10 +663,9 @@ struct SpeakingTests {
         #expect(!previewEngine.isRunning)
         #expect(loop.state == .listening(partial: ""))
         #expect(bed.audio.engines.count == 2)
-        // Nothing more of the preview plays.
-        try await settle(.milliseconds(50))
-        let playedWhenStarted = bed.audio.playedFrames
+        // Nothing more of the preview plays, through many passes of the new engine.
         try await settle()
+        #expect(await renderPassesGoBy(20, on: bed))
         #expect(bed.audio.playedFrames == playedWhenStarted)
     }
 
@@ -686,13 +697,15 @@ struct BargeInTests {
         #expect(await eventually { bed.audio.playedFrames > 0 })
         bed.recognizer.hear("Wait.", over: later, isFinal: true)
 
+        // The reply is cut off as the words show, so its sound dies away from there.
         #expect(await eventually { loop.state == .listening(partial: "Wait.") })
-        #expect(await nextUtterance(of: loop)?.text == "Wait.")
-        // By now the engine has faded the stopped player out.
+        #expect(await cutOffSpeechDiesAway(on: bed))
         let playedWhenInterrupted = bed.audio.playedFrames
+        #expect(await nextUtterance(of: loop)?.text == "Wait.")
 
-        // The interrupted reply and the queued one are both gone.
+        // The interrupted reply and the queued one are both gone, through many passes.
         try await settle()
+        #expect(await renderPassesGoBy(20, on: bed))
         #expect(loop.state == .listening(partial: ""))
         #expect(bed.audio.playedFrames == playedWhenInterrupted)
     }
@@ -978,6 +991,7 @@ struct VoiceSettingsTests {
         loop.speak(text)
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
@@ -1005,6 +1019,7 @@ struct VoiceSettingsTests {
         loop.speak(text)
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
@@ -1036,6 +1051,11 @@ struct VoiceSettingsTests {
 
     @Test func aShiftedReplyTakesAsLongAsAnUnshiftedOne() async throws {
         let bed = VoiceTestBed()
+        // Pulled 512 frames a pass, nearer what a device's audio hardware pulls, not 4096. At 4096
+        // frames every 2 ms the engine outruns the synthesizer: the player runs dry mid-reply and
+        // the shift smears sound into each gap, so a shifted reply's count jumped by up to 4,650
+        // frames from one run to the next. At 512 it stays within 1,400 of the unshifted one.
+        bed.audio.framesPerPass = 512
         let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
         let text = "One, two, three."
@@ -1188,7 +1208,7 @@ private final class ChangeFlag {
 // MARK: - Sound cues
 
 // The other suites leave the cues off, so that what plays is only what is said. These turn
-// them on. A cue renders in a few milliseconds offline, so `settle()` lets one finish.
+// them on. `cuesPlayOut(on:)` lets a cue finish, however long the machine takes to render it.
 
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
@@ -1217,7 +1237,7 @@ struct SoundCueTests {
 
         try await loop.start()
         defer { loop.stop() }
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let played = bed.audio.playedFrames
         loop.play(.reaction)
 
@@ -1231,17 +1251,22 @@ struct SoundCueTests {
         let loop = bed.makeLoop(soundCues: true)
         try await loop.start()
         let engine = try #require(bed.audio.engines.last)
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let startCue = bed.audio.playedFrames
         #expect(startCue > 0)
 
+        let stopped = ContinuousClock.now
         loop.stop()
 
         // Listening ends at once; the engine runs on only to play the stop cue.
         #expect(loop.state == .off)
         #expect(engine.isRunning)
+        // The stop cue (170 ms, two passes) renders now, before an await lets the engine's
+        // teardown timer run: however slow the machine, the cue has played before the engine stops.
+        bed.audio.render(passes: 4)
         #expect(await eventually { bed.recognizer.isCancelled })
         #expect(await eventually { !engine.isRunning })
+        #expect(keptRunningThroughTheStopCue(engine, since: stopped))
         // The whole stop cue played: the same taps as the start cue, in the other order.
         let played = bed.audio.playedFrames
         #expect(abs(played - 2 * startCue) <= startCue / 10)
@@ -1288,13 +1313,13 @@ struct SoundCueTests {
 
         #expect(await eventually { engine.isRunning })
         #expect(await eventually { bed.audio.playedFrames > playedBeforeStop })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let playedAfterRestart = bed.audio.playedFrames - playedBeforeStop
         // One whole start cue, for comparison.
         let playedBeforeAnother = bed.audio.playedFrames
         loop.play(.listeningStarted)
         #expect(await eventually { bed.audio.playedFrames > playedBeforeAnother })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let wholeCue = bed.audio.playedFrames - playedBeforeAnother
 
         #expect(abs(playedAfterRestart - wholeCue) <= wholeCue / 10)
@@ -1308,7 +1333,7 @@ struct SoundCueTests {
         try await loop.start()
         defer { loop.stop() }
         let first = try #require(bed.audio.engines.last)
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let played = bed.audio.playedFrames
 
         loop.pausesOtherAudio = false
@@ -1549,7 +1574,7 @@ private func staysSilent(on bed: VoiceTestBed, for seconds: Double = 2) async ->
 private func listeningLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLoop {
     let loop = bed.makeLoop(soundCues: true)
     try await loop.start()
-    try await settle()
+    #expect(await cuesPlayOut(on: bed))
     return loop
 }
 
@@ -1709,6 +1734,7 @@ struct WorkingCueTests {
         let beforeAlone = bed.audio.playedFrames
         loop.speak("Done.")
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         #expect(await staysSilent(on: bed))
         let reply = bed.audio.playedFrames - beforeAlone
         let taps = soundingFrames(of: .agentWorking)
@@ -1866,6 +1892,30 @@ struct WorkingCueTests {
         #expect(taps.first.flatMap { endOfLastLoudSound(in: output, before: $0) } != nil)
     }
 
+    @Test func tapsWaitLongerOnlyAfterAShiftedReplyIsCutOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await recordingKokoroLoopWithCues(on: bed)
+        defer { loop.stop() }
+        loop.speechPitch = 2
+
+        // A shifted reply that plays to its end leaves the usual 0.1 s lead-in.
+        loop.speak("Done.")
+        #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(loop.workingCueLeadIn == 0.1)
+
+        // One cut off mid-sound runs on out of the shift: the next taps wait 0.13 s.
+        let before = bed.audio.playedFrames
+        loop.speak("One. Two. Three. Four.")
+        #expect(await eventually { bed.audio.playedFrames > before })
+        loop.stopSpeaking()
+        #expect(loop.workingCueLeadIn == 0.13)
+
+        // Those taps take it, and the ones after them are back to 0.1 s.
+        loop.isAgentWorking = true
+        #expect(loop.hasPlayedWorkingCue)
+        #expect(loop.workingCueLeadIn == 0.1)
+    }
+
     @Test func aReplyThatStartsWhileTheTapsPlayCutsThemOffAndTheyPlayAfterIt() async throws {
         let bed = VoiceTestBed()
         let loop = try await recordingKokoroLoopWithCues(on: bed)
@@ -1975,11 +2025,16 @@ struct WorkingCueTests {
         #expect(loop.hasPlayedWorkingCue)
 
         // At once: the engine renders on the main actor, so none of the taps have played yet.
+        let stopped = ContinuousClock.now
         loop.stop()
 
         #expect(loop.state == .off)
         #expect(engine.isRunning)
+        // The stop cue (170 ms, two passes) renders now, before an await lets the engine's
+        // teardown timer run: however slow the machine, the cue has played before the engine stops.
+        bed.audio.render(passes: 4)
         #expect(await eventually { !engine.isRunning })
+        #expect(keptRunningThroughTheStopCue(engine, since: stopped))
         let stopCue = soundingFrames(of: .listeningStopped)
         #expect(abs(bed.audio.playedFrames - played - stopCue) <= stopCue / 10)
     }
@@ -2303,11 +2358,12 @@ struct PushToTalkTests {
         loop.beginTalking()
 
         #expect(loop.state == .listening(partial: ""))
-        // The engine fades a stopped player out over its next render pass or two.
-        try await settle(.milliseconds(50))
+        #expect(await cutOffSpeechDiesAway(on: bed))
         let playedWhenPressed = bed.audio.playedFrames
         loop.speak("Hi.")
+        // Nothing plays during the hold, through many passes.
         try await settle()
+        #expect(await renderPassesGoBy(20, on: bed))
         #expect(loop.state == .listening(partial: ""))
         #expect(bed.audio.playedFrames == playedWhenPressed)
 
@@ -2379,17 +2435,17 @@ struct PushToTalkTests {
     @Test func aPressAndAReleaseEachPlayTheirCueAndOpeningOrClosingPlaysNone() async throws {
         let bed = VoiceTestBed()
         let loop = try await pushToTalkLoop(on: bed, soundCues: true)
-        try await settle()
-        // Starting isn't a press: Adam can't talk yet.
+        // Starting isn't a press: Adam can't talk yet. A start cue, had it played, would have by now.
+        #expect(await cuesPlayOut(on: bed))
         #expect(bed.audio.playedFrames == 0)
 
         loop.beginTalking()
         #expect(await eventually { bed.audio.playedFrames > 0 })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let pressCue = bed.audio.playedFrames
         loop.endTalking()
         #expect(await eventually { bed.audio.playedFrames > pressCue })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let releaseCue = bed.audio.playedFrames - pressCue
 
         // The same taps, in the other order.

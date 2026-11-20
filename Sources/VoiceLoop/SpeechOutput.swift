@@ -71,4 +71,13 @@ final class SpeechOutput {
     /// `.dataPlayedBack` completion for that buffer. A message that is shifted ends with this
     /// much silence, and finishes when the silence has played.
     static let pitchShiftTail = 0.1
+
+    /// How long a shifted message cut off mid-sound keeps sounding after the cut, in seconds,
+    /// with a margin: the working taps wait this long after one. Measured offline at twice the
+    /// pitch, the shift's output stays above -40 dBFS for up to 4,245 frames (88 ms at 48 kHz)
+    /// after the player stops, and its faintest tail, above -60 dBFS, lasts up to 5,538 frames
+    /// (115 ms); the same whether the engine pulls 512 frames at a time or 4,096, so it is the
+    /// shift's own buffer. `pitchShiftTail` is too short for that. This leaves about 15 ms of
+    /// silence before the taps.
+    static let cutOffPitchShiftTail = 0.13
 }

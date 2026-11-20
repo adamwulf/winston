@@ -30,6 +30,10 @@ package final class OfflineAudio {
     package private(set) var output: [Float] = []
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
+    /// How many frames each render pass pulls through an engine made from now on, at 48 kHz:
+    /// 4096 (85 ms) unless a test sets it first. A device's audio hardware pulls far fewer at a
+    /// time, a few hundred to a thousand or so.
+    package var framesPerPass: AVAudioFrameCount = 4096
     private let microphone = Microphone()
     private var renderTask: Task<Void, Never>?
 
@@ -43,11 +47,11 @@ package final class OfflineAudio {
 
     /// A new engine that renders offline, with the pretend microphone as its input.
     package func makeEngine() throws -> AVAudioEngine {
-        let engine = AVAudioEngine()
+        let engine = OfflineEngine()
         guard let renderFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
             throw OfflineAudioError.noRenderFormat
         }
-        try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
+        try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: framesPerPass)
 
         if nextEngineCannotStart {
             nextEngineCannotStart = false
@@ -154,6 +158,24 @@ package final class OfflineAudio {
             renderPasses += 1
         }
         return !running.isEmpty
+    }
+}
+
+/// The engines `OfflineAudio` makes: an `AVAudioEngine` that notes when it was last stopped, for a
+/// test that must know how long the loop kept it running. By the clock, which the loop's own
+/// timers run on. Its only state of its own is behind a lock, so it stays as `Sendable` as the
+/// engine it extends.
+package final class OfflineEngine: AVAudioEngine, @unchecked Sendable {
+    private let lastStop = Mutex<ContinuousClock.Instant?>(nil)
+
+    /// When `stop()` was last called on it; nil if it never was.
+    package var lastStopped: ContinuousClock.Instant? {
+        lastStop.withLock { $0 }
+    }
+
+    override package func stop() {
+        lastStop.withLock { $0 = .now }
+        super.stop()
     }
 }
 

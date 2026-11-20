@@ -566,7 +566,7 @@ struct PronunciationPreviewTests {
 
         #expect(model.voiceLoop.state == .speaking)
         #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
-        try await settle(.milliseconds(50))
+        #expect(await lastPassPlays(on: bed))
         // The voice preview was the only thing said, and all of it played.
         #expect(bed.kokoro.requests.map(\.text) == ["This is how I sound with the Heart voice."])
         let sentenceFrames = Int(FakeKokoro.secondsPerSentence * 48_000)
@@ -725,6 +725,7 @@ struct SpokenMessageTests {
         #expect(await eventually {
             harness.bed.audio.playedFrames > 0 && model.voiceLoop.state == .listening(partial: "")
         })
+        #expect(await lastPassPlays(on: harness.bed))
         let played = harness.bed.audio.playedFrames
 
         harness.fake.receive(textMessage(id: 12, chatID: 1, "Done, all green."))
@@ -732,7 +733,9 @@ struct SpokenMessageTests {
         #expect(await eventually { model.currentMessages.last?.text == "Done, all green." })
         #expect(model.currentMessages.map(\.id) == [MessageID(10), MessageID(11), MessageID(12)])
         #expect(model.voiceLoop.state == .listening(partial: ""))
+        // Nothing more plays, through many passes.
         try await settle()
+        #expect(await renderPassesGoBy(20, on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
     }
 
@@ -753,7 +756,7 @@ struct SpokenMessageTests {
 }
 
 /// The chime when the bot reacts to a message with any emoji, in voice mode. These harnesses turn the sound
-/// cues on; a cue renders in a few milliseconds, so `settle()` lets one finish.
+/// cues on; `cuesPlayOut(on:)` lets one finish, however long the machine takes to render it.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
 struct ReactionChimeTests {
@@ -765,7 +768,7 @@ struct ReactionChimeTests {
         if inVoiceMode {
             await harness.model.setVoiceMode(true)
             #expect(await eventually { harness.bed.audio.playedFrames > 0 })
-            try await settle()
+            #expect(await cuesPlayOut(on: harness.bed))
         }
         return harness
     }
@@ -791,7 +794,8 @@ struct ReactionChimeTests {
 
         await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
         #expect(await eventually { model.latestIncomingMessage?.hasMyThumbsUp == true })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
 
         try harness.fake.botReacts("👍", to: 11, in: 1)
@@ -801,13 +805,13 @@ struct ReactionChimeTests {
         #expect(await eventually { harness.bed.audio.playedFrames > played })
 
         // Adam taking his back leaves the bot's, and is silent too.
-        try await settle()
+        #expect(await cuesPlayOut(on: harness.bed))
         let playedWithBoth = harness.bed.audio.playedFrames
         await model.toggleThumbsUp(on: try #require(model.latestIncomingMessage))
         #expect(await eventually {
             model.latestIncomingMessage?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
         })
-        try await settle()
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == playedWithBoth)
     }
 
@@ -835,7 +839,8 @@ struct ReactionChimeTests {
         #expect(await eventually {
             model.messages[ChatID(2)]?.last?.reactions == [Reaction(emoji: "👍", count: 1, isChosen: false)]
         })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
     }
 
@@ -859,7 +864,7 @@ struct ReactionChimeTests {
         let playedBefore = harness.bed.audio.playedFrames
         try harness.fake.botReacts("👍", to: 11, in: 1)
         #expect(await eventually { harness.bed.audio.playedFrames > playedBefore })
-        try await settle()
+        #expect(await cuesPlayOut(on: harness.bed))
         let played = harness.bed.audio.playedFrames
 
         // One reaction before and after: a new emoji chimes even though the total didn't go up.
@@ -881,7 +886,8 @@ struct ReactionChimeTests {
         #expect(await eventually {
             model.latestIncomingMessage?.reactions == [Reaction(emoji: "🎉", count: 1, isChosen: true)]
         })
-        try await settle()
+        // Handled: a chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
     }
 
@@ -897,7 +903,8 @@ struct ReactionChimeTests {
         harness.fake.setTyping(true, in: 2)
 
         #expect(await eventually { model.typingChats.contains(ChatID(2)) })
-        try await settle()
+        // A chime, had one started, would have played out by now.
+        #expect(await cuesPlayOut(on: harness.bed))
         #expect(harness.bed.audio.playedFrames == played)
         #expect(!model.currentMessages.contains { $0.id == MessageID(5) })
     }
@@ -957,7 +964,7 @@ struct BotTypingSoundTests {
         let model = harness.model
         await model.setVoiceMode(true)
         #expect(await eventually { harness.bed.audio.playedFrames > 0 })
-        try await settle()
+        #expect(await cuesPlayOut(on: harness.bed))
         let played = harness.bed.audio.playedFrames
 
         harness.fake.setTyping(true, in: 1)

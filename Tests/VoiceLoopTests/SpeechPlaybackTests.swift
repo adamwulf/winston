@@ -42,13 +42,6 @@ private func speakerFrames(forSeconds seconds: Double) -> Int {
     Int(seconds * 48_000)
 }
 
-/// Lets the last render pass reach the speaker. Offline, a playback finishes once the player has
-/// rendered its last buffer, and the pitch shift after the player pulls it a pass ahead of the
-/// output (see `SpeechOutput.completion`).
-private func letTheLastPassPlay() async throws {
-    try await Task.sleep(for: .milliseconds(50))
-}
-
 /// Counts the calls to a playback's `onFinished`, which arrive on an audio thread.
 private final class FinishCounter: Sendable {
     private let calls = Mutex(0)
@@ -109,13 +102,15 @@ struct SpeechPlaybackTests {
         for _ in 0..<3 {
             playback.receive(try speechBuffer(seconds: 0.1))
         }
-        // The last buffer is held back until the synthesizer says there are no more.
-        try await Task.sleep(for: .milliseconds(100))
+        // The last buffer is held back until the synthesizer says there are no more. Had all three
+        // been scheduled, they (0.3 s: four passes, and one more through the pitch shift) would
+        // have played by now.
+        #expect(await renderPassesGoBy(10, on: bed))
         #expect(finished.count == 0)
         playback.synthesisFinished()
 
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await lastPassPlays(on: bed))
         let expected = speakerFrames(forSeconds: 0.3)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -132,7 +127,7 @@ struct SpeechPlaybackTests {
         playback.receive(try speechBuffer(seconds: 0.1))
 
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await lastPassPlays(on: bed))
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -204,7 +199,9 @@ struct SpeechPlaybackTests {
         // The synthesizer keeps writing a cancelled utterance to its end.
         playback.receive(try speechBuffer(seconds: 0.1))
         playback.synthesisFinished()
-        try await Task.sleep(for: .milliseconds(250))
+        // Had either buffer been scheduled, both (0.2 s: three passes, and one more through the
+        // pitch shift) would have played by now.
+        #expect(await renderPassesGoBy(10, on: bed))
 
         #expect(finished.count == 0)
         #expect(bed.audio.playedFrames == 0)
@@ -286,7 +283,7 @@ struct PitchShiftTests {
         playback.receive(try speechBuffer(seconds: 0.5))
         playback.synthesisFinished()
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await lastPassPlays(on: bed))
 
         #expect(bed.audio.playedFrames > 0)
         return Double(bed.audio.playedZeroCrossings) / Double(bed.audio.playedFrames) * 48_000
