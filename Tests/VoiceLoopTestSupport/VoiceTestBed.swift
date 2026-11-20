@@ -180,3 +180,11 @@ package func renderPassesGoBy(_ passes: Int, on bed: VoiceTestBed) async -> Bool
 package func lastPassPlays(on bed: VoiceTestBed) async -> Bool {
     await renderPassesGoBy(2, on: bed)
 }
+
+/// Waits while the sound cues the loop has started play out, with any queued behind them. The
+/// longest run is the start cue with the working taps after it: 570 ms with the taps' lead-in,
+/// under eight render passes however they fall. Waits for twice that. Whether they were rendered.
+@MainActor
+package func cuesPlayOut(on bed: VoiceTestBed) async -> Bool {
+    await renderPassesGoBy(16, on: bed)
+}

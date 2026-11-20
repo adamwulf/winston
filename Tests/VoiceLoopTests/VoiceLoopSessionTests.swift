@@ -1191,7 +1191,7 @@ private final class ChangeFlag {
 // MARK: - Sound cues
 
 // The other suites leave the cues off, so that what plays is only what is said. These turn
-// them on. A cue renders in a few milliseconds offline, so `settle()` lets one finish.
+// them on. `cuesPlayOut(on:)` lets a cue finish, however long the machine takes to render it.
 
 @MainActor
 @Suite(.serialized, .timeLimit(.minutes(1)))
@@ -1220,7 +1220,7 @@ struct SoundCueTests {
 
         try await loop.start()
         defer { loop.stop() }
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let played = bed.audio.playedFrames
         loop.play(.reaction)
 
@@ -1234,7 +1234,7 @@ struct SoundCueTests {
         let loop = bed.makeLoop(soundCues: true)
         try await loop.start()
         let engine = try #require(bed.audio.engines.last)
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let startCue = bed.audio.playedFrames
         #expect(startCue > 0)
 
@@ -1291,13 +1291,13 @@ struct SoundCueTests {
 
         #expect(await eventually { engine.isRunning })
         #expect(await eventually { bed.audio.playedFrames > playedBeforeStop })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let playedAfterRestart = bed.audio.playedFrames - playedBeforeStop
         // One whole start cue, for comparison.
         let playedBeforeAnother = bed.audio.playedFrames
         loop.play(.listeningStarted)
         #expect(await eventually { bed.audio.playedFrames > playedBeforeAnother })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let wholeCue = bed.audio.playedFrames - playedBeforeAnother
 
         #expect(abs(playedAfterRestart - wholeCue) <= wholeCue / 10)
@@ -1311,7 +1311,7 @@ struct SoundCueTests {
         try await loop.start()
         defer { loop.stop() }
         let first = try #require(bed.audio.engines.last)
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let played = bed.audio.playedFrames
 
         loop.pausesOtherAudio = false
@@ -1552,7 +1552,7 @@ private func staysSilent(on bed: VoiceTestBed, for seconds: Double = 2) async ->
 private func listeningLoopWithCues(on bed: VoiceTestBed) async throws -> VoiceLoop {
     let loop = bed.makeLoop(soundCues: true)
     try await loop.start()
-    try await settle()
+    #expect(await cuesPlayOut(on: bed))
     return loop
 }
 
@@ -2389,11 +2389,11 @@ struct PushToTalkTests {
 
         loop.beginTalking()
         #expect(await eventually { bed.audio.playedFrames > 0 })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let pressCue = bed.audio.playedFrames
         loop.endTalking()
         #expect(await eventually { bed.audio.playedFrames > pressCue })
-        try await settle()
+        #expect(await cuesPlayOut(on: bed))
         let releaseCue = bed.audio.playedFrames - pressCue
 
         // The same taps, in the other order.
