@@ -44,7 +44,10 @@ import Synchronization
 /// reach the microphone (its first buffer's scheduling plus the output latency, see
 /// `PlaybackOffset`): buffers from its setup that ended by then (`pre…`), the one that spans it
 /// (`onset…`), and those from then on (`mic…`, and the `mic level` lines), up to its end.
-/// "Into playback" times count from `playbackFrom` too.
+/// "Into playback" times count from `playbackFrom` too. The latency is taken once per engine
+/// configuration (each start, restart, configuration change and route change); a reply whose
+/// configuration changed before its first buffer was scheduled has `playbackOffset=unknown`,
+/// and only its whole levels (`reply…`).
 ///
 /// A line written while a pipeline runs carries `session` and `tMs`, as the `voice.timeline`
 /// lines do, so the two logs line up. Times since something happened are left out until it has.
@@ -112,13 +115,18 @@ final class EchoLog {
         /// Takes the playback's lock, so it is read only off the time-critical paths.
         let firstAudio: () -> UInt64?
         let pipeline: Pipeline
+        /// The engine configuration it started on (`EchoLog.configuration`).
+        let configuration: Int
         /// The microphone's levels while it was being said.
         var levels: ReplyLevels
-        /// How long after its first buffer was scheduled its sound can reach the microphone;
-        /// read once that has happened.
+        /// How long after its first buffer was scheduled its sound can reach the microphone,
+        /// from its configuration's snapshot, once that buffer has been scheduled.
         var playbackOffset: PlaybackOffset?
         /// Its first buffer's scheduling plus `playbackOffset`, in host time; nil until then.
         var playbackFrom: UInt64?
+        /// Set when the configuration changed before its first buffer was scheduled, so its
+        /// playback's latency is unknown: its levels aren't split.
+        var playbackOffsetUnknown = false
         /// Whether a `mic level` line has seen its playback start yet.
         var sawPlaybackStart = false
         /// Microphone buffers whose readings were lost because the main actor fell behind.
@@ -203,6 +211,12 @@ final class EchoLog {
     private var events: [Event] = []
     /// Events and ended replies dropped because their queue was full, for the next line written.
     private var droppedEvents = 0
+    /// Counts the engine configurations: a start, a restart, a configuration change or a route
+    /// change begins a new one, whose latency can differ.
+    private var configuration = 0
+    /// The playback latency of a configuration, taken off the time-critical paths once its
+    /// engine is running.
+    private var offsetSnapshot: (configuration: Int, offset: PlaybackOffset)?
     private var levelLimiter = RateLimiter(interval: EchoLog.levelInterval)
 
     /// The most events queued between two writes. A burst between polls brings a handful.
@@ -234,6 +248,14 @@ final class EchoLog {
     func noteEngineStart() {
         engineStartTime = TimelineClock.now()
         repliesSinceEngineStart = 0
+        configuration += 1
+    }
+
+    /// Takes the current configuration's playback latency from `pipeline`, if its engine is
+    /// running. Off the time-critical paths.
+    private func snapshotPlaybackOffset(_ pipeline: Pipeline) {
+        guard pipeline.engine.isRunning else { return }
+        offsetSnapshot = (configuration, PlaybackOffset(pipeline))
     }
 
     /// Logs the state of `pipeline`'s engine, which started at `noteEngineStart()`: `reason` is
@@ -245,6 +267,7 @@ final class EchoLog {
         let time = TimelineClock.now()
         let state = EngineAudioState(pipeline)
         engineState = state
+        snapshotPlaybackOffset(pipeline)
         var fields = state.fields
         fields["reason"] = reason
         fields["startCheck"] = startCheck
@@ -268,7 +291,8 @@ final class EchoLog {
     /// logged before: the loop calls it as the change comes, deals with the change, then calls
     /// `logConfigurationChange(_:of:handling:)`.
     func noteConfigurationChange() -> ConfigurationChange {
-        ConfigurationChange(
+        configuration += 1
+        return ConfigurationChange(
             time: TimelineClock.now(),
             before: engineState,
             engineStartTime: engineStartTime,
@@ -284,15 +308,22 @@ final class EchoLog {
         let state = EngineAudioState(pipeline)
         var fields = change.before.map { state.fields(changedFrom: $0) } ?? state.fields
         engineState = state
+        snapshotPlaybackOffset(pipeline)
         fields["handling"] = handling
         fields["sinceEngineStartMs"] = Self.milliseconds(since: change.engineStartTime, to: change.time)
         fields["sinceRouteChangeMs"] = Self.milliseconds(since: change.routeChangeTime, to: change.time)
         logger.notice("engine configuration changed", context(pipeline, at: change.time, fields))
     }
 
-    /// The iOS audio route changed. "audio route changed" in `voice.loop` says how.
-    func routeChanged() {
+    /// The iOS audio route changed, and the loop has dealt with it: a new configuration, whose
+    /// latency is taken from `pipeline` if voice mode carries on. "audio route changed" in
+    /// `voice.loop` says how it changed.
+    func routeChanged(_ pipeline: Pipeline?) {
         routeChangeTime = TimelineClock.now()
+        configuration += 1
+        if let pipeline {
+            snapshotPlaybackOffset(pipeline)
+        }
     }
 
     // MARK: - Noting events
@@ -364,6 +395,7 @@ final class EchoLog {
             started: started,
             firstAudio: firstAudio,
             pipeline: pipeline,
+            configuration: configuration,
             levels: ReplyLevels(started: started)
         )
         enqueue(.replyStarted(ReplyStart(
@@ -470,24 +502,38 @@ final class EchoLog {
     private func absorbLevels(from pipeline: Pipeline) {
         let (readings, dropped) = pipeline.micLevels.drain()
         if var current = reply, current.pipeline === pipeline {
-            Self.absorb(readings, dropped: dropped, into: &current)
+            Self.absorb(readings, dropped: dropped, into: &current, offsetSnapshot: offsetSnapshot)
             reply = current
         }
         for index in endedReplies.indices where endedReplies[index].pipeline === pipeline {
-            Self.absorb(readings, dropped: dropped, into: &endedReplies[index])
+            Self.absorb(readings, dropped: dropped, into: &endedReplies[index], offsetSnapshot: offsetSnapshot)
         }
     }
 
-    private static func absorb(_ readings: [MicrophoneLevels.Reading], dropped: Int, into reply: inout Reply) {
+    private static func absorb(
+        _ readings: [MicrophoneLevels.Reading],
+        dropped: Int,
+        into reply: inout Reply,
+        offsetSnapshot: (configuration: Int, offset: PlaybackOffset)?
+    ) {
         // Read after the readings were taken: if the first buffer hadn't been scheduled by now,
         // none of them was captured after it.
-        if reply.playbackFrom == nil, let firstAudio = reply.firstAudio() {
-            let offset = PlaybackOffset(reply.pipeline)
-            reply.playbackOffset = offset
-            reply.playbackFrom = firstAudio &+ offset.hostTime
+        if reply.playbackFrom == nil, !reply.playbackOffsetUnknown, let firstAudio = reply.firstAudio() {
+            // The latency of the configuration it started on; if that has changed since (a
+            // restart, a configuration or route change), its playback's latency is unknown.
+            if let offsetSnapshot, offsetSnapshot.configuration == reply.configuration {
+                reply.playbackOffset = offsetSnapshot.offset
+                reply.playbackFrom = firstAudio &+ offsetSnapshot.offset.hostTime
+            } else {
+                reply.playbackOffsetUnknown = true
+            }
         }
         for reading in readings {
-            reply.levels.add(reading, playbackFrom: reply.playbackFrom)
+            if reply.playbackOffsetUnknown {
+                reply.levels.addUnsplit(reading)
+            } else {
+                reply.levels.add(reading, playbackFrom: reply.playbackFrom)
+            }
         }
         reply.droppedBuffers += dropped
     }
@@ -615,7 +661,7 @@ final class EchoLog {
                 fields["intoPlaybackMs"] = TimelineClock.milliseconds(from: playbackFrom, to: result.time)
             }
             // The loudest levels so far, as the line is written.
-            fields.merge(Self.levelFields(replied.levels, playbackOffset: replied.playbackOffset)) { $1 }
+            fields.merge(Self.levelFields(of: replied)) { $1 }
         }
         logger.notice("result during reply", context(result.pipeline, at: result.time, fields))
     }
@@ -640,7 +686,7 @@ final class EchoLog {
         fields["synthMs"] = firstAudio.map { TimelineClock.milliseconds(from: ended.started, to: $0) }
         fields["playedMs"] = ended.playbackFrom.map { TimelineClock.milliseconds(from: $0, to: end.time) }
         // The stretch no `mic level` line covered included.
-        fields.merge(Self.levelFields(ended.levels, playbackOffset: ended.playbackOffset)) { $1 }
+        fields.merge(Self.levelFields(of: ended)) { $1 }
         // False if the line was written before a buffer captured after the end came: after
         // `readingsGrace`, or because the pipeline went.
         fields["levelsComplete"] = ended.levels.hasReadingAfterEnd
@@ -680,12 +726,19 @@ final class EchoLog {
 
     /// A reply's levels before it could be heard (`pre…`), across that moment (`onset…`), and
     /// after it (`mic…`), with where the split was: `playbackFrom` names what it adds up, and
-    /// `playbackOffsetMs` is the latency added to the first buffer's scheduling.
-    private static func levelFields(_ levels: ReplyLevels, playbackOffset: PlaybackOffset?) -> [String: CustomStringConvertible] {
+    /// `playbackOffsetMs` is the latency added to the first buffer's scheduling. When that
+    /// latency is unknown (`playbackOffset=unknown`), only the whole reply's (`reply…`).
+    private static func levelFields(of reply: Reply) -> [String: CustomStringConvertible] {
+        let levels = reply.levels
+        guard !reply.playbackOffsetUnknown else {
+            var fields = levelFields(levels.whole, prefix: "reply")
+            fields["playbackOffset"] = "unknown"
+            return fields
+        }
         var fields = levelFields(levels.pre, prefix: "pre")
         fields.merge(levelFields(levels.onset, prefix: "onset")) { $1 }
         fields.merge(levelFields(levels.playback, prefix: "mic")) { $1 }
-        if let playbackOffset {
+        if let playbackOffset = reply.playbackOffset {
             fields["playbackFrom"] = playbackOffset.source
             fields["playbackOffsetMs"] = String(format: "%.1f", playbackOffset.seconds * 1000)
         }
@@ -972,6 +1025,8 @@ struct ReplyLevels: Equatable {
     /// After the reply could be heard: what echo cancellation let through, the user, and noise.
     private(set) var playback = LevelSummary()
     private(set) var window = LevelSummary()
+    /// Every buffer of the reply, split or not.
+    private(set) var whole = LevelSummary()
 
     init(started: UInt64) {
         self.started = started
@@ -989,11 +1044,8 @@ struct ReplyLevels: Equatable {
     /// Counts `reading` against `playbackFrom` (host time): nil if the reply's first buffer
     /// hadn't been scheduled when the reading was taken, so every reading counts as `pre`.
     mutating func add(_ reading: MicrophoneLevels.Reading, playbackFrom: UInt64?) {
-        if let end, reading.captureTime >= end {
-            hasReadingAfterEnd = true
-            return
-        }
-        guard reading.captureTime >= started else { return }
+        guard isReplys(reading) else { return }
+        whole.add(reading)
         guard let playbackFrom else {
             pre.add(reading)
             return
@@ -1006,6 +1058,22 @@ struct ReplyLevels: Equatable {
         } else {
             onset.add(reading)
         }
+    }
+
+    /// Counts `reading` in `whole` only, for a reply whose playback's latency is unknown.
+    mutating func addUnsplit(_ reading: MicrophoneLevels.Reading) {
+        guard isReplys(reading) else { return }
+        whole.add(reading)
+    }
+
+    /// Whether `reading` was captured from the setup and before the end. Notes a reading from
+    /// after the end.
+    private mutating func isReplys(_ reading: MicrophoneLevels.Reading) -> Bool {
+        if let end, reading.captureTime >= end {
+            hasReadingAfterEnd = true
+            return false
+        }
+        return reading.captureTime >= started
     }
 
     /// The levels since the last call, and a new window from here; nil if no buffer since.

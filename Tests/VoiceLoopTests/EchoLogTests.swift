@@ -138,5 +138,14 @@ import Testing
         #expect(levels.hasReadingAfterEnd)
         #expect(levels.playback.buffers == 4)
         #expect(levels.playback.rmsDb == -10)
+        // Every buffer from the setup to the end, whichever part it fell in.
+        #expect(levels.whole.buffers == 7)
+
+        // Unsplit, for a reply whose playback's latency is unknown: only the whole reply's.
+        var unsplit = ReplyLevels(started: 1000)
+        unsplit.addUnsplit(reading(at: 1100, rms: 0.1))
+        unsplit.addUnsplit(reading(at: 1600, rms: 0.01))
+        #expect(unsplit.whole.buffers == 2)
+        #expect(unsplit.pre.buffers == 0 && unsplit.onset.buffers == 0 && unsplit.playback.buffers == 0)
     }
 }

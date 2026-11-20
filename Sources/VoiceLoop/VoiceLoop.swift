@@ -1868,7 +1868,6 @@ public final class VoiceLoop {
     /// change carries its own routes, read as it was posted, so one handled late can't hide
     /// another.
     private func routeChanged(_ change: AudioRouteChange) {
-        echo.routeChanged()
         let stops = change.isDeviceChange && change.previous != change.current
         var fields: [String: CustomStringConvertible] = [
             "reason": change.reason,
@@ -1885,6 +1884,8 @@ public final class VoiceLoop {
         if stops {
             stopForDeviceChange()
         }
+        // Last: a new configuration for the echo log, with the new route's latency.
+        echo.routeChanged(pipeline)
     }
 
     #if os(macOS)
