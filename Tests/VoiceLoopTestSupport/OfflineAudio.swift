@@ -19,7 +19,8 @@ package final class OfflineAudio {
     package private(set) var playedZeroCrossings = 0
     /// How many render passes have pulled audio through the running engines, by the timer or
     /// `render(passes:)`: the engines' clock, for a test that must let them run a few passes
-    /// however slowly the machine gets round to them. A pass with no engine running isn't one.
+    /// however slowly the machine gets round to them. A pass counts only if some engine rendered
+    /// frames successfully; one with no engine running, or only failed or empty renders, doesn't.
     package private(set) var renderPasses = 0
     /// Whether `output` keeps what comes out of the speaker. Off unless a test turns it on, since
     /// it grows with every render pass.
@@ -126,18 +127,19 @@ package final class OfflineAudio {
     /// Renders one pass on each running engine. Returns false when none is running.
     private func renderOnce() -> Bool {
         let running = engines.filter { $0.isRunning && $0.isInManualRenderingMode }
-        if !running.isEmpty {
-            renderPasses += 1
-        }
+        var renderedAudio = false
         for engine in running {
             guard let output = AVAudioPCMBuffer(
                 pcmFormat: engine.manualRenderingFormat,
                 frameCapacity: engine.manualRenderingMaximumFrameCount
             ) else { continue }
             // A failed render is the same as a sound card with nothing to play.
-            guard (try? engine.renderOffline(output.frameCapacity, to: output)) != nil,
+            guard let status = try? engine.renderOffline(output.frameCapacity, to: output),
                   let samples = output.floatChannelData?[0] else { continue }
             let frames = Int(output.frameLength)
+            if status == .success && frames > 0 {
+                renderedAudio = true
+            }
             playedFrames += (0..<frames).count { abs(samples[$0]) >= 0.001 }
             if recordsOutput {
                 self.output += UnsafeBufferPointer(start: samples, count: frames)
@@ -147,6 +149,9 @@ package final class OfflineAudio {
                 let sample = samples[index], next = samples[index + 1]
                 return (sample < 0) != (next < 0) && max(abs(sample), abs(next)) >= 0.001
             }
+        }
+        if renderedAudio {
+            renderPasses += 1
         }
         return !running.isEmpty
     }
