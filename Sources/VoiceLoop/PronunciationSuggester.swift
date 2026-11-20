@@ -120,10 +120,11 @@ enum MisakiPhonemes {
         stressMoved(converted(symbols(in: ipa)))
     }
 
-    /// `ipa`'s symbols, one string each, without what misaki doesn't mark: length (ː ˑ),
-    /// aspiration (ʰ), tie bars (t͡ʃ) and other diacritics. A syllabic consonant ("n̩") gets the
-    /// faint vowel misaki puts before it (ᵊn), or a schwa before ɹ. Syllable dots are kept, so
-    /// that `converted(_:)` doesn't join the vowels on either side of one; it then drops them.
+    /// `ipa`'s symbols, one string each, without what misaki doesn't mark: the slashes or brackets
+    /// around a transcription, length (ː ˑ), aspiration (ʰ), tie bars (t͡ʃ) and other diacritics.
+    /// A syllabic consonant ("n̩") gets the faint vowel misaki puts before it (ᵊn), or a schwa
+    /// before ɹ. Syllable breaks, a dot or a hyphen, are kept as dots, so that `converted(_:)`
+    /// doesn't join the vowels on either side of one; it then drops them.
     private static func symbols(in ipa: Substring) -> [String] {
         var symbols: [String] = []
         for scalar in ipa.unicodeScalars {
@@ -132,7 +133,9 @@ enum MisakiPhonemes {
                 // Syllabic, below or above.
                 guard let consonant = symbols.popLast() else { continue }
                 symbols += [isRhotic(consonant) ? "ə" : "ᵊ", consonant]
-            case "ː", "ˑ", "ʰ":
+            case "-", "‿":
+                symbols.append(".")
+            case "/", "[", "]", "ː", "ˑ", "ʰ":
                 continue
             default:
                 guard scalar.properties.generalCategory != .nonspacingMark else { continue }

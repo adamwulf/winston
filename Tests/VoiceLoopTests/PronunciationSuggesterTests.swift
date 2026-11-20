@@ -56,6 +56,16 @@ import Testing
         #expect(misaki("ˈɡoɪŋ") == "ɡˈYŋ")
     }
 
+    @Test func aHyphenBetweenSyllablesIsASyllableBreak() {
+        #expect(misaki("kɪn-ˈwɑː") == "kɪnwˈɑ")
+        #expect(misaki("ˈɡo-ɪŋ") == "ɡˈOɪŋ")
+    }
+
+    @Test func theSlashesOrBracketsAroundATranscriptionAreDropped() {
+        #expect(misaki("/ˈwɪn.stən/") == "wˈɪnstən")
+        #expect(misaki("[ˈwɪn.stən]") == "wˈɪnstən")
+    }
+
     @Test func rColoredVowelsAreAVowelAndɹ() {
         #expect(misaki("ˈbʌtɚ") == "bˈʌtəɹ")
         #expect(misaki("ˈbʌɾɚ") == "bˈʌɾəɹ")
