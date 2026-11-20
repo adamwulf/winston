@@ -54,7 +54,8 @@ struct WinstonApp: App {
                 .environment(model)
                 .onAppear { appDelegate.model = model }
         }
-        .onChange(of: scenePhase) { _, phase in
+        // Also the phase at launch, so the log has the state the app started in.
+        .onChange(of: scenePhase, initial: true) { _, phase in
             Self.logScenePhase(phase)
         }
         .commands {

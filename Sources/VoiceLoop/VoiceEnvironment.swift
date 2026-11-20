@@ -116,16 +116,59 @@ package enum RemoteCommand: String, Sendable {
     case pause
 }
 
+/// One media remote command as it came from the system, for the loop and its logs.
+package struct RemoteCommandEvent: Sendable {
+    /// The command's name, such as `togglePlayPause` or `nextTrack`.
+    package var name: String
+    /// The command voice mode acts on. Nil for one it only logs (see `NowPlaying.install`).
+    package var command: RemoteCommand?
+    /// `MPRemoteCommandEvent.timestamp`: when the event occurred, in seconds. Apple doesn't say
+    /// on what clock; like `UIEvent.timestamp`, it is likely the system uptime.
+    package var timestamp: TimeInterval
+    /// `ProcessInfo.systemUptime` when MediaPlayer called the handler, before it hops to the main
+    /// actor.
+    package var receivedUptime: TimeInterval
+
+    package init(name: String, command: RemoteCommand?, timestamp: TimeInterval, receivedUptime: TimeInterval) {
+        self.name = name
+        self.command = command
+        self.timestamp = timestamp
+        self.receivedUptime = receivedUptime
+    }
+}
+
+/// A media remote command that `NowPlaying.install` registered, for the logs.
+package struct RemoteCommandRegistration: Sendable, Equatable {
+    /// The command's name, such as `togglePlayPause` or `nextTrack`.
+    package var name: String
+    /// Whether the command is enabled, as read back after installing.
+    package var isEnabled: Bool
+    /// Whether voice mode acts on it (a `RemoteCommand`), rather than only logging it.
+    package var isHandled: Bool
+
+    package init(name: String, isEnabled: Bool, isHandled: Bool) {
+        self.name = name
+        self.isEnabled = isEnabled
+        self.isHandled = isHandled
+    }
+}
+
 /// The system's media remote commands and Now Playing info, for one voice mode session. In the
 /// app, `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter`; see `LiveVoiceEnvironment.swift`.
 @MainActor
 package protocol NowPlaying: AnyObject {
     /// Starts taking the play, pause and play/pause commands, calling `handler` on the main actor
     /// with each one, and shows voice mode as Now Playing: paused while `isMuted`, playing
-    /// otherwise.
-    func install(isMuted: Bool, handler: @escaping @MainActor @Sendable (RemoteCommand) -> Void)
+    /// otherwise. Every other command gets a handler too, kept disabled so the system's controls
+    /// don't change, that only passes it to `handler` for the logs (its `command` is nil) and
+    /// tells the system it failed. Returns every command registered.
+    func install(
+        isMuted: Bool,
+        handler: @escaping @MainActor @Sendable (RemoteCommandEvent) -> Void
+    ) -> [RemoteCommandRegistration]
     /// Shows voice mode as paused while muted, and as playing otherwise.
     func setMuted(_ isMuted: Bool)
-    /// Stops taking the commands, and clears the Now Playing info.
+    /// Stops taking the commands, puts back whether the logged-only ones were enabled, and clears
+    /// the Now Playing info.
     func remove()
 }

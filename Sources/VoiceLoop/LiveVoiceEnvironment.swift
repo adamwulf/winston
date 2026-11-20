@@ -41,48 +41,131 @@ private let kokoroUnchosenSinceKey = "kokoroUnchosenSince"
 /// `MPRemoteCommandCenter` and `MPNowPlayingInfoCenter`, for `VoiceEnvironment.makeNowPlaying`.
 @MainActor
 private final class LiveNowPlaying: NowPlaying {
-    /// The commands taken, each with the target that removes its handler.
-    private var targets: [(command: MPRemoteCommand, target: Any)] = []
+    /// The commands taken, each with the target that removes its handler, and for one that is
+    /// only logged, whether it was enabled before.
+    private var targets: [(command: MPRemoteCommand, target: Any, wasEnabled: Bool?)] = []
 
-    func install(isMuted: Bool, handler: @escaping @MainActor @Sendable (RemoteCommand) -> Void) {
+    func install(
+        isMuted: Bool,
+        handler: @escaping @MainActor @Sendable (RemoteCommandEvent) -> Void
+    ) -> [RemoteCommandRegistration] {
         let center = MPRemoteCommandCenter.shared()
-        let commands: [(MPRemoteCommand, RemoteCommand)] = [
+        let handled: [(MPRemoteCommand, RemoteCommand)] = [
             (center.togglePlayPauseCommand, .togglePlayPause),
             (center.playCommand, .play),
             (center.pauseCommand, .pause),
         ]
-        targets = commands.map { command, name in
+        // Every other command, only to log whether it comes. Each is disabled after its target is
+        // added, so the system's controls look as they did without one.
+        let logged: [(MPRemoteCommand, String)] = [
+            (center.stopCommand, "stop"),
+            (center.nextTrackCommand, "nextTrack"),
+            (center.previousTrackCommand, "previousTrack"),
+            (center.skipForwardCommand, "skipForward"),
+            (center.skipBackwardCommand, "skipBackward"),
+            (center.seekForwardCommand, "seekForward"),
+            (center.seekBackwardCommand, "seekBackward"),
+            (center.changePlaybackPositionCommand, "changePlaybackPosition"),
+            (center.changePlaybackRateCommand, "changePlaybackRate"),
+            (center.ratingCommand, "rating"),
+            (center.likeCommand, "like"),
+            (center.dislikeCommand, "dislike"),
+            (center.bookmarkCommand, "bookmark"),
+            (center.changeRepeatModeCommand, "changeRepeatMode"),
+            (center.changeShuffleModeCommand, "changeShuffleMode"),
+            (center.enableLanguageOptionCommand, "enableLanguageOption"),
+            (center.disableLanguageOptionCommand, "disableLanguageOption"),
+        ]
+        var registrations: [RemoteCommandRegistration] = []
+        for (command, name) in handled {
             command.isEnabled = true
-            let target = command.addTarget { @Sendable _ in
+            let target = command.addTarget { @Sendable event in
+                let received = Self.received(event, name: name.rawValue, command: name)
                 // MediaPlayer doesn't say which thread it calls from.
-                Task { @MainActor in handler(name) }
+                Task { @MainActor in handler(received) }
                 return .success
             }
-            return (command, target)
+            targets.append((command, target, nil))
+            registrations.append(RemoteCommandRegistration(name: name.rawValue, isEnabled: command.isEnabled, isHandled: true))
+        }
+        for (command, name) in logged {
+            let wasEnabled = command.isEnabled
+            let target = command.addTarget { @Sendable event in
+                let received = Self.received(event, name: name, command: nil)
+                Task { @MainActor in handler(received) }
+                // As for a command the app doesn't take.
+                return .commandFailed
+            }
+            command.isEnabled = false
+            targets.append((command, target, wasEnabled))
+            registrations.append(RemoteCommandRegistration(name: name, isEnabled: command.isEnabled, isHandled: false))
         }
         setMuted(isMuted)
+        return registrations
+    }
+
+    /// `event` as the loop takes it, stamped with the uptime it came at.
+    private nonisolated static func received(
+        _ event: MPRemoteCommandEvent,
+        name: String,
+        command: RemoteCommand?
+    ) -> RemoteCommandEvent {
+        RemoteCommandEvent(
+            name: name,
+            command: command,
+            timestamp: event.timestamp,
+            receivedUptime: ProcessInfo.processInfo.systemUptime
+        )
     }
 
     func setMuted(_ isMuted: Bool) {
         let center = MPNowPlayingInfoCenter.default()
-        center.nowPlayingInfo = [
+        let info: [String: Any] = [
             MPMediaItemPropertyTitle: "Winston voice mode",
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
             MPNowPlayingInfoPropertyIsLiveStream: true,
             MPNowPlayingInfoPropertyPlaybackRate: isMuted ? 0.0 : 1.0,
         ]
+        center.nowPlayingInfo = info
         // macOS picks its Now Playing app by this; iOS by the audio session.
-        center.playbackState = isMuted ? .paused : .playing
+        let state: MPNowPlayingPlaybackState = isMuted ? .paused : .playing
+        center.playbackState = state
+        // Each key as set, and its value: none of them is the user's.
+        var fields = info.mapValues { "\($0)" as CustomStringConvertible }
+        fields["playbackState"] = state.logName
+        fields["playbackStateReadBack"] = center.playbackState.logName
+        VoiceLoop.log.notice("now playing info set", fields)
     }
 
     func remove() {
-        for (command, target) in targets {
+        for (command, target, wasEnabled) in targets {
             command.removeTarget(target)
+            if let wasEnabled {
+                command.isEnabled = wasEnabled
+            }
         }
         targets = []
         let center = MPNowPlayingInfoCenter.default()
         center.nowPlayingInfo = nil
         center.playbackState = .stopped
+        VoiceLoop.log.notice("now playing info cleared", [
+            "playbackState": MPNowPlayingPlaybackState.stopped.logName,
+            "playbackStateReadBack": center.playbackState.logName,
+        ])
+    }
+}
+
+extension MPNowPlayingPlaybackState {
+    /// For the logs.
+    fileprivate var logName: String {
+        switch self {
+        case .unknown: "unknown"
+        case .playing: "playing"
+        case .paused: "paused"
+        case .stopped: "stopped"
+        case .interrupted: "interrupted"
+        @unknown default: "\(rawValue)"
+        }
     }
 }
 

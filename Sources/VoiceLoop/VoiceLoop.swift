@@ -179,6 +179,11 @@ public final class VoiceLoop {
     /// Follows the audio session's route changes while voice mode runs. Nil while it is off, so a
     /// start that finds it set is a rebuild.
     @ObservationIgnored private var routeChangeObserver: Task<Void, Never>?
+    #if os(iOS)
+    /// Log the audio session's secondary audio hint and the media services' loss and reset while
+    /// voice mode runs (see `observeAudioSessionForLogs()`). Empty while it is off.
+    @ObservationIgnored private var audioSessionLogObservers: [Task<Void, Never>] = []
+    #endif
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -365,6 +370,9 @@ public final class VoiceLoop {
         isStarting = true
         // Removed by `tearDown(.stop)`, which a start that fails also ends in.
         observeInputMute()
+        #if os(iOS)
+        observeAudioSessionForLogs()
+        #endif
         defer {
             isStarting = false
             // speak() queues while starting; if stop() came meanwhile, those replies are stale.
@@ -453,6 +461,12 @@ public final class VoiceLoop {
             analyzerRate: recognizer.audioFormat.sampleRate
         )
         pipeline.timeline.recognizerStarted(called: recognizerStart.called, returned: recognizerStart.returned)
+        #if os(iOS)
+        Self.log.notice("audio session at voice mode start", MediaDiagnostics.sessionContext().merging([
+            "rebuild": "\(isRebuild)",
+            "appState": MediaDiagnostics.appState,
+        ]) { $1 })
+        #endif
         #if os(macOS)
         // The rebuild may have come from the default input or output changing, which can show
         // only after the engine's configuration change, with nothing to say so after.
@@ -1210,6 +1224,9 @@ public final class VoiceLoop {
             resumeAfterInterruption = false
             recentEngineStops = []
             stopObservingInputMute()
+            #if os(iOS)
+            stopObservingAudioSessionForLogs()
+            #endif
             stopObservingRouteChanges()
             if state != .off {
                 Self.log.notice("voice mode stopped")
@@ -1414,6 +1431,64 @@ public final class VoiceLoop {
     }
 
     #if os(iOS)
+    /// Starts logging, while voice mode runs, the audio session's hint that secondary audio
+    /// should be silenced, and the media services being lost and reset, unless already started.
+    /// Logging only: voice mode doesn't act on them.
+    private func observeAudioSessionForLogs() {
+        guard audioSessionLogObservers.isEmpty else { return }
+        let hints = NotificationCenter.default.notifications(named: AVAudioSession.silenceSecondaryAudioHintNotification)
+            .map { notification -> String in
+                guard let raw = notification.userInfo?[AVAudioSessionSilenceSecondaryAudioHintTypeKey] as? UInt,
+                      let type = AVAudioSession.SilenceSecondaryAudioHintType(rawValue: raw) else { return "unknown" }
+                switch type {
+                case .begin: return "begin"
+                case .end: return "end"
+                @unknown default: return "\(raw)"
+                }
+            }
+        let losses = NotificationCenter.default.notifications(named: AVAudioSession.mediaServicesWereLostNotification)
+        let resets = NotificationCenter.default.notifications(named: AVAudioSession.mediaServicesWereResetNotification)
+        audioSessionLogObservers = [
+            Task { [weak self] in
+                for await hint in hints {
+                    guard let self, !Task.isCancelled else { return }
+                    Self.log.notice("audio session silence secondary audio hint", MediaDiagnostics.sessionContext().merging([
+                        "hint": hint,
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ]) { $1 })
+                }
+            },
+            Task { [weak self] in
+                for await _ in losses {
+                    guard let self, !Task.isCancelled else { return }
+                    // Without the session's details: its services are gone until the reset.
+                    Self.log.notice("media services were lost", [
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ])
+                }
+            },
+            Task { [weak self] in
+                for await _ in resets {
+                    guard let self, !Task.isCancelled else { return }
+                    Self.log.notice("media services were reset", MediaDiagnostics.sessionContext().merging([
+                        "voiceMode": self.voiceModeLogState,
+                        "appState": MediaDiagnostics.appState,
+                    ]) { $1 })
+                }
+            },
+        ]
+    }
+
+    /// Stops the logging that `observeAudioSessionForLogs()` started, when voice mode stops.
+    private func stopObservingAudioSessionForLogs() {
+        for observer in audioSessionLogObservers {
+            observer.cancel()
+        }
+        audioSessionLogObservers = []
+    }
+
     /// Another app (a call, FaceTime, Music) can keep the session, and then iOS never sends
     /// the interruption's end. Coming back to the foreground retries instead. The retry may
     /// run while the interruption is still active (Adam returns mid-call, or the call UI
@@ -1428,6 +1503,17 @@ public final class VoiceLoop {
     }
 
     private func handleInterruption(_ event: InterruptionEvent?) {
+        let (message, shouldResume): (String, String) = switch event {
+        case .began: ("audio session interruption began", "n/a")
+        case .ended(let shouldResume): ("audio session interruption ended", "\(shouldResume)")
+        case nil: ("audio session interruption unreadable", "n/a")
+        }
+        Self.log.notice("\(message)", MediaDiagnostics.sessionContext().merging([
+            "shouldResume": shouldResume,
+            "voiceMode": voiceModeLogState,
+            "resumePending": resumeAfterInterruption,
+            "appState": MediaDiagnostics.appState,
+        ]) { $1 })
         switch event {
         case .began:
             // iOS has already stopped the engine and deactivated the session. Restart from
@@ -1464,15 +1550,33 @@ public final class VoiceLoop {
         #endif
     }
 
+    /// What voice mode is doing, for the logs: `off`, `starting`, `listening`, `speaking`, or
+    /// `suspended` while an interruption or a rebuild has taken its engine.
+    private var voiceModeLogState: String {
+        if isStarting { return "starting" }
+        switch state {
+        case .off: return "off"
+        case .listening: return pipeline == nil ? "suspended" : "listening"
+        case .speaking: return "speaking"
+        }
+    }
+
     /// Starts following the AirPods mute (see `isInputMuted`), unless it is already followed.
     private func observeInputMute() {
         guard inputMuteObserver == nil else { return }
         let changes = NotificationCenter.default.notifications(named: AVAudioApplication.inputMuteStateChangeNotification)
-            .compactMap { $0.userInfo?[AVAudioApplication.muteStateKey] as? Bool }
+            .map { $0.userInfo?[AVAudioApplication.muteStateKey] as? Bool }
         inputMuteObserver = Task { [weak self] in
             for await isMuted in changes {
                 guard let self, !Task.isCancelled else { return }
-                self.inputMuteChanged(isMuted)
+                guard let isMuted else {
+                    Self.log.notice("input mute notification without a mute state", [
+                        "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
+                        "platform": Self.platform,
+                    ])
+                    continue
+                }
+                self.inputMuteChanged(isMuted, source: "notification")
             }
         }
         Self.log.notice("input mute observer installed", ["platform": Self.platform])
@@ -1481,7 +1585,11 @@ public final class VoiceLoop {
         let gate = microphoneGate
         do {
             try AVAudioApplication.shared.setInputMuteStateChangeHandler { @Sendable isMuted in
-                VoiceLoop.log.notice("input mute handler called", ["muted": isMuted, "platform": VoiceLoop.platform])
+                VoiceLoop.log.notice("input mute handler called", [
+                    "muted": isMuted,
+                    "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
+                    "platform": VoiceLoop.platform,
+                ])
                 gate.setMuted(isMuted)
                 return true
             }
@@ -1526,9 +1634,17 @@ public final class VoiceLoop {
     }
 
     /// The AirPods mute changed: shows it, and plays the stop cue on mute and the start cue on
-    /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already.
-    private func inputMuteChanged(_ isMuted: Bool) {
-        Self.log.notice("input mute changed", ["muted": isMuted, "platform": Self.platform])
+    /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already. `source` says
+    /// what told the loop, `notification` or `remoteCommand`, for the logs.
+    private func inputMuteChanged(_ isMuted: Bool, source: String) {
+        Self.log.notice("input mute changed", [
+            "muted": isMuted,
+            "mutedBefore": isInputMuted,
+            "source": source,
+            "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
+            "voiceMode": voiceModeLogState,
+            "platform": Self.platform,
+        ])
         guard isMuted != isInputMuted else { return }
         isInputMuted = isMuted
         nowPlaying?.setMuted(isMuted)
@@ -1551,20 +1667,76 @@ public final class VoiceLoop {
     /// - On macOS the Now Playing app is chosen by `MPNowPlayingInfoCenter.playbackState`.
     private func installRemoteCommands() {
         guard let nowPlaying = environment.makeNowPlaying?() else { return }
-        nowPlaying.install(isMuted: isInputMuted) { [weak self] command in
-            self?.remoteCommandReceived(command)
+        let registrations = nowPlaying.install(isMuted: isInputMuted) { [weak self] event in
+            self?.remoteCommandReceived(event)
         }
         self.nowPlaying = nowPlaying
-        Self.log.notice("remote commands installed", ["platform": Self.platform, "pausesOtherAudio": pausesOtherAudio])
+        Self.log.notice("remote commands installed", Self.registrationContext(registrations).merging([
+            "platform": Self.platform,
+            "pausesOtherAudio": pausesOtherAudio,
+            "appState": MediaDiagnostics.appState,
+        ]) { $1 })
     }
 
-    /// A press of the AirPods stem came as a media remote command: toggles the mute.
-    private func remoteCommandReceived(_ command: RemoteCommand) {
-        Self.log.notice("remote command received", ["command": command.rawValue, "muted": isInputMuted, "platform": Self.platform])
+    /// Which commands are taken and which only logged, and which of each are enabled, as
+    /// `handled=togglePlayPause,play,pause`. `none` for an empty list.
+    package static func registrationContext(_ registrations: [RemoteCommandRegistration]) -> [String: CustomStringConvertible] {
+        func names(_ isHandled: Bool, enabledOnly: Bool) -> String {
+            let names = registrations
+                .filter { $0.isHandled == isHandled && (!enabledOnly || $0.isEnabled) }
+                .map(\.name)
+            return names.isEmpty ? "none" : names.joined(separator: ",")
+        }
+        return [
+            "handled": names(true, enabledOnly: false),
+            "handledEnabled": names(true, enabledOnly: true),
+            "logOnly": names(false, enabledOnly: false),
+            "logOnlyEnabled": names(false, enabledOnly: true),
+        ]
+    }
+
+    /// A media remote command came, as a press of the AirPods stem may: toggles the mute for
+    /// play, pause and play/pause, and only logs any other command.
+    private func remoteCommandReceived(_ event: RemoteCommandEvent) {
+        let handlerUptime = MediaDiagnostics.uptime()
+        let mutedBefore = isInputMuted
+        // The event's own timestamp, the uptime MediaPlayer called the handler at, and how long
+        // the hop to the main actor took. `eventToReceiptMs` holds only if the timestamp is on
+        // the uptime clock; the raw values show if it isn't.
+        var fields: [String: CustomStringConvertible] = [
+            "command": event.name,
+            "eventTimestamp": MediaDiagnostics.seconds(event.timestamp),
+            "receivedUptime": MediaDiagnostics.seconds(event.receivedUptime),
+            "eventToReceiptMs": MediaDiagnostics.milliseconds(from: event.timestamp, to: event.receivedUptime),
+            "receiptToMainMs": MediaDiagnostics.milliseconds(from: event.receivedUptime, to: handlerUptime),
+            "voiceMode": voiceModeLogState,
+            "appState": MediaDiagnostics.appState,
+            "mutedBefore": mutedBefore,
+            "platform": Self.platform,
+        ]
+        guard event.command != nil else {
+            fields["mutedAfter"] = isInputMuted
+            Self.log.notice("remote command received (not handled)", fields)
+            return
+        }
+        Self.log.notice("remote command received", fields)
         // Voice mode may have stopped since the press.
-        guard nowPlaying != nil else { return }
-        toggleInputMute()
-        Self.log.notice("remote command handled", ["command": command.rawValue, "muted": isInputMuted, "platform": Self.platform])
+        guard nowPlaying != nil else {
+            fields["mutedAfter"] = isInputMuted
+            Self.log.notice("remote command ignored; voice mode is off", fields)
+            return
+        }
+        let applied = toggleInputMute()
+        fields["mutedAfter"] = isInputMuted
+        if let applied {
+            // From the press (by its timestamp) and from receipt, to `setInputMuted` returning
+            // and to `inputMuteChanged` having run.
+            fields["eventToSetMutedMs"] = MediaDiagnostics.milliseconds(from: event.timestamp, to: applied.setMutedReturned)
+            fields["eventToAppliedMs"] = MediaDiagnostics.milliseconds(from: event.timestamp, to: applied.muteChanged)
+            fields["receiptToSetMutedMs"] = MediaDiagnostics.milliseconds(from: event.receivedUptime, to: applied.setMutedReturned)
+            fields["receiptToAppliedMs"] = MediaDiagnostics.milliseconds(from: event.receivedUptime, to: applied.muteChanged)
+        }
+        Self.log.notice("remote command handled", fields)
     }
 
     /// Mutes the microphone, or unmutes it if muted, as the AirPods mute gesture would: through
@@ -1572,15 +1744,20 @@ public final class VoiceLoop {
     /// `microphoneGate`, on macOS. Shows the change and plays its cue at once, since the mute
     /// notification may come late or not at all (iOS sends it only while the session records);
     /// when it comes, it finds nothing changed, so the cue plays once.
-    private func toggleInputMute() {
+    ///
+    /// Returns the uptimes at which `setInputMuted` returned and `inputMuteChanged` had run, for
+    /// the logs, or nil if muting failed.
+    private func toggleInputMute() -> (setMutedReturned: TimeInterval, muteChanged: TimeInterval)? {
         let muted = !isInputMuted
         do {
             try environment.setInputMuted(muted)
         } catch {
             Self.log.warning("toggling the input mute failed", error.logContext(["muted": "\(muted)", "platform": Self.platform]))
-            return
+            return nil
         }
-        inputMuteChanged(muted)
+        let setMutedReturned = MediaDiagnostics.uptime()
+        inputMuteChanged(muted, source: "remoteCommand")
+        return (setMutedReturned, MediaDiagnostics.uptime())
     }
 
     // MARK: - Audio devices
@@ -1613,12 +1790,18 @@ public final class VoiceLoop {
     /// another.
     private func routeChanged(_ change: AudioRouteChange) {
         let stops = change.isDeviceChange && change.previous != change.current
-        Self.log.notice("audio route changed", [
+        var fields: [String: CustomStringConvertible] = [
             "reason": change.reason,
             "before": change.previous.logDescription,
             "after": change.current.logDescription,
             "action": stops ? "stopVoiceMode" : change.isDeviceChange ? "keepListening" : "ignore",
-        ])
+        ]
+        #if os(iOS)
+        // The session as it is now, which may be a little later than `after`.
+        fields.merge(MediaDiagnostics.sessionContext()) { $1 }
+        fields["appState"] = MediaDiagnostics.appState
+        #endif
+        Self.log.notice("audio route changed", fields)
         if stops {
             stopForDeviceChange()
         }
