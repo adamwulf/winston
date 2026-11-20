@@ -112,7 +112,7 @@ private struct PronunciationSuggestionsView: View {
                     ForEach(candidates) { candidate in
                         row(for: candidate)
                     }
-                    if !model.canPlaySuggestions {
+                    if let playNote {
                         Text(playNote)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -170,12 +170,14 @@ private struct PronunciationSuggestionsView: View {
         }
     }
 
-    /// Why the play buttons are off, while `AppModel.canPlaySuggestions` is false.
-    private var playNote: LocalizedStringKey {
-        if model.voiceLoop.chosenVoice?.engine == .kokoro {
-            "The suggestions play once the Kokoro voice model is ready."
-        } else {
-            "Choose a Kokoro voice to hear the suggestions."
+    /// Why the play buttons are off, and what would turn them on; nil while they play.
+    private var playNote: LocalizedStringKey? {
+        switch model.suggestionPlayback {
+        case .plays: nil
+        case .needsKokoroVoice: "Choose a Kokoro voice to hear the suggestions."
+        case .needsVoiceModel: "Choose a voice model under Kokoro Voices in Settings to hear the suggestions."
+        case .waitsForVoiceModel: "The suggestions play once the Kokoro voice model is ready."
+        case .voiceModelFailed: "The Kokoro voice model couldn't load. Retry it under Kokoro Voices in Settings to hear the suggestions."
         }
     }
 

@@ -53,6 +53,31 @@ struct PronunciationSuggestionTests {
         #expect(!model.canPlaySuggestions)
     }
 
+    @Test func eachReasonTheSuggestionsCantPlayIsToldApart() async {
+        let harness = Harness()
+        let model = harness.model
+        let kokoro = harness.bed.kokoro
+
+        // A system voice: choosing a Kokoro voice would help.
+        #expect(model.suggestionPlayback == .needsKokoroVoice)
+        kokoro.loadBehavior = .waits
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { kokoro.loads == 1 })
+        // Loading: waiting would.
+        #expect(model.suggestionPlayback == .waitsForVoiceModel)
+        kokoro.finishLoading(succeeding: false)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .failed })
+        // Failed: waiting wouldn't, but retrying might.
+        #expect(model.suggestionPlayback == .voiceModelFailed)
+        model.kokoroModelVariant = nil
+        // No Model: nothing loads until one is chosen.
+        #expect(model.suggestionPlayback == .needsVoiceModel)
+        kokoro.loadBehavior = .succeeds
+        model.kokoroModelVariant = .soniqo5s
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        #expect(model.suggestionPlayback == .plays)
+    }
+
     @Test func theListLoadsThenShowsEachSuggestionOnceCheckedAgainstMisakisSymbols() async throws {
         let harness = Harness()
         harness.suggester.holdsAnswers = true

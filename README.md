@@ -469,8 +469,10 @@ run (`AppModel.canSuggestPronunciations`). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
 fills the row's IPA; Regenerate asks again, even while a request is under way.
 The play buttons are on only while a Kokoro voice is ready
-(`AppModel.canPlaySuggestions`): any other voice would say the same written word
-for every suggestion, so a note says to choose one instead. The suggester is a
+(`AppModel.suggestionPlayback`): any other voice would say the same written word
+for every suggestion. Otherwise a note says what would turn them on: choosing a
+Kokoro voice, choosing a voice model (with No Model), waiting while it loads, or
+retrying it after it failed. The suggester is a
 `PronunciationSuggester`, so another backend can be added without changing the
 settings screen: each says where its suggestions come from (`attribution`), and
 the list's footer shows it. The one there is, `OnDevicePronunciationSuggester`, asks

@@ -1094,7 +1094,24 @@ public final class AppModel {
     /// chosen and its model is ready, so each plays its phonemes. Any other voice would say the
     /// same written word for every one.
     public var canPlaySuggestions: Bool {
-        voiceLoop.saysPhonemes
+        suggestionPlayback == .plays
+    }
+
+    /// Whether the suggestion list's play buttons play, and if not, what would let them: for the
+    /// list's note.
+    public var suggestionPlayback: SuggestionPlayback {
+        if voiceLoop.saysPhonemes {
+            return .plays
+        }
+        guard voiceLoop.chosenVoice?.engine == .kokoro else { return .needsKokoroVoice }
+        guard voiceLoop.kokoroModelVariant != nil else { return .needsVoiceModel }
+        switch voiceLoop.kokoroModelState {
+        case .failed:
+            return .voiceModelFailed
+        case .notLoaded, .loading, .downloading, .ready:
+            // A chosen Kokoro voice with a model chosen loads it: not loaded is about to.
+            return .waitsForVoiceModel
+        }
     }
 
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
@@ -1119,6 +1136,21 @@ public final class AppModel {
         pronunciations[index].mode = .phonetic
         return true
     }
+}
+
+/// Whether the suggestion list's play buttons play: `AppModel.suggestionPlayback`. Only a ready
+/// Kokoro voice says a suggestion's phonemes; any other voice says the same written word for each.
+public enum SuggestionPlayback: Equatable, Sendable {
+    /// A Kokoro voice is chosen and its model is ready.
+    case plays
+    /// A system voice is chosen: choosing a Kokoro voice would play them.
+    case needsKokoroVoice
+    /// A Kokoro voice is chosen, but no voice model ("No Model"): choosing one would.
+    case needsVoiceModel
+    /// The Kokoro voice model is downloading or loading: they play once it is ready.
+    case waitsForVoiceModel
+    /// The Kokoro voice model couldn't download or load: retrying it would.
+    case voiceModelFailed
 }
 
 /// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.
