@@ -1323,6 +1323,9 @@ struct SoundCueTests {
 
 // MARK: - Audio devices changing
 
+/// The built-in microphone and speaker, the test bed's devices unless a test changes them.
+private let builtIn = VoiceTestBed.builtInDevices
+
 /// AirPods, as the iOS route names them during a call: microphone and output both.
 private let airPods = AudioDevices(
     inputs: [.init(id: "airpods-hfp", kind: "BluetoothHFP")],
@@ -1346,8 +1349,7 @@ struct AudioDeviceChangeTests {
         let played = bed.audio.playedFrames
 
         // AirPods connect.
-        bed.audioDevices = airPods
-        bed.reportRouteChange(isDeviceChange: true)
+        bed.reportRouteChange(isDeviceChange: true, from: builtIn, to: airPods)
 
         #expect(await eventually { loop.state == .off })
         // The loop's engine stops at once, without its stop cue; another, which only plays,
@@ -1364,9 +1366,61 @@ struct AudioDeviceChangeTests {
         #expect(bed.audio.engines.count == 2)
     }
 
+    @Test func withPushToTalkADeviceChangePlaysTheStopCueToo() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await pushToTalkLoop(on: bed, soundCues: true)
+        let played = bed.audio.playedFrames
+
+        bed.reportRouteChange(isDeviceChange: true, from: builtIn, to: airPods)
+
+        #expect(await eventually { loop.state == .off })
+        #expect(await eventually { bed.audio.engines.allSatisfy { !$0.isRunning } })
+        #expect(playedOneStopCue(on: bed, since: played))
+    }
+
+    @Test func anOverrideThenADeviceArrivingBackToBackEndsVoiceMode() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        let receiver = AudioDevices(
+            inputs: builtIn.inputs,
+            outputs: [.init(id: "built-in-receiver", kind: "Receiver")]
+        )
+
+        // Both before the loop handles either: the speaker override, then AirPods connecting.
+        bed.reportRouteChange(isDeviceChange: false, from: receiver, to: builtIn)
+        bed.reportRouteChange(isDeviceChange: true, from: builtIn, to: airPods)
+
+        #expect(await eventually { loop.state == .off })
+    }
+
+    @Test func aRouteChangeThatIsNotADeviceOrLeavesTheDevicesAloneKeepsListening() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let engine = try #require(bed.audio.engines.last)
+        let airPodsForMusic = AudioDevices(
+            inputs: builtIn.inputs,
+            outputs: [.init(id: "airpods-a2dp", kind: "BluetoothA2DPOutput")]
+        )
+
+        // The AirPods move to their call profile after the start, with ports of their own: not
+        // a device coming or going.
+        bed.reportRouteChange(isDeviceChange: false, from: airPodsForMusic, to: airPods)
+        // A device came or went, but the route's devices are the same on both sides.
+        bed.reportRouteChange(isDeviceChange: true, from: airPods, to: airPods)
+        postConfigurationChange(for: engine)
+
+        #expect(await staysSilent(on: bed))
+        #expect(loop.state == .listening(partial: ""))
+        #expect(engine.isRunning)
+        #expect(!bed.recognizer.isCancelled)
+        #expect(bed.audio.engines.count == 1)
+    }
+
+    #if os(macOS)
     @Test func newDefaultDevicesEndVoiceModeWhenTheEngineSaysItsConfigurationChanged() async throws {
         let bed = VoiceTestBed()
-        let builtIn = bed.audioDevices
         bed.audioDevices = airPods
         let loop = try await listeningLoopWithCues(on: bed)
         let engine = try #require(bed.audio.engines.last)
@@ -1386,46 +1440,20 @@ struct AudioDeviceChangeTests {
         #expect(bed.audio.engines.count == 2)
     }
 
-    @Test func withPushToTalkADeviceChangePlaysTheStopCueToo() async throws {
+    @Test func newDefaultDevicesEndVoiceModeWithNoNotificationAtAll() async throws {
         let bed = VoiceTestBed()
-        let loop = try await pushToTalkLoop(on: bed, soundCues: true)
+        let loop = try await listeningLoopWithCues(on: bed)
+        let engine = try #require(bed.audio.engines.last)
         let played = bed.audio.playedFrames
 
+        // The default output moves to AirPods of the same format: the engine carries on, and
+        // nothing says so.
         bed.audioDevices = airPods
-        bed.reportRouteChange(isDeviceChange: true)
 
         #expect(await eventually { loop.state == .off })
+        #expect(!engine.isRunning)
         #expect(await eventually { bed.audio.engines.allSatisfy { !$0.isRunning } })
         #expect(playedOneStopCue(on: bed, since: played))
-    }
-
-    @Test func aLateRouteChangeThatIsNotADeviceIsTakenUpAndAnUnplugAfterStillEndsVoiceMode() async throws {
-        let bed = VoiceTestBed()
-        let builtIn = bed.audioDevices
-        // AirPods playing music, the iPhone's microphone listening.
-        bed.audioDevices = AudioDevices(
-            inputs: builtIn.inputs,
-            outputs: [.init(id: "airpods-a2dp", kind: "BluetoothA2DPOutput")]
-        )
-        let loop = try await startedLoop(on: bed)
-        defer { loop.stop() }
-
-        // After the start, the AirPods move to their call profile, with ports of their own:
-        // not a device coming or going.
-        bed.audioDevices = airPods
-        bed.reportRouteChange(isDeviceChange: false)
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-        // Compared with the route as it is now, a device change that leaves it alone is nothing.
-        bed.reportRouteChange(isDeviceChange: true)
-        try await settle()
-        #expect(loop.state == .listening(partial: ""))
-
-        // The AirPods are taken out.
-        bed.audioDevices = builtIn
-        bed.reportRouteChange(isDeviceChange: true)
-
-        #expect(await eventually { loop.state == .off })
     }
 
     @Test func aRebuildDoesNotTakeUpNewDevices() async throws {
@@ -1447,22 +1475,30 @@ struct AudioDeviceChangeTests {
         #expect(loop.state == .off)
         #expect(bed.recognizers.count == 2)
     }
+    #endif
 
-    @Test func aDeviceChangeWithTheSameDevicesKeepsListening() async throws {
+    #if os(iOS)
+    @Test func onIOSAConfigurationChangeAloneKeepsListeningAndOnlyADeviceRouteChangeStops() async throws {
         let bed = VoiceTestBed()
-        let loop = try await listeningLoopWithCues(on: bed)
+        let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
         let engine = try #require(bed.audio.engines.last)
 
-        bed.reportRouteChange(isDeviceChange: true)
+        // AirPods connect: the engine stops by itself and says so before the route change comes.
+        bed.audioDevices = airPods
+        engine.stop()
         postConfigurationChange(for: engine)
 
-        #expect(await staysSilent(on: bed))
+        // Started again: on iOS only the route change can end voice mode.
+        #expect(await eventually { engine.isRunning })
+        try await settle()
         #expect(loop.state == .listening(partial: ""))
-        #expect(engine.isRunning)
-        #expect(!bed.recognizer.isCancelled)
-        #expect(bed.audio.engines.count == 1)
+
+        bed.reportRouteChange(isDeviceChange: true, from: builtIn, to: airPods)
+
+        #expect(await eventually { loop.state == .off })
     }
+    #endif
 }
 
 // MARK: - Working cue

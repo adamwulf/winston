@@ -35,16 +35,23 @@ extension VoiceEnvironment {
 /// Where `VoiceEnvironment.live` keeps `kokoroUnchosenSince` in the standard user defaults.
 private let kokoroUnchosenSinceKey = "kokoroUnchosenSince"
 
+#if os(iOS)
+/// A notification observer, to remove from another thread when its stream ends.
+private final class ObserverToken: @unchecked Sendable {
+    let observer: any NSObjectProtocol
+
+    init(_ observer: any NSObjectProtocol) {
+        self.observer = observer
+    }
+}
+#endif
+
 /// The audio session's route on iOS, the system's default input and output on the Mac.
 @MainActor
 private enum LiveAudioDevices {
     static func current() -> AudioDevices {
         #if os(iOS)
-        let route = AVAudioSession.sharedInstance().currentRoute
-        func devices(_ ports: [AVAudioSessionPortDescription]) -> [AudioDevices.Device] {
-            ports.map { AudioDevices.Device(id: $0.uid, kind: $0.portType.rawValue) }
-        }
-        return AudioDevices(inputs: devices(route.inputs), outputs: devices(route.outputs))
+        AudioDevices(AVAudioSession.sharedInstance().currentRoute)
         #else
         AudioDevices(
             inputs: defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
@@ -53,18 +60,29 @@ private enum LiveAudioDevices {
         #endif
     }
 
-    static func routeChanges() -> AsyncStream<AudioRouteChange> {
+    nonisolated static func routeChanges() -> AsyncStream<AudioRouteChange> {
         let (stream, continuation) = AsyncStream.makeStream(of: AudioRouteChange.self)
         #if os(iOS)
-        let notifications = NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
-        let task = Task {
-            for await notification in notifications {
-                let reason = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
-                    .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ?? .unknown
-                continuation.yield(AudioRouteChange(reason))
-            }
+        // On the thread that posts the notification, so the current route is read as it was right
+        // after this change.
+        let observer = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: nil,
+            queue: nil
+        ) { notification in
+            let reason = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ?? .unknown
+            let previous = notification.userInfo?[AVAudioSessionRouteChangePreviousRouteKey] as? AVAudioSessionRouteDescription
+            continuation.yield(AudioRouteChange(
+                reason,
+                previous: previous.map(AudioDevices.init) ?? AudioDevices(inputs: [], outputs: []),
+                current: AudioDevices(AVAudioSession.sharedInstance().currentRoute)
+            ))
         }
-        continuation.onTermination = { _ in task.cancel() }
+        let token = ObserverToken(observer)
+        continuation.onTermination = { _ in
+            NotificationCenter.default.removeObserver(token.observer)
+        }
         #else
         continuation.finish()
         #endif

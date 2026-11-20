@@ -42,9 +42,9 @@ package struct VoiceEnvironment: Sendable {
     /// The audio devices in use now: on iOS the audio session's route, on the Mac the default
     /// input and output.
     package var audioDevices: @MainActor @Sendable () -> AudioDevices
-    /// Each route change of the iOS audio session, until its iteration is cancelled. Nothing on
-    /// the Mac, where a change of the default input or output shows as the engine's
-    /// configuration change.
+    /// Each route change of the iOS audio session, with the route before and after it, until its
+    /// iteration is cancelled. Nothing on the Mac, where voice mode watches the default input and
+    /// output instead.
     package var audioRouteChanges: @MainActor @Sendable () -> AsyncStream<AudioRouteChange>
     /// Speaks with the Kokoro voices, once its model has downloaded and loaded.
     package var kokoro: any KokoroEngine

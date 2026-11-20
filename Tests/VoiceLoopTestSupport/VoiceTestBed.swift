@@ -25,9 +25,11 @@ package final class VoiceTestBed {
     /// How many times the loop has tried to turn voice processing on.
     package private(set) var voiceProcessingAttempts = 0
     /// The audio devices in use: the built-in microphone and speaker unless a test changes them.
-    /// Changing them doesn't tell the loop; `reportRouteChange(isDeviceChange:)` does, as on iOS,
-    /// and so does the engine's configuration change, as on the Mac (where the tests run).
-    package var audioDevices = AudioDevices(
+    /// On the Mac voice mode checks them every 100 ms; on iOS it goes by the routes that
+    /// `reportRouteChange(isDeviceChange:from:to:)` reports.
+    package var audioDevices = VoiceTestBed.builtInDevices
+    /// The built-in microphone and speaker.
+    package nonisolated static let builtInDevices = AudioDevices(
         inputs: [.init(id: "built-in-microphone", kind: "MicrophoneBuiltIn")],
         outputs: [.init(id: "built-in-speaker", kind: "Speaker")]
     )
@@ -114,13 +116,15 @@ package final class VoiceTestBed {
         return loop
     }
 
-    /// Tells every loop on this bed that the iOS audio session's route changed: with
-    /// `isDeviceChange`, because a device came or went (`.newDeviceAvailable`), otherwise for
-    /// another reason (`.override`). The route is `audioDevices`.
-    package func reportRouteChange(isDeviceChange: Bool) {
+    /// Tells every loop on this bed that the iOS audio session's route changed from `previous` to
+    /// `current`: with `isDeviceChange`, because a device came or went (`.newDeviceAvailable`),
+    /// otherwise for another reason (`.override`). It leaves `audioDevices` alone.
+    package func reportRouteChange(isDeviceChange: Bool, from previous: AudioDevices, to current: AudioDevices) {
         let change = AudioRouteChange(
             isDeviceChange: isDeviceChange,
-            reason: isDeviceChange ? "newDeviceAvailable" : "override"
+            reason: isDeviceChange ? "newDeviceAvailable" : "override",
+            previous: previous,
+            current: current
         )
         for continuation in routeChanges {
             continuation.yield(change)

@@ -27,6 +27,16 @@ package struct AudioDevices: Equatable, Sendable {
         self.outputs = outputs
     }
 
+    #if os(iOS)
+    /// The ports of an iOS audio route.
+    init(_ route: AVAudioSessionRouteDescription) {
+        func devices(_ ports: [AVAudioSessionPortDescription]) -> [Device] {
+            ports.map { Device(id: $0.uid, kind: $0.portType.rawValue) }
+        }
+        self.init(inputs: devices(route.inputs), outputs: devices(route.outputs))
+    }
+    #endif
+
     /// For the logs, as `in=MicrophoneBuiltIn out=Speaker`.
     var logDescription: String {
         func kinds(_ devices: [Device]) -> String {
@@ -36,33 +46,40 @@ package struct AudioDevices: Equatable, Sendable {
     }
 }
 
-/// A change of the iOS audio session's route, and whether it was a device coming or going.
+/// A change of the iOS audio session's route: why, and the route on each side of it.
 package struct AudioRouteChange: Sendable {
-    /// Whether a device came or went, so the route may now be on other devices than voice mode
-    /// started with. Otherwise the route changed for another reason, such as the app's own
-    /// category change or speaker override, and voice mode carries on.
+    /// Whether a device came or went. Otherwise the route changed for another reason, such as
+    /// the app's own category change or speaker override, and voice mode carries on.
     package var isDeviceChange: Bool
     /// Why it changed, for the logs.
     package var reason: String
+    /// The route before the change, as the notification reported it.
+    package var previous: AudioDevices
+    /// The route after the change, read as the notification was posted, not later, when the
+    /// main actor gets to it and the route may have changed again.
+    package var current: AudioDevices
 
-    package init(isDeviceChange: Bool, reason: String) {
+    package init(isDeviceChange: Bool, reason: String, previous: AudioDevices, current: AudioDevices) {
         self.isDeviceChange = isDeviceChange
         self.reason = reason
+        self.previous = previous
+        self.current = current
     }
 
     #if os(iOS)
-    init(_ reason: AVAudioSession.RouteChangeReason) {
-        switch reason {
-        case .newDeviceAvailable: self.init(isDeviceChange: true, reason: "newDeviceAvailable")
-        case .oldDeviceUnavailable: self.init(isDeviceChange: true, reason: "oldDeviceUnavailable")
-        case .noSuitableRouteForCategory: self.init(isDeviceChange: true, reason: "noSuitableRouteForCategory")
-        case .categoryChange: self.init(isDeviceChange: false, reason: "categoryChange")
-        case .override: self.init(isDeviceChange: false, reason: "override")
-        case .wakeFromSleep: self.init(isDeviceChange: false, reason: "wakeFromSleep")
-        case .routeConfigurationChange: self.init(isDeviceChange: false, reason: "routeConfigurationChange")
-        case .unknown: self.init(isDeviceChange: false, reason: "unknown")
-        @unknown default: self.init(isDeviceChange: false, reason: "\(reason.rawValue)")
+    init(_ reason: AVAudioSession.RouteChangeReason, previous: AudioDevices, current: AudioDevices) {
+        let (isDeviceChange, name): (Bool, String) = switch reason {
+        case .newDeviceAvailable: (true, "newDeviceAvailable")
+        case .oldDeviceUnavailable: (true, "oldDeviceUnavailable")
+        case .noSuitableRouteForCategory: (true, "noSuitableRouteForCategory")
+        case .categoryChange: (false, "categoryChange")
+        case .override: (false, "override")
+        case .wakeFromSleep: (false, "wakeFromSleep")
+        case .routeConfigurationChange: (false, "routeConfigurationChange")
+        case .unknown: (false, "unknown")
+        @unknown default: (false, "\(reason.rawValue)")
         }
+        self.init(isDeviceChange: isDeviceChange, reason: name, previous: previous, current: current)
     }
     #endif
 }
