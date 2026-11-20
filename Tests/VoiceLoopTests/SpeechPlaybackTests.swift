@@ -44,9 +44,11 @@ private func speakerFrames(forSeconds seconds: Double) -> Int {
 
 /// Lets the last render pass reach the speaker. Offline, a playback finishes once the player has
 /// rendered its last buffer, and the pitch shift after the player pulls it a pass ahead of the
-/// output (see `SpeechOutput.completion`).
-private func letTheLastPassPlay() async throws {
-    try await Task.sleep(for: .milliseconds(50))
+/// output (see `SpeechOutput.completion`). Waits for twice that, counted in passes, not time: a
+/// busy machine can take far longer than usual to render them. Whether they were rendered.
+@MainActor
+private func letTheLastPassPlay(on bed: VoiceTestBed) async -> Bool {
+    await renderPassesGoBy(2, on: bed)
 }
 
 /// Counts the calls to a playback's `onFinished`, which arrive on an audio thread.
@@ -115,7 +117,7 @@ struct SpeechPlaybackTests {
         playback.synthesisFinished()
 
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await letTheLastPassPlay(on: bed))
         let expected = speakerFrames(forSeconds: 0.3)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -132,7 +134,7 @@ struct SpeechPlaybackTests {
         playback.receive(try speechBuffer(seconds: 0.1))
 
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await letTheLastPassPlay(on: bed))
         let expected = speakerFrames(forSeconds: 0.2)
         #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
     }
@@ -286,7 +288,7 @@ struct PitchShiftTests {
         playback.receive(try speechBuffer(seconds: 0.5))
         playback.synthesisFinished()
         #expect(await eventually { finished.count == 1 })
-        try await letTheLastPassPlay()
+        #expect(await letTheLastPassPlay(on: bed))
 
         #expect(bed.audio.playedFrames > 0)
         return Double(bed.audio.playedZeroCrossings) / Double(bed.audio.playedFrames) * 48_000
