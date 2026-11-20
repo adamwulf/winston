@@ -2040,16 +2040,18 @@ public final class VoiceLoop {
         guard currentSpeech === playback else { return }
         let replyEnded = logReplyEnded(playback, reason: "finished")
         pipeline?.timeline.speechFinished(replyEnded)
+        currentSpeech = nil
+        kokoroSynthesis = nil
+        consumeEcho()
+        updateListeningState()
+        // After the echo is consumed, so the log's work can't move where that cuts off, and
+        // before a next reply starts.
         echo.replyEnded(
             pipeline,
             reason: "finished",
             micGate: micGateLogContext,
             voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
         )
-        currentSpeech = nil
-        kokoroSynthesis = nil
-        consumeEcho()
-        updateListeningState()
         speakNextIfIdle()
         // With no reply after it, taps that waited for this one play now.
         updateWorkingCue()
@@ -2081,17 +2083,18 @@ public final class VoiceLoop {
             pipeline.speech.player.stop()
             pipeline.timeline.speechStopped(outputLatency: pipeline.engine.outputNode.presentationLatency)
         }
+        if consumingEcho {
+            consumeEcho()
+        }
+        ignoredWhileSpeaking = false
+        updateListeningState()
+        // Last, after the echo is consumed, so the log's work can't move where that cuts off.
         echo.replyEnded(
             pipeline,
             reason: reason,
             micGate: micGateLogContext,
             voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
         )
-        if consumingEcho {
-            consumeEcho()
-        }
-        ignoredWhileSpeaking = false
-        updateListeningState()
     }
 
     /// Logs how a reply ended and the loudest microphone level while it played, after echo
