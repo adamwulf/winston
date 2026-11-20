@@ -439,6 +439,7 @@ struct SpeakingTests {
         }
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
@@ -579,6 +580,7 @@ struct SpeakingTests {
 
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         // Only the preview played after that: neither long reply carried on.
         #expect(abs(bed.audio.playedFrames - playedBeforePreview - previewAlone) <= previewAlone / 4)
     }
@@ -970,6 +972,7 @@ struct VoiceSettingsTests {
         loop.speak(text)
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
@@ -997,6 +1000,7 @@ struct VoiceSettingsTests {
         loop.speak(text)
         #expect(loop.state == .speaking)
         #expect(await eventually { loop.state == .listening(partial: "") })
+        #expect(await lastPassPlays(on: bed))
         return bed.audio.playedFrames - before
     }
 
