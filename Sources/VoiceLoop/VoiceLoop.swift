@@ -704,6 +704,19 @@ public final class VoiceLoop {
         preview(spoken: phoneticPlaceholders.add(word: word, phonemes: phonemes))
     }
 
+    /// The phoneme symbols the Kokoro voices can say, for checking suggested phonemes: while the
+    /// model is ready, those in its vocabulary; otherwise, or if it can't be read, misaki's
+    /// American English symbols, which Kokoro's dictionaries use.
+    public func kokoroPhonemeSymbols() async -> Set<Character> {
+        if kokoroModel.state == .ready {
+            let symbols = await kokoroModel.engine.phonemeSymbols()
+            if !symbols.isEmpty {
+                return symbols
+            }
+        }
+        return MisakiPhonemes.usSymbols
+    }
+
     /// Says `text`, ready to say as it is, for `preview(_:)`, `preview(asWritten:)` and
     /// `preview(word:phonemes:)`.
     private func preview(spoken text: String) {

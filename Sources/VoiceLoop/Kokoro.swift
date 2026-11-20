@@ -95,6 +95,9 @@ package protocol KokoroEngine: Sendable {
     /// The words in the loaded model's English pronunciation dictionary, lowercased, for
     /// `KokoroAcronyms`. Empty if no model is loaded or the dictionary can't be read.
     func dictionaryWords() async -> Set<String>
+    /// The phoneme symbols in the loaded model's vocabulary, for checking suggested phonemes:
+    /// Kokoro drops any other. Empty if no model is loaded or the vocabulary can't be read.
+    func phonemeSymbols() async -> Set<Character>
     /// `text` spoken by `voice` (a Kokoro voice id such as `af_heart`) at `speed` (1 is normal),
     /// as 24 kHz mono samples. Throws if the model isn't loaded. Requests render one at a time;
     /// one whose task is cancelled before its turn throws `CancellationError` without rendering.

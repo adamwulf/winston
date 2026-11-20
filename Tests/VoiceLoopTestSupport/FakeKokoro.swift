@@ -59,6 +59,7 @@ package final class FakeKokoro: KokoroEngine {
         var holdsSynthesis = false
         var heldSyntheses: [CheckedContinuation<Void, Never>] = []
         var dictionary: Set<String> = []
+        var symbols: Set<Character> = []
     }
 
     private let state = Mutex(State())
@@ -122,6 +123,12 @@ package final class FakeKokoro: KokoroEngine {
     package var dictionary: Set<String> {
         get { state.withLock { $0.dictionary } }
         set { state.withLock { $0.dictionary = newValue } }
+    }
+
+    /// What `phonemeSymbols()` returns while a model is loaded. Empty unless the test sets it.
+    package var symbols: Set<Character> {
+        get { state.withLock { $0.symbols } }
+        set { state.withLock { $0.symbols = newValue } }
     }
 
     /// Sentences waiting in `holdsSynthesis`.
@@ -256,6 +263,11 @@ package final class FakeKokoro: KokoroEngine {
 
     package func dictionaryWords() async -> Set<String> {
         dictionary
+    }
+
+    package func phonemeSymbols() async -> Set<Character> {
+        // As `LiveKokoro`: only a loaded model has a vocabulary to read.
+        state.withLock { $0.loadedModel == nil ? [] : $0.symbols }
     }
 
     package func synthesize(
