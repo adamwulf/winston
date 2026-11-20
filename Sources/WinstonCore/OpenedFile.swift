@@ -9,23 +9,37 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
     public let id = UUID()
     /// The file's name, for the agent sheet. A document goes under it. Never logged.
     public let name: String
-    /// Winston's own copy, in a folder of its own in the temporary directory, as
-    /// `DocumentFiles.copyForSending` makes it. Nil until it is made.
-    var copy: URL?
+    /// Its place in the order the files were opened, kept when a failed upload brings it back.
+    let sequence: Int
+    /// The file as it was handed over, kept to copy it again after a failed copy.
+    let source: URL
     /// The file iOS handed over, in one of Winston's inboxes: removed once this one is sent or
     /// cancelled. Nil for a file of Adam's own, as the Mac hands over, which stays.
-    var systemCopy: URL?
+    let systemCopy: URL?
+    /// Winston's working copy, in a folder of its own in `AppModel.openedFileFolder`. Nil until
+    /// it is made.
+    var copy: URL?
+    /// Why the copy couldn't be made, for the agent sheet, which offers to try again.
+    public internal(set) var copyError: String?
     /// Whether it goes as a photo, as a still image (`PhotoFiles.isStillImage(at:)`) does.
     /// Anything else goes as a document. Known once it is copied.
-    public private(set) var isPhoto = false
+    public internal(set) var isPhoto = false
 
-    init(name: String) {
+    init(name: String, sequence: Int, source: URL, inboxes: [URL]) {
         self.name = name
+        self.sequence = sequence
+        self.source = source
+        systemCopy = inboxes.contains { Self.isFile(source, in: $0) } ? source : nil
     }
 
     /// Whether Winston's copy is made, so it can be sent.
     public var isCopied: Bool {
         copy != nil
+    }
+
+    /// Whether Winston is still making its copy.
+    public var isBeingCopied: Bool {
+        copy == nil && copyError == nil
     }
 
     /// How it goes, for the logs.
@@ -35,39 +49,22 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
 
     private static let log = Logger(label: "app.openedFiles")
 
-    /// What `copy(_:inboxes:)` makes of a file.
+    /// What `copy(_:into:)` makes of a file.
     struct Copied: Sendable {
         let copy: URL
-        let systemCopy: URL?
         let isPhoto: Bool
     }
 
-    /// This file with its copy made.
-    func with(_ copied: Copied) -> OpenedFile {
-        var file = self
-        file.copy = copied.copy
-        file.systemCopy = copied.systemCopy
-        file.isPhoto = copied.isPhoto
-        return file
-    }
-
-    /// Copies the file at `url` for sending (see `DocumentFiles.copyForSending`, which turns down
-    /// a folder), and finds out whether it is a still image. A file in one of `inboxes`, where iOS
-    /// puts the copy it hands Winston, is the system's copy, to remove once the file is sent or
-    /// cancelled. If no copy can be made it is removed now: nothing will send it.
+    /// Copies the file at `url` into a folder of its own in `parent` (see
+    /// `DocumentFiles.copyForSending`, which turns down a folder), and finds out whether it is a
+    /// still image.
     @concurrent
-    static func copy(_ url: URL, inboxes: [URL]) async throws -> Copied {
-        let systemCopy = inboxes.contains { isFile(url, in: $0) } ? url : nil
-        do {
-            let copy = try await DocumentFiles.copyForSending(from: url)
-            return Copied(copy: copy, systemCopy: systemCopy, isPhoto: await PhotoFiles.isStillImage(at: copy))
-        } catch {
-            systemCopy.map(remove)
-            throw error
-        }
+    static func copy(_ url: URL, into parent: URL) async throws -> Copied {
+        let copy = try await DocumentFiles.copyForSending(from: url, into: parent)
+        return Copied(copy: copy, isPhoto: await PhotoFiles.isStillImage(at: copy))
     }
 
-    /// Removes Winston's copy and the system's, for a file that won't be sent.
+    /// Removes Winston's copy and the file iOS handed over, once the file is sent or won't be.
     func removeFiles() {
         copy.map(DocumentFiles.removeCopy)
         systemCopy.map(Self.remove)
@@ -83,11 +80,43 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
         }
     }
 
+    /// Removes what opened files left in an earlier run, from before `cutoff`: Winston's working
+    /// copies in `folder`, and the files iOS handed over in `inboxes`. Never a sent message's
+    /// file: TDLib uploads a JPEG or a copy of its own, outside `folder`. Returns how many it
+    /// removed. By when each arrived (the inode's change time), which a copy that keeps the
+    /// original's dates still sets anew, so a file just handed over stays.
+    @concurrent
+    package static func removeLeftovers(in folder: URL, inboxes: [URL], before cutoff: Date) async -> Int {
+        var removed = 0
+        for directory in [folder] + inboxes {
+            // None yet is nothing to remove.
+            let items = (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.attributeModificationDateKey]
+            )) ?? []
+            for item in items {
+                guard let arrived = try? item.resourceValues(forKeys: [.attributeModificationDateKey]).attributeModificationDate,
+                      arrived < cutoff else { continue }
+                do {
+                    try FileManager.default.removeItem(at: item)
+                    removed += 1
+                } catch {
+                    // Codes only: a file error's description names the file.
+                    log.warning("removing an opened file's leftover failed", error.logCodes())
+                }
+            }
+        }
+        return removed
+    }
+
     /// Whether `url` is inside `folder`. Symbolic links are resolved first: iOS may hand over a
-    /// path under /private/var for a folder Foundation names under /var.
+    /// path under /private/var for a folder Foundation names under /var. They are resolved in the
+    /// file's folder, as Foundation only drops /private for a path that exists, and the file
+    /// itself may not.
     private static func isFile(_ url: URL, in folder: URL) -> Bool {
-        let file = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let file = url.standardizedFileURL
+        let fileFolder = file.deletingLastPathComponent().resolvingSymlinksInPath().pathComponents
         let folder = folder.standardizedFileURL.resolvingSymlinksInPath().pathComponents
-        return file.count > folder.count && file.starts(with: folder)
+        return fileFolder.starts(with: folder)
     }
 }

@@ -6,7 +6,7 @@ import WinstonCore
 /// Cancel. Picking an agent sends them there (`AppModel.sendOpenedFiles(to:)`) and the chat shown
 /// stays the same. With one agent it still asks, so a stray tap in another app sends nothing.
 /// It can't be swiped away, which could be taken for either; it closes once the files are sent
-/// or cancelled.
+/// or cancelled. A file that couldn't be copied shows why, with Try Again.
 struct OpenedFileSheet: View {
     @Environment(AppModel.self) private var model
 
@@ -39,12 +39,22 @@ struct OpenedFileSheet: View {
         .frame(minWidth: 360, minHeight: 320)
         #endif
         .interactiveDismissDisabled()
-        // VoiceOver says it, as it shows away from the row just picked.
+        // VoiceOver says them, as they show away from the row just picked.
         .onChange(of: model.openedFileError) { _, error in
             if let error {
                 AccessibilityNotification.Announcement(error).post()
             }
         }
+        .onChange(of: copyErrors) { old, new in
+            if new.count > old.count, let error = new.last {
+                AccessibilityNotification.Announcement(error).post()
+            }
+        }
+    }
+
+    /// Why each file that couldn't be copied couldn't be.
+    private var copyErrors: [String] {
+        model.openedFiles.compactMap(\.copyError)
     }
 
     @ViewBuilder
@@ -63,6 +73,20 @@ struct OpenedFileSheet: View {
         if file.isCopied {
             Label(file.name, systemImage: file.isPhoto ? "photo" : "doc")
                 .accessibilityValue(file.isPhoto ? "Sent as a photo" : "Sent as a file")
+        } else if let error = file.copyError {
+            // Couldn't be copied, as with the disk full. The other files can go meanwhile.
+            VStack(alignment: .leading, spacing: 6) {
+                Label(file.name, systemImage: "exclamationmark.triangle.fill")
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                Button("Try Again") {
+                    model.retryCopy(of: file.id)
+                }
+                // Only the button, not the whole row.
+                .buttonStyle(.borderless)
+                .disabled(isSending)
+            }
         } else {
             // Being copied, as an iCloud Drive file downloads.
             Label {
@@ -115,9 +139,10 @@ struct OpenedFileSheet: View {
         .accessibilityValue(model.openedFilesSendingTo == chat.id ? "Sending" : "")
     }
 
-    /// Every file is copied and none is being sent.
+    /// A file is copied, none is still being copied, and none is being sent. One whose copy
+    /// failed doesn't hold the others up.
     private var canSend: Bool {
-        !model.openedFiles.isEmpty && model.openedFilesBeingCopied == 0 && !isSending
+        model.openedFiles.contains(where: \.isCopied) && model.openedFilesBeingCopied == 0 && !isSending
     }
 
     private var isSending: Bool {

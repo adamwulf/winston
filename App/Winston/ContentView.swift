@@ -6,6 +6,7 @@ import WinstonCore
 /// in Winston from another app.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
+    @State private var presentations = Presentations()
 
     var body: some View {
         Group {
@@ -17,6 +18,7 @@ struct ContentView: View {
                 LoginView()
             }
         }
+        .environment(presentations)
         .onAppear { model.start() }
         // A file another app opened in Winston, as Info.plist's document types offer it: from the
         // iOS share sheet, or with Open With or a drop on the Dock icon on the Mac. The only URLs
@@ -32,11 +34,13 @@ struct ContentView: View {
         }
     }
 
-    /// Shows once Winston is logged in with its bot chats. Only the model closes it, once the
-    /// files are sent or cancelled: the sheet can't be swiped away.
+    /// Shows once Winston is logged in with its bot chats, and nothing else is showing: a file
+    /// Adam opens closes settings and the pickers (`AppModel.openedFileCount`), but a failed upload
+    /// waits, and so does everything for push-to-talk, which could be in a hold. Only the model
+    /// closes it, once the files are sent or cancelled: the sheet can't be swiped away.
     private var isPickingAgent: Binding<Bool> {
         Binding {
-            model.isPickingAgentForOpenedFiles
+            model.isPickingAgentForOpenedFiles && !presentations.isShowingAny
         } set: { _ in
         }
     }

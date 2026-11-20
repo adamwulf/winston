@@ -5,6 +5,7 @@ import WinstonCore
 /// The one chat screen: a picker for the bot chats, the message list, and the bottom bar.
 struct ChatScreen: View {
     @Environment(AppModel.self) private var model
+    @Environment(Presentations.self) private var presentations
     @State private var draft = ""
     #if os(iOS)
     @State private var showingSettings = false
@@ -39,11 +40,22 @@ struct ChatScreen: View {
         .onChange(of: model.notificationOpenCount) {
             showingSettings = false
         }
-        // So the agent sheet can show.
-        .onChange(of: model.agentSheetCallCount) {
+        // A file Adam opened, so its agent sheet can show.
+        .onChange(of: model.openedFileCount) {
             showingSettings = false
         }
+        .onChange(of: showingSettings, initial: true) {
+            presentations.isShowingSettings = showingSettings
+        }
         #endif
+        .onChange(of: model.errorMessage != nil, initial: true) { _, isShowing in
+            presentations.isShowingAlert = isShowing
+        }
+        // As after a logout from settings: nothing of this screen shows now.
+        .onDisappear {
+            presentations.isShowingSettings = false
+            presentations.isShowingAlert = false
+        }
         .safeAreaInset(edge: .top) {
             if let error = model.notificationErrorMessage {
                 HStack(alignment: .top) {

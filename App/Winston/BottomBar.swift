@@ -13,6 +13,7 @@ import WinstonLogging
 struct BottomBar: View {
     private static let log = Logger(label: "app.attach")
     @Environment(AppModel.self) private var model
+    @Environment(Presentations.self) private var presentations
     @Binding var draft: String
     @State private var isPickingFile = false
     @State private var pickerNotificationCount = 0
@@ -46,11 +47,13 @@ struct BottomBar: View {
         .padding(.vertical, 8)
         .background(.bar)
         .onChange(of: model.notificationOpenCount) {
-            closePresentations()
+            closePickers()
+            isShowingPushToTalk = false
         }
-        // So the agent sheet can show.
-        .onChange(of: model.agentSheetCallCount) {
-            closePresentations()
+        // A file Adam opened, so its agent sheet can show. Not push-to-talk, which could be in a
+        // hold: the agent sheet waits for it to close.
+        .onChange(of: model.openedFileCount) {
+            closePickers()
         }
         // Closing it, however it closes, leaves push-to-talk for text mode.
         .sheet(isPresented: $isShowingPushToTalk, onDismiss: leavePushToTalk) {
@@ -62,15 +65,34 @@ struct BottomBar: View {
                 isShowingPushToTalk = false
             }
         }
+        // For the agent sheet, which waits while any of these shows.
+        .onChange(of: isPicking, initial: true) {
+            presentations.isShowingPicker = isPicking
+        }
+        .onChange(of: isShowingPushToTalk, initial: true) {
+            presentations.isShowingPushToTalk = isShowingPushToTalk
+        }
+        .onDisappear {
+            presentations.isShowingPicker = false
+            presentations.isShowingPushToTalk = false
+        }
     }
 
-    /// Closes the pickers and push-to-talk, for a notification tap or the agent sheet.
-    private func closePresentations() {
+    /// Closes the file and photo pickers, for a notification tap or a file opened in Winston.
+    private func closePickers() {
         isPickingFile = false
-        isShowingPushToTalk = false
         #if os(iOS)
         isPickingPhoto = false
         photoItem = nil
+        #endif
+    }
+
+    /// Whether the file or photo picker is showing.
+    private var isPicking: Bool {
+        #if os(iOS)
+        isPickingFile || isPickingPhoto
+        #else
+        isPickingFile
         #endif
     }
 

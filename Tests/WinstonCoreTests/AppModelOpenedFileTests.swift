@@ -35,11 +35,13 @@ private func sentPhotos(of harness: Harness) -> [(chatID: Int64?, path: String, 
     }
 }
 
-/// The temporary ID of the newest message still pending in `chat`, once the model shows one.
+/// The temporary IDs of the messages still pending in `chat`, oldest first, once the model shows
+/// `count` of them.
 @MainActor
-private func pendingMessageID(in chat: Int64, of model: AppModel) async -> Int64? {
-    _ = await eventually { model.messages[ChatID(chat)]?.contains { $0.sendState == .pending } == true }
-    return model.messages[ChatID(chat)]?.last { $0.sendState == .pending }?.id.rawValue
+private func pendingMessageIDs(in chat: Int64, count: Int = 1, of model: AppModel) async -> [Int64] {
+    let pending = { model.messages[ChatID(chat)]?.filter { $0.sendState == .pending }.map(\.id.rawValue) ?? [] }
+    _ = await eventually { pending().count >= count }
+    return pending()
 }
 
 private func exists(_ url: URL) -> Bool {
@@ -53,8 +55,8 @@ private func writeFile(_ name: String, _ data: Data, in folder: URL) throws -> U
     return file
 }
 
-/// A name no other test uses, since the tests run side by side and `copyFolders(named:besides:)`
-/// looks through the whole temporary folder.
+/// A name no other test uses, since the tests run side by side and `workingCopies(named:)` looks
+/// through the folder they share.
 private func uniqueName(_ name: String, _ type: String) -> String {
     "\(name)-\(UUID().uuidString).\(type)"
 }
@@ -72,11 +74,14 @@ private func removeDocumentCopies(_ paths: [String]) {
     }
 }
 
-/// The folders in the temporary folder holding a file named `name`, other than `folder`: the copies
-/// Winston made. Give the file a name no other test uses (`uniqueName`).
-private func copyFolders(named name: String, besides folder: URL) throws -> [URL] {
-    try FileManager.default.contentsOfDirectory(at: URL.temporaryDirectory, includingPropertiesForKeys: nil)
-        .filter { $0.lastPathComponent != folder.lastPathComponent && exists($0.appending(path: name)) }
+/// Where the model keeps its working copies of opened files.
+private let openedFileFolder = URL.temporaryDirectory.appending(path: "OpenedFiles", directoryHint: .isDirectory)
+
+/// The folders holding Winston's working copies of a file named `name`. Give the file a name no
+/// other test uses (`uniqueName`).
+private func workingCopies(named name: String) throws -> [URL] {
+    let folders = (try? FileManager.default.contentsOfDirectory(at: openedFileFolder, includingPropertiesForKeys: nil)) ?? []
+    return folders.filter { exists($0.appending(path: name)) }
 }
 
 /// Holds a coordinated write on a file until `release()`, so a coordinated read of it, as
@@ -111,16 +116,19 @@ struct OpenedFileTests {
     @Test func aZipOpenedBeforeLoginWaitsForTheChatsThenGoesAsADocumentToTheAgentPicked() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
-        let zip = try writeFile("logs.zip", Data("zip bytes".utf8), in: folder)
+        let name = uniqueName("logs", "zip")
+        let zip = try writeFile(name, Data("zip bytes".utf8), in: folder)
         let harness = twoBots(isLoggedIn: false)
         let model = harness.model
 
         model.openFile(at: zip)
         #expect(await copied(1, in: model))
         let file = try #require(model.openedFiles.first)
-        #expect(file.name == "logs.zip")
+        #expect(file.name == name)
         #expect(!file.isPhoto)
-        #expect(model.agentSheetCallCount == 1)
+        #expect(model.openedFileCount == 1)
+        let working = try workingCopies(named: name)
+        #expect(working.count == 1)
 
         // Not logged in: the sheet waits, and so does the file.
         model.start()
@@ -142,21 +150,25 @@ struct OpenedFileTests {
         #expect(sent.count == 1)
         #expect(sent.first?.chatID == 2)
         #expect(sent.first?.caption == nil)
-        let copy = URL(filePath: try #require(sent.first).path)
-        #expect(copy.lastPathComponent == "logs.zip")
-        #expect(try Data(contentsOf: copy) == Data("zip bytes".utf8))
+        // TDLib uploads a copy of its own, outside Winston's working folder.
+        let upload = URL(filePath: try #require(sent.first).path)
+        #expect(upload.lastPathComponent == name)
+        #expect(!upload.pathComponents.starts(with: openedFileFolder.pathComponents))
+        #expect(try Data(contentsOf: upload) == Data("zip bytes".utf8))
         #expect(sentPhotos(of: harness).isEmpty)
         #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)
         #expect(model.openedFilesSendingTo == nil)
         #expect(model.currentChat?.id == ChatID(1))
+        // Kept until TDLib says it was sent, in case it isn't.
+        #expect(working.allSatisfy(exists))
 
-        let pending = try #require(await pendingMessageID(in: 2, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 2, of: model).first)
         harness.fake.confirmSend(of: pending, in: 2, as: 500)
-        #expect(await eventually { model.messages[ChatID(2)]?.last?.id == MessageID(500) })
 
-        // The sent document's file, so it stays, as the + button's copies do.
-        #expect(exists(copy))
+        #expect(await eventually { working.allSatisfy { !exists($0) } })
+        // The sent message's file.
+        #expect(exists(upload))
         // Adam's own file, outside the inboxes, stays.
         #expect(exists(zip))
         #expect(model.openedFiles.isEmpty)
@@ -207,8 +219,8 @@ struct OpenedFileTests {
         model.openFile(at: png)
         #expect(await copied(1, in: model))
         #expect(model.openedFiles.first?.isPhoto == true)
-        let copyFolders = try copyFolders(named: name, besides: folder)
-        #expect(copyFolders.count == 1)
+        let working = try workingCopies(named: name)
+        #expect(working.count == 1)
         await model.sendOpenedFiles(to: ChatID(1))
 
         let sent = sentPhotos(of: harness)
@@ -220,18 +232,80 @@ struct OpenedFileTests {
         #expect(try imageFileInfo(at: jpeg) == ImageFileInfo(type: UTType.jpeg.identifier, width: 40, height: 20))
         #expect(sentDocuments(of: harness).isEmpty)
         #expect(model.openedFiles.isEmpty)
-        // Kept until TDLib says the photo was sent, in case it isn't.
-        #expect(copyFolders.allSatisfy(exists))
+        #expect(working.allSatisfy(exists))
 
-        let pending = try #require(await pendingMessageID(in: 1, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 1, of: model).first)
         harness.fake.confirmSend(of: pending, in: 1, as: 500)
 
-        #expect(await eventually { copyFolders.allSatisfy { !exists($0) } })
+        #expect(await eventually { working.allSatisfy { !exists($0) } })
         // The sent photo's file.
         #expect(exists(jpeg))
         #expect(exists(png))
+        #expect(model.openedFileError == nil)
+    }
+
+    @Test func aConfirmationBeforeTheHandoffReturnsStillFinishesTheUpload() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inbox = folder.appending(path: "Inbox", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: false)
+        let name = uniqueName("Screenshot", "png")
+        let systemCopy = try writeFile(name, try imageData(width: 40, height: 20), in: inbox)
+        let harness = twoBots(inboxes: [inbox])
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: systemCopy)
+        #expect(await copied(1, in: model))
+        let working = try workingCopies(named: name)
+        harness.fake.hold(.sendMessageReply)
+
+        let send = Task { await model.sendOpenedFiles(to: ChatID(1)) }
+
+        // TDLib has made the pending message, and confirms it before its answer reaches the model.
+        #expect(await eventually { harness.fake.isWaiting(on: .sendMessageReply) })
+        let pending = try #require(await pendingMessageIDs(in: 1, of: model).first)
+        harness.fake.confirmSend(of: pending, in: 1, as: 500)
+        #expect(await eventually { model.messages[ChatID(1)]?.last?.id == MessageID(500) })
+        harness.fake.release(.sendMessageReply)
+        await send.value
+
+        let sent = sentPhotos(of: harness)
+        defer { sent.forEach { try? FileManager.default.removeItem(at: URL(filePath: $0.path)) } }
+        #expect(working.allSatisfy { !exists($0) })
+        #expect(!exists(systemCopy))
+        #expect(exists(URL(filePath: try #require(sent.first).path)))
         #expect(model.openedFiles.isEmpty)
         #expect(model.openedFileError == nil)
+    }
+
+    @Test func aFailureBeforeTheHandoffReturnsStillBringsTheFileBack() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let zip = try writeFile("logs.zip", Data("zip bytes".utf8), in: folder)
+        let harness = twoBots()
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: zip)
+        #expect(await copied(1, in: model))
+        let file = try #require(model.openedFiles.first)
+        harness.fake.hold(.sendMessageReply)
+
+        let send = Task { await model.sendOpenedFiles(to: ChatID(2)) }
+
+        #expect(await eventually { harness.fake.isWaiting(on: .sendMessageReply) })
+        let pending = try #require(await pendingMessageIDs(in: 2, of: model).first)
+        harness.fake.failSend(of: pending, in: 2, code: 500, message: "UPLOAD_FAILED")
+        #expect(await eventually {
+            model.messages[ChatID(2)]?.last?.sendState == .failed("UPLOAD_FAILED")
+        })
+        harness.fake.release(.sendMessageReply)
+        await send.value
+
+        #expect(model.openedFiles == [file])
+        #expect(model.openedFileError == "Couldn't send logs.zip to Laptop: UPLOAD_FAILED")
+        let upload = URL(filePath: try #require(sentDocuments(of: harness).first).path)
+        #expect(!exists(upload))
+        model.cancelOpenedFiles()
     }
 
     @Test func anAnimatedGIFGoesAsADocumentSoItKeepsItsFrames() async throws {
@@ -253,6 +327,7 @@ struct OpenedFileTests {
         #expect(sent.map(\.chatID) == [2])
         #expect(try Data(contentsOf: URL(filePath: try #require(sent.first).path)) == gifData)
         #expect(sentPhotos(of: harness).isEmpty)
+        model.cancelOpenedFiles()
     }
 
     @Test func filesGoInTheOrderTheyWereOpenedThoughALaterOneIsCopiedFirst() async throws {
@@ -274,7 +349,7 @@ struct OpenedFileTests {
         #expect(model.openedFiles.map(\.name) == ["notes.txt", "photo.jpg"])
         #expect(model.openedFiles.map(\.isCopied) == [false, true])
         #expect(model.openedFilesBeingCopied == 1)
-        #expect(model.agentSheetCallCount == 2)
+        #expect(model.openedFileCount == 2)
         #expect(model.isPickingAgentForOpenedFiles)
         // Nothing goes until both are copied.
         await model.sendOpenedFiles(to: ChatID(2))
@@ -305,6 +380,31 @@ struct OpenedFileTests {
         #expect(model.openedFiles.isEmpty)
     }
 
+    @Test func failedUploadsComeBackInTheOrderTheFilesWereOpened() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try writeFile("a.txt", Data("a".utf8), in: folder)
+        let second = try writeFile("b.txt", Data("b".utf8), in: folder)
+        let harness = twoBots()
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: first)
+        model.openFile(at: second)
+        #expect(await copied(2, in: model))
+        await model.sendOpenedFiles(to: ChatID(2))
+        let pending = await pendingMessageIDs(in: 2, count: 2, of: model)
+        try #require(pending.count == 2)
+
+        // B's upload fails first, then A's.
+        harness.fake.failSend(of: pending[1], in: 2, message: "UPLOAD_FAILED")
+        #expect(await eventually { model.openedFiles.map(\.name) == ["b.txt"] })
+        harness.fake.failSend(of: pending[0], in: 2, message: "UPLOAD_FAILED")
+
+        #expect(await eventually { model.openedFiles.count == 2 })
+        #expect(model.openedFiles.map(\.name) == ["a.txt", "b.txt"])
+        model.cancelOpenedFiles()
+    }
+
     @Test func aSendTDLibTurnsDownKeepsTheFileWithAnErrorNamingTheAgentForAnotherPick() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -326,8 +426,8 @@ struct OpenedFileTests {
         #expect(model.isPickingAgentForOpenedFiles)
         // In the sheet, not the chat screen's alert, which can't show over it.
         #expect(model.errorMessage == nil)
-        let copy = URL(filePath: try #require(refused.first).path)
-        #expect(exists(copy))
+        // Nothing will upload TDLib's copy.
+        #expect(!exists(URL(filePath: try #require(refused.first).path)))
 
         harness.fake.succeed(.sendMessage)
         await model.sendOpenedFiles(to: ChatID(2))
@@ -335,10 +435,11 @@ struct OpenedFileTests {
         let sent = sentDocuments(of: harness)
         defer { removeDocumentCopies(sent.map(\.path)) }
         #expect(sent.map(\.chatID) == [1, 2])
-        #expect(sent.last?.path == copy.path(percentEncoded: false))
+        #expect(sent.map { URL(filePath: $0.path).lastPathComponent } == ["logs.zip", "logs.zip"])
         #expect(model.openedFiles.isEmpty)
         #expect(model.openedFileError == nil)
         #expect(!model.isPickingAgentForOpenedFiles)
+        model.cancelOpenedFiles()
     }
 
     @Test func aPhotoTDLibTurnsDownLeavesNoJPEGBehindAndKeepsItsCopy() async throws {
@@ -351,58 +452,63 @@ struct OpenedFileTests {
         #expect(await harness.startAndLoadChats())
         model.openFile(at: png)
         #expect(await copied(1, in: model))
-        let copyFolders = try copyFolders(named: name, besides: folder)
+        let working = try workingCopies(named: name)
         harness.fake.fail(.sendMessage, code: 400, message: "PHOTO_INVALID_DIMENSIONS")
 
         await model.sendOpenedFiles(to: ChatID(1))
 
         let refused = try #require(sentPhotos(of: harness).first)
         #expect(!exists(URL(filePath: refused.path)))
-        #expect(copyFolders.count == 1)
-        #expect(copyFolders.allSatisfy(exists))
+        #expect(working.count == 1)
+        #expect(working.allSatisfy(exists))
         #expect(model.openedFileError == "Couldn't send \(name) to Home: PHOTO_INVALID_DIMENSIONS")
         #expect(model.openedFiles.count == 1)
 
         // Cancel removes the copy, and there is no JPEG left to remove.
         model.cancelOpenedFiles()
-        #expect(copyFolders.allSatisfy { !exists($0) })
+        #expect(working.allSatisfy { !exists($0) })
         #expect(exists(png))
     }
 
-    @Test func anUploadThatFailsLaterBringsTheFileBackWithAnErrorNamingTheAgent() async throws {
+    @Test func anUploadThatFailsLaterBringsTheFileBackWithoutClosingAnything() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
-        let zip = try writeFile("logs.zip", Data("zip bytes".utf8), in: folder)
+        let name = uniqueName("logs", "zip")
+        let zip = try writeFile(name, Data("zip bytes".utf8), in: folder)
         let harness = twoBots()
         let model = harness.model
         #expect(await harness.startAndLoadChats())
         model.openFile(at: zip)
         #expect(await copied(1, in: model))
         let file = try #require(model.openedFiles.first)
+        let working = try workingCopies(named: name)
         // Laptop, while Home is the chat shown, so the failed message isn't on screen.
         await model.sendOpenedFiles(to: ChatID(2))
         #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)
 
-        let pending = try #require(await pendingMessageID(in: 2, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 2, of: model).first)
         harness.fake.failSend(of: pending, in: 2, code: 500, message: "UPLOAD_FAILED")
 
         #expect(await eventually { model.isPickingAgentForOpenedFiles })
         #expect(model.openedFiles == [file])
-        #expect(model.openedFileError == "Couldn't send logs.zip to Laptop: UPLOAD_FAILED")
+        #expect(model.openedFileError == "Couldn't send \(name) to Laptop: UPLOAD_FAILED")
         #expect(model.currentChat?.id == ChatID(1))
-        // Called up again, closing settings or whatever else is showing.
-        #expect(model.agentSheetCallCount == 2)
-        // Its copy stays, for another try.
-        let copy = URL(filePath: try #require(sentDocuments(of: harness).first).path)
-        defer { removeDocumentCopies([copy.path(percentEncoded: false)]) }
-        #expect(exists(copy))
+        // Settings, the pickers and push-to-talk stay: the sheet waits for them.
+        #expect(model.openedFileCount == 1)
+        // TDLib's copy goes; Winston's stays, for another try.
+        let failedUpload = URL(filePath: try #require(sentDocuments(of: harness).first).path)
+        #expect(!exists(failedUpload))
+        #expect(working.allSatisfy(exists))
 
         await model.sendOpenedFiles(to: ChatID(2))
 
-        #expect(sentDocuments(of: harness).map(\.path) == [copy, copy].map { $0.path(percentEncoded: false) })
+        let sent = sentDocuments(of: harness)
+        defer { removeDocumentCopies(sent.map(\.path)) }
+        #expect(sent.count == 2)
         #expect(model.openedFiles.isEmpty)
         #expect(model.openedFileError == nil)
+        model.cancelOpenedFiles()
     }
 
     @Test func aPhotoWhoseUploadFailsLaterLosesItsJPEGAndKeepsItsCopy() async throws {
@@ -415,21 +521,46 @@ struct OpenedFileTests {
         #expect(await harness.startAndLoadChats())
         model.openFile(at: png)
         #expect(await copied(1, in: model))
-        let copyFolders = try copyFolders(named: name, besides: folder)
+        let working = try workingCopies(named: name)
         await model.sendOpenedFiles(to: ChatID(2))
         let jpeg = URL(filePath: try #require(sentPhotos(of: harness).first).path)
         #expect(exists(jpeg))
 
-        let pending = try #require(await pendingMessageID(in: 2, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 2, of: model).first)
         harness.fake.failSend(of: pending, in: 2, code: 500, message: "UPLOAD_FAILED")
 
         #expect(await eventually { model.openedFiles.count == 1 })
         #expect(!exists(jpeg))
-        #expect(copyFolders.count == 1)
-        #expect(copyFolders.allSatisfy(exists))
+        #expect(working.count == 1)
+        #expect(working.allSatisfy(exists))
         #expect(model.openedFileError == "Couldn't send \(name) to Laptop: UPLOAD_FAILED")
         model.cancelOpenedFiles()
-        #expect(copyFolders.allSatisfy { !exists($0) })
+        #expect(working.allSatisfy { !exists($0) })
+    }
+
+    @Test func loggingOutRemovesTheFilesOfUploadsUnderWay() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inbox = folder.appending(path: "Inbox", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: false)
+        let name = uniqueName("logs", "zip")
+        let systemCopy = try writeFile(name, Data("zip bytes".utf8), in: inbox)
+        let harness = twoBots(inboxes: [inbox])
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: systemCopy)
+        #expect(await copied(1, in: model))
+        let working = try workingCopies(named: name)
+        await model.sendOpenedFiles(to: ChatID(1))
+        let upload = URL(filePath: try #require(sentDocuments(of: harness).first).path)
+        #expect(exists(upload))
+
+        await model.logOut()
+
+        #expect(await eventually { !exists(upload) })
+        #expect(working.allSatisfy { !exists($0) })
+        #expect(!exists(systemCopy))
+        #expect(exists(inbox))
     }
 
     @Test func cancelRemovesWinstonsCopyAndSendsNothing() async throws {
@@ -442,15 +573,15 @@ struct OpenedFileTests {
         #expect(await harness.startAndLoadChats())
         model.openFile(at: zip)
         #expect(await copied(1, in: model))
-        let copies = try copyFolders(named: name, besides: folder)
-        #expect(copies.count == 1)
+        let working = try workingCopies(named: name)
+        #expect(working.count == 1)
         #expect(model.isPickingAgentForOpenedFiles)
 
         model.cancelOpenedFiles()
 
         #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)
-        #expect(copies.allSatisfy { !exists($0) })
+        #expect(working.allSatisfy { !exists($0) })
         #expect(exists(zip))
         await model.sendOpenedFiles(to: ChatID(1))
         #expect(sentDocuments(of: harness).isEmpty)
@@ -476,10 +607,50 @@ struct OpenedFileTests {
 
         // The copy is made, then removed, and the file doesn't come back.
         try await settle()
-        #expect(try copyFolders(named: name, besides: folder).isEmpty)
+        #expect(try workingCopies(named: name).isEmpty)
         #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)
         #expect(exists(zip))
+    }
+
+    @Test func aFileThatCouldNotBeCopiedKeepsItsPlaceForTryAgainWhileTheOthersGo() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inbox = folder.appending(path: "Inbox", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: false)
+        // Gone when Winston copies it, as a copy can fail with the disk full.
+        let late = inbox.appending(path: uniqueName("late", "zip"))
+        let notes = try writeFile("notes.txt", Data("hello".utf8), in: inbox)
+        let harness = twoBots(inboxes: [inbox])
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+
+        model.openFile(at: late)
+        model.openFile(at: notes)
+
+        #expect(await eventually { model.openedFiles.first?.copyError != nil && model.openedFilesBeingCopied == 0 })
+        #expect(model.openedFiles.map(\.isCopied) == [false, true])
+        #expect(model.openedFileError == nil)
+        #expect(model.isPickingAgentForOpenedFiles)
+
+        // The other file goes; the one that couldn't be copied stays, its handed URL with it.
+        await model.sendOpenedFiles(to: ChatID(1))
+        let sent = sentDocuments(of: harness)
+        defer { removeDocumentCopies(sent.map(\.path)) }
+        #expect(sent.map { URL(filePath: $0.path).lastPathComponent } == ["notes.txt"])
+        #expect(model.openedFiles.count == 1)
+        #expect(model.openedFiles.first?.copyError != nil)
+
+        try Data("zip bytes".utf8).write(to: late)
+        model.retryCopy(of: try #require(model.openedFiles.first).id)
+
+        #expect(await copied(1, in: model))
+        #expect(model.openedFiles.first?.copyError == nil)
+        #expect(exists(late))
+
+        // Cancel removes what iOS handed over.
+        model.cancelOpenedFiles()
+        #expect(!exists(late))
     }
 
     @Test func aFolderIsTurnedDownAndTheSheetSaysWhyUntilCancel() async throws {
@@ -493,17 +664,17 @@ struct OpenedFileTests {
 
         model.openFile(at: reports)
 
-        #expect(await eventually { model.openedFileError != nil })
-        #expect(model.openedFileError == "Winston can send files, but not folders.")
-        #expect(model.openedFiles.isEmpty)
+        #expect(await eventually { model.openedFiles.first?.copyError != nil })
+        #expect(model.openedFiles.first?.copyError == "Winston can send files, but not folders.")
         #expect(model.isPickingAgentForOpenedFiles)
         await model.sendOpenedFiles(to: ChatID(1))
         #expect(sentDocuments(of: harness).isEmpty)
 
         model.cancelOpenedFiles()
 
-        #expect(model.openedFileError == nil)
+        #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)
+        // Adam's own folder, outside the inboxes, stays.
         #expect(exists(reports))
     }
 
@@ -532,7 +703,7 @@ struct OpenedFileTests {
         // Not yet: the upload could still fail.
         #expect(exists(systemCopy))
 
-        let pending = try #require(await pendingMessageID(in: 1, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 1, of: model).first)
         harness.fake.confirmSend(of: pending, in: 1, as: 500)
 
         #expect(await eventually { !exists(systemCopy) })
@@ -554,14 +725,14 @@ struct OpenedFileTests {
         #expect(await harness.startAndLoadChats())
         model.openFile(at: systemCopy)
         #expect(await copied(1, in: model))
-        let copies = try copyFolders(named: name, besides: folder)
-        #expect(copies.count == 1)
+        let working = try workingCopies(named: name)
+        #expect(working.count == 1)
         #expect(exists(systemCopy))
 
         model.cancelOpenedFiles()
 
         #expect(!exists(systemCopy))
-        #expect(copies.allSatisfy { !exists($0) })
+        #expect(working.allSatisfy { !exists($0) })
         #expect(exists(inbox))
     }
 
@@ -580,7 +751,7 @@ struct OpenedFileTests {
         let sent = sentDocuments(of: harness)
         defer { removeDocumentCopies(sent.map(\.path)) }
 
-        let pending = try #require(await pendingMessageID(in: 1, of: model))
+        let pending = try #require(await pendingMessageIDs(in: 1, of: model).first)
         harness.fake.confirmSend(of: pending, in: 1, as: 500)
 
         #expect(await eventually { model.messages[ChatID(1)]?.last?.id == MessageID(500) })
@@ -632,9 +803,53 @@ struct OpenedFileTests {
 
         model.openFile(at: try #require(URL(string: "https://example.com/logs.zip")))
 
-        #expect(model.agentSheetCallCount == 0)
+        #expect(model.openedFileCount == 0)
         #expect(model.openedFiles.isEmpty)
         #expect(model.openedFileError == nil)
         #expect(!model.isPickingAgentForOpenedFiles)
+    }
+}
+
+/// What a launch clears out: what opened files left in an earlier run.
+@Suite(.timeLimit(.minutes(1)))
+struct OpenedFileLeftoverTests {
+    @Test func copiesAndHandedFilesFromBeforeTheCutoffGoAndLaterOnesStay() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let working = folder.appending(path: "OpenedFiles", directoryHint: .isDirectory)
+        let inbox = folder.appending(path: "Inbox", directoryHint: .isDirectory)
+        let oldCopy = working.appending(path: "old", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: oldCopy, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: false)
+        try Data("old".utf8).write(to: oldCopy.appending(path: "old.zip"))
+        let oldHanded = try writeFile("old.pdf", Data("old".utf8), in: inbox)
+        try await Task.sleep(for: .milliseconds(50))
+        let cutoff = Date()
+        try await Task.sleep(for: .milliseconds(50))
+        let newCopy = working.appending(path: "new", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: newCopy, withIntermediateDirectories: false)
+        try Data("new".utf8).write(to: newCopy.appending(path: "new.zip"))
+        let newHanded = try writeFile("new.pdf", Data("new".utf8), in: inbox)
+
+        let removed = await OpenedFile.removeLeftovers(in: working, inboxes: [inbox], before: cutoff)
+
+        #expect(removed == 2)
+        #expect(!exists(oldCopy))
+        #expect(!exists(oldHanded))
+        #expect(exists(newCopy))
+        #expect(exists(newHanded))
+    }
+
+    @Test func foldersThatDontExistYetHaveNothingToRemove() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let removed = await OpenedFile.removeLeftovers(
+            in: folder.appending(path: "OpenedFiles"),
+            inboxes: [folder.appending(path: "Inbox")],
+            before: Date()
+        )
+
+        #expect(removed == 0)
     }
 }
