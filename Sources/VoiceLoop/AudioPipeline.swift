@@ -26,6 +26,8 @@ final class Pipeline {
     private let microphoneGate: MicrophoneGate
     /// Whether the microphone has heard someone talking, from its loudness.
     let voiceActivity = VoiceActivity()
+    /// How loud the microphone is after voice processing, for the `voice.echo` log.
+    let micLevels = MicrophoneLevels()
     /// The `voice.timeline` log for this listening session.
     let timeline: VoiceTimeline
     var recognizer: (any Recognizer)?
@@ -119,6 +121,7 @@ final class Pipeline {
                 clock: fedAudio,
                 gate: microphoneGate,
                 voiceActivity: voiceActivity,
+                levels: micLevels,
                 timeline: timeline.microphone
             )
         )
@@ -188,15 +191,16 @@ final class Pipeline {
         engine.stop()
     }
 
-    /// Runs on the audio thread: mutes what push-to-talk's gate doesn't keep, measures the
-    /// loudness of what it keeps, records each buffer's times for the timeline log, and
-    /// converts it for the analyzer.
+    /// Runs on the audio thread: measures the whole buffer's level for the echo log, mutes what
+    /// push-to-talk's gate doesn't keep, measures the loudness of what it keeps, records each
+    /// buffer's times for the timeline log, and converts it for the analyzer.
     private nonisolated static func microphoneTap(
         converter: AVAudioConverter,
         continuation: AsyncStream<AnalyzerInput>.Continuation,
         clock: FedAudioClock,
         gate: MicrophoneGate,
         voiceActivity: VoiceActivity,
+        levels: MicrophoneLevels,
         timeline: MicrophoneTimeline
     ) -> AVAudioNodeTapBlock {
         { buffer, when in
@@ -206,6 +210,10 @@ final class Pipeline {
             // the tap is called stands in for it.
             let captureTime = when.isHostTimeValid ? when.hostTime : TimelineClock.now()
             let frames = Int(buffer.frameLength)
+            // What voice processing let through, before the gate mutes any of it.
+            if let samples = buffer.floatChannelData?[0] {
+                levels.record(samples, count: frames)
+            }
             let kept = gate.keptFrames(
                 buffer.frameLength,
                 sampleRate: buffer.format.sampleRate,

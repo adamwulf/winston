@@ -33,6 +33,12 @@ final class PreviewPlayer {
         self.environment = environment
     }
 
+    /// Whether a preview, or the stop cue, is playing on an engine of its own, outside voice
+    /// processing. For the `voice.echo` log.
+    var isPlaying: Bool {
+        current != nil
+    }
+
     /// Starts a preview at `pitch` times the voice's own pitch (a `VoiceLoop.speechPitch`),
     /// cutting off the one playing, and returns the playback to
     /// feed its audio into. Throws when the engine or, on iOS, the audio session can't start.

@@ -266,6 +266,9 @@ public final class VoiceLoop {
     @ObservationIgnored private var pauseDetector = PauseDetector(pauseThreshold: .milliseconds(1200))
     /// Push-to-talk's mute on the microphone, shared with each pipeline's tap.
     @ObservationIgnored private let microphoneGate = MicrophoneGate()
+    /// The `voice.echo` log, kept across rebuilds so it can say how long since a route change,
+    /// a reply or a cue.
+    @ObservationIgnored private let echo = EchoLog()
 
     /// A push-to-talk hold that has been released, until its utterance is sent.
     private struct Release {
@@ -366,6 +369,9 @@ public final class VoiceLoop {
     private func start(isForegroundRetry: Bool) async throws {
         guard pipeline == nil, !isStarting else { return }
         // A preview playing outside the engine would be heard as speech once listening starts.
+        if previewPlayer.isPlaying {
+            echo.previewStoppedForVoiceMode()
+        }
         stopPreviewPlayer()
         isStarting = true
         // Removed by `tearDown(.stop)`, which a start that fails also ends in.
@@ -508,6 +514,7 @@ public final class VoiceLoop {
                 // starts), unless the devices changed: that ends voice mode.
                 for await _ in configurationChanges {
                     guard let self, let pipeline, self.pipeline === pipeline else { return }
+                    self.echo.configurationChanged(pipeline)
                     #if os(macOS)
                     // On the Mac a change of the default input or output can show here, in the
                     // 100 ms check above, or at the end of a rebuild. On iOS the route change
@@ -598,6 +605,8 @@ public final class VoiceLoop {
             pipeline.tearDown()
             throw error
         }
+        // Voice mode follows route changes from its first start until it stops.
+        echo.engineStarted(pipeline, reason: routeChangeObserver == nil ? "start" : "rebuild")
         return pipeline
     }
 
@@ -771,6 +780,7 @@ public final class VoiceLoop {
             return
         }
         guard !text.isEmpty else { return }
+        logIfVoiceModeRuns(source: "previewEngine")
         let playback: SpeechPlayback
         do {
             playback = try previewPlayer.play(pitch: speechPitch)
@@ -822,6 +832,15 @@ public final class VoiceLoop {
         }
     }
 
+    /// Logs audio about to play on the preview player's own engine, which voice processing
+    /// doesn't hear, if voice mode is running or starting: echo cancellation couldn't take it
+    /// out of what the microphone hears. The loop plays previews there only while it is off, so
+    /// this line means that has changed.
+    private func logIfVoiceModeRuns(source: String) {
+        guard pipeline != nil || isStarting else { return }
+        echo.audioOutsideVoiceProcessing(source: source, voiceMode: voiceModeLogState)
+    }
+
     /// Stops a preview played while the loop was off. Stopping the player cancels its playback,
     /// so a sentence Kokoro is still rendering is dropped.
     private func stopPreviewPlayer() {
@@ -840,14 +859,25 @@ public final class VoiceLoop {
         guard playsSoundCues, let pipeline, pipeline.engine.isRunning else { return false }
         lastCueID += 1
         let id = lastCueID
+        let queuedBehind = unfinishedCues.count
         unfinishedCues.append((id, cue))
         // The working cue starts once the reply before it is out of the pitch shift.
         let leadIn = cue == .agentWorking ? workingCueLeadIn : 0
         if cue == .agentWorking {
             shiftedReplyWasCutOff = false
         }
+        echo.cueScheduled(
+            cue,
+            id: id,
+            leadIn: leadIn,
+            queuedBehind: queuedBehind,
+            replyPlaying: currentSpeech != nil,
+            on: pipeline
+        )
         pipeline.play(cue, leadIn: leadIn) { [weak self] in
-            Task { @MainActor in self?.cueFinished(id) }
+            // When it stopped sounding, before the hop to the main actor, for the echo log.
+            let ended = TimelineClock.now()
+            Task { @MainActor in self?.cueFinished(id, endedAt: ended) }
         }
         return true
     }
@@ -975,6 +1005,13 @@ public final class VoiceLoop {
                     reason: echoCancelled ? "tooFewWords" : "noEchoCancellation",
                     words: candidate.wordCount
                 )
+                if let pipeline {
+                    echo.resultDuringReply(
+                        pipeline,
+                        words: candidate.wordCount,
+                        outcome: echoCancelled ? "ignoredTooFewWords" : "ignoredNoEchoCancellation"
+                    )
+                }
                 ignoredWhileSpeaking = true
                 ignoredResultsThisReply += 1
                 return
@@ -984,6 +1021,9 @@ public final class VoiceLoop {
             // ignored so far may be this utterance's first words, so no audio is consumed.
             Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
             pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
+            if let pipeline {
+                echo.resultDuringReply(pipeline, words: candidate.wordCount, outcome: "bargeIn")
+            }
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
             updateWorkingCue()
@@ -1010,6 +1050,9 @@ public final class VoiceLoop {
     private func checkForPause() {
         // What the audio and synthesizer threads recorded, written here on the main actor.
         pipeline?.timeline.writeRecorded()
+        if let pipeline {
+            echo.poll(pipeline)
+        }
         pauseDetector.pauseThreshold = pauseThreshold
         if pipeline?.voiceActivity.takeHeardVoice() == true {
             pauseDetector.heardVoice(at: .now)
@@ -1313,6 +1356,7 @@ public final class VoiceLoop {
         do {
             try pipeline.restartEngine()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
+            echo.engineStarted(pipeline, reason: "restart")
             for cue in interruptedCues where cue != .agentWorking {
                 play(cue)
             }
@@ -1789,6 +1833,7 @@ public final class VoiceLoop {
     /// change carries its own routes, read as it was posted, so one handled late can't hide
     /// another.
     private func routeChanged(_ change: AudioRouteChange) {
+        echo.routeChanged()
         let stops = change.isDeviceChange && change.previous != change.current
         var fields: [String: CustomStringConvertible] = [
             "reason": change.reason,
@@ -1837,6 +1882,7 @@ public final class VoiceLoop {
         tearDown(.stop, playingStopCue: false)
         onStoppedForDeviceChange?()
         if playsSoundCues {
+            logIfVoiceModeRuns(source: "previewEngineStopCue")
             do {
                 try previewPlayer.play(.listeningStopped)
             } catch {
@@ -1853,6 +1899,8 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !isTalking, release == nil, !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
+        // For the echo log, before a working cue among them is cut off.
+        let cuesUnfinished = unfinishedCues.map(\.cue)
         cutOffWorkingCue(on: pipeline)
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)
@@ -1874,6 +1922,20 @@ public final class VoiceLoop {
         pipeline.timeline.speechStarted(at: started, chars: text.count, queued: speechQueue.count) {
             playback.firstAudioHostTime
         }
+        echo.replyStarted(
+            pipeline,
+            at: started,
+            firstAudio: { playback.firstAudioHostTime },
+            micGate: micGateLogContext,
+            cuesUnfinished: cuesUnfinished,
+            previewPlaying: previewPlayer.isPlaying
+        )
+    }
+
+    /// Push-to-talk's and the AirPods mute's state, for the echo log: while push-to-talk is on
+    /// and not `talking`, or while `inputMuted`, the recognizer hears silence.
+    private var micGateLogContext: [String: CustomStringConvertible] {
+        ["pushToTalk": isPushToTalk, "talking": isTalking, "inputMuted": isInputMuted]
     }
 
     /// Renders `text` into `playback` in the chosen voice and speed: with Kokoro when a Kokoro
@@ -1978,6 +2040,12 @@ public final class VoiceLoop {
         guard currentSpeech === playback else { return }
         let replyEnded = logReplyEnded(playback, reason: "finished")
         pipeline?.timeline.speechFinished(replyEnded)
+        echo.replyEnded(
+            pipeline,
+            reason: "finished",
+            micGate: micGateLogContext,
+            voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
+        )
         currentSpeech = nil
         kokoroSynthesis = nil
         consumeEcho()
@@ -1987,10 +2055,11 @@ public final class VoiceLoop {
         updateWorkingCue()
     }
 
-    /// The cue `play(_:)` gave `id` has played, or its player was stopped. An engine that stops
-    /// itself stops its players too, before the loop hears of it; a cue cut off that way stays
-    /// unfinished, to play again once the engine is running again.
-    private func cueFinished(_ id: Int) {
+    /// The cue `play(_:)` gave `id` has played, or its player was stopped, at `endedAt` (host
+    /// time). An engine that stops itself stops its players too, before the loop hears of it; a
+    /// cue cut off that way stays unfinished, to play again once the engine is running again.
+    private func cueFinished(_ id: Int, endedAt: UInt64) {
+        echo.cueEnded(id: id, at: endedAt)
         guard pipeline?.engine.isRunning == true else { return }
         unfinishedCues.removeAll { $0.id == id }
     }
@@ -2012,6 +2081,12 @@ public final class VoiceLoop {
             pipeline.speech.player.stop()
             pipeline.timeline.speechStopped(outputLatency: pipeline.engine.outputNode.presentationLatency)
         }
+        echo.replyEnded(
+            pipeline,
+            reason: reason,
+            micGate: micGateLogContext,
+            voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
+        )
         if consumingEcho {
             consumeEcho()
         }
