@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// Which of the app's other presentations are showing. The agent sheet for opened files waits
@@ -9,10 +10,11 @@ final class Presentations {
     var isShowingAlert = false
     var isShowingPicker = false
     var isShowingPushToTalk = false
-    /// A document's Quick Look preview, on iOS.
-    var isShowingPreview = false
+    /// The document Quick Look shows, on iOS: one for the whole message list, which presents it,
+    /// so a document row scrolling away doesn't lose track of it.
+    var previewURL: URL?
 
     var isShowingAny: Bool {
-        isShowingSettings || isShowingAlert || isShowingPicker || isShowingPushToTalk || isShowingPreview
+        isShowingSettings || isShowingAlert || isShowingPicker || isShowingPushToTalk || previewURL != nil
     }
 }
