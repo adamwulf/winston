@@ -386,6 +386,8 @@ public final class VoiceLoop {
             if state == .off && !resumeAfterInterruption {
                 speechQueue.removeAll()
             }
+            // What the echo log noted during the start, now that it is done.
+            echo.flush()
         }
         let run = runID
         do {
@@ -1001,8 +1003,8 @@ public final class VoiceLoop {
         guard candidate.apply(piece) else {
             // For the echo log: the recognizer heard something during the reply, though the
             // transcript doesn't take it.
-            if currentSpeech != nil, let pipeline {
-                echo.resultDuringReply(pipeline, words: transcript.wordCount, outcome: "filtered")
+            if currentSpeech != nil {
+                echo.resultDuringReply(words: transcript.wordCount, outcome: "filtered")
             }
             return
         }
@@ -1015,13 +1017,10 @@ public final class VoiceLoop {
                     reason: echoCancelled ? "tooFewWords" : "noEchoCancellation",
                     words: candidate.wordCount
                 )
-                if let pipeline {
-                    echo.resultDuringReply(
-                        pipeline,
-                        words: candidate.wordCount,
-                        outcome: echoCancelled ? "ignoredTooFewWords" : "ignoredNoEchoCancellation"
-                    )
-                }
+                echo.resultDuringReply(
+                    words: candidate.wordCount,
+                    outcome: echoCancelled ? "ignoredTooFewWords" : "ignoredNoEchoCancellation"
+                )
                 ignoredWhileSpeaking = true
                 ignoredResultsThisReply += 1
                 return
@@ -1031,9 +1030,8 @@ public final class VoiceLoop {
             // ignored so far may be this utterance's first words, so no audio is consumed.
             Self.log.notice("speech interrupted a reply", ["words": candidate.wordCount])
             pipeline?.timeline.bargeInDecided(words: candidate.wordCount)
-            if let pipeline {
-                echo.resultDuringReply(pipeline, words: candidate.wordCount, outcome: "bargeIn")
-            }
+            // Only notes the time and the count: its line is written after the reply has stopped.
+            echo.resultDuringReply(words: candidate.wordCount, outcome: "bargeIn")
             speechQueue.removeAll()
             silence(consumingEcho: false, reason: "bargeIn")
             updateWorkingCue()
@@ -1254,6 +1252,8 @@ public final class VoiceLoop {
         pauseDetector.reset()
         // A cue cut off here isn't played again; the next start plays its own.
         unfinishedCues = []
+        // For the echo log, which writes what it still holds for it once the teardown is done.
+        let endedPipeline = pipeline
         if let pipeline {
             self.pipeline = nil
             // No stop cue for a rebuild, for an engine that has stopped (an interruption, or one
@@ -1289,6 +1289,9 @@ public final class VoiceLoop {
             }
         }
         state = kind == .stop ? .off : .listening(partial: "")
+        if let endedPipeline {
+            echo.pipelineEnded(endedPipeline)
+        }
     }
 
     /// Stops listening on `pipeline` at once, but keeps its engine running to play the stop cue,
@@ -1942,16 +1945,26 @@ public final class VoiceLoop {
             pipeline,
             at: started,
             firstAudio: { playback.firstAudioHostTime },
-            micGate: micGateLogContext,
+            micGate: micGateState,
             cuesUnfinished: cuesUnfinished,
             previewPlaying: previewPlayer.isPlaying
         )
     }
 
-    /// Push-to-talk's and the AirPods mute's state, for the echo log: while push-to-talk is on
-    /// and not `talking`, or while `inputMuted`, the recognizer hears silence.
-    private var micGateLogContext: [String: CustomStringConvertible] {
-        ["pushToTalk": isPushToTalk, "talking": isTalking, "inputMuted": isInputMuted]
+    /// Push-to-talk's and the AirPods mute's state, for the echo log.
+    private var micGateState: EchoLog.MicGate {
+        EchoLog.MicGate(pushToTalk: isPushToTalk, talking: isTalking, inputMuted: isInputMuted)
+    }
+
+    /// Notes for the echo log that the reply has stopped, for `reason`. Cheap: its line is
+    /// written later.
+    private func noteReplyEnded(reason: String) {
+        echo.replyEnded(
+            reason: reason,
+            micGate: micGateState,
+            voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0,
+            voiceActive: pipeline?.timeline.isVoiceActive ?? false
+        )
     }
 
     /// Renders `text` into `playback` in the chosen voice and speed: with Kokoro when a Kokoro
@@ -2060,14 +2073,8 @@ public final class VoiceLoop {
         kokoroSynthesis = nil
         consumeEcho()
         updateListeningState()
-        // After the echo is consumed, so the log's work can't move where that cuts off, and
-        // before a next reply starts.
-        echo.replyEnded(
-            pipeline,
-            reason: "finished",
-            micGate: micGateLogContext,
-            voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
-        )
+        // After the echo is consumed, and before a next reply starts.
+        noteReplyEnded(reason: "finished")
         speakNextIfIdle()
         // With no reply after it, taps that waited for this one play now.
         updateWorkingCue()
@@ -2104,13 +2111,8 @@ public final class VoiceLoop {
         }
         ignoredWhileSpeaking = false
         updateListeningState()
-        // Last, after the echo is consumed, so the log's work can't move where that cuts off.
-        echo.replyEnded(
-            pipeline,
-            reason: reason,
-            micGate: micGateLogContext,
-            voiceStarts: pipeline?.timeline.voiceStartsDuringReply ?? 0
-        )
+        // Last, after the echo is consumed.
+        noteReplyEnded(reason: reason)
     }
 
     /// Logs how a reply ended and the loudest microphone level while it played, after echo

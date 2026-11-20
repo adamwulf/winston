@@ -24,17 +24,25 @@ import Synchronization
 /// - `reply playback`: how each reply ended: its first sound and its stop on the session's clock,
 ///   whether the voice detector heard voice meanwhile, and the loudest microphone level before
 ///   its first sound and from then on.
+/// - `preview stopped as voice mode starts` and `audio outside voice processing`: the preview
+///   player's engine, which plays outside voice processing, playing around voice mode.
+///
+/// Voice mode's time-critical paths (opening push-to-talk's gate and setting where the
+/// transcript is consumed, stopping a reply on a barge-in, starting up) call only the methods
+/// that note an event: they take the time and a few ids or flags, and queue the event. The
+/// lines are written later, off those paths: every 100 ms (`poll(_:)`), once a start is done
+/// (`flush()`), and when a pipeline goes (`pipelineEnded(_:)`). Taking the microphone's
+/// readings, reading the speech player's first-audio time, measuring cues, reading volumes and
+/// the route, and formatting all happen then. Each line is dated when its event happened.
 ///
 /// The levels come from each microphone buffer's reading (`MicrophoneLevels`), counted for a
 /// reply by when the buffer was captured: from its setup to its first sound (`pre…`), and from
-/// its first sound on (`mic…`, and the `mic level` lines).
-/// - `preview stopped as voice mode starts` and `audio outside voice processing`: the preview
-///   player's engine, which plays outside voice processing, playing around voice mode.
+/// its first sound on (`mic…`, and the `mic level` lines), up to its end.
 ///
 /// A line written while a pipeline runs carries `session` and `tMs`, as the `voice.timeline`
 /// lines do, so the two logs line up. Times since something happened are left out until it has.
 /// Counts, levels, times and states only: never what was said or spoken. Main actor only; the
-/// microphone tap only records levels, in `MicrophoneLevels`.
+/// microphone tap only records readings, in `MicrophoneLevels`.
 @MainActor
 final class EchoLog {
     private static let log = Logger(label: "voice.echo")
@@ -42,6 +50,18 @@ final class EchoLog {
     /// The shortest time between two `mic level` lines, in seconds. The loop looks every 100 ms,
     /// so they come every 300 ms.
     nonisolated static let levelInterval = 0.25
+
+    /// Push-to-talk's and the AirPods mute's state: while push-to-talk is on and not `talking`,
+    /// or while `inputMuted`, the recognizer hears silence.
+    struct MicGate {
+        var pushToTalk: Bool
+        var talking: Bool
+        var inputMuted: Bool
+
+        var fields: [String: CustomStringConvertible] {
+            ["pushToTalk": pushToTalk, "talking": talking, "inputMuted": inputMuted]
+        }
+    }
 
     private struct LastCue {
         /// The ID `VoiceLoop.play(_:)` gave it.
@@ -56,13 +76,28 @@ final class EchoLog {
         var cutOff = false
     }
 
+    /// How a reply ended, noted as it did.
+    private struct ReplyEnd {
+        /// In host time.
+        let time: UInt64
+        let reason: String
+        let micGate: MicGate
+        let voiceStarts: Int
+        let voiceActive: Bool
+    }
+
+    /// A reply being said, or one that has ended and waits for its line.
     private struct Reply {
+        /// Tells replies apart in this log.
+        let serial: Int
         /// Its number in `voice.timeline`.
         let number: Int?
         /// When it was set up, in host time.
         let started: UInt64
         /// When its first buffer was scheduled on the player, in host time; nil until then.
+        /// Takes the playback's lock, so it is read only off the time-critical paths.
         let firstAudio: () -> UInt64?
+        let pipeline: Pipeline
         /// The microphone's levels while it was being said.
         var levels: ReplyLevels
         /// Whether a `mic level` line has seen its first sound yet.
@@ -71,8 +106,59 @@ final class EchoLog {
         var droppedBuffers = 0
         /// Results that came while it played.
         var results = 0
-        /// How long after its first sound the first of them came.
-        var firstResultIntoPlaybackMs: Int?
+        /// When the first of them came, in host time.
+        var firstResultTime: UInt64?
+        /// Nil while it is being said.
+        var end: ReplyEnd?
+    }
+
+    /// A reply starting, with what changes soon after noted as it started.
+    private struct ReplyStart {
+        let number: Int?
+        let started: UInt64
+        let pipeline: Pipeline
+        let micGate: MicGate
+        let cuesUnfinished: [SoundCue]
+        let previewPlaying: Bool
+        let repliesSinceEngineStart: Int
+        let engineStartTime: UInt64?
+        let routeChangeTime: UInt64?
+        let replyEndTime: UInt64?
+        let lastCue: LastCue?
+        /// The fed audio's position on the analyzer's timeline as it started.
+        let audio: CMTime
+    }
+
+    private struct CueStart {
+        let cue: SoundCue
+        /// Nil for a closing pipeline's stop cue.
+        let id: Int?
+        /// When it was scheduled, in host time.
+        let time: UInt64
+        let leadIn: Double
+        let queuedBehind: Int
+        let replyPlaying: Bool
+        let replyEndTime: UInt64?
+        let pipeline: Pipeline
+    }
+
+    private struct HeardResult {
+        let replySerial: Int
+        let replyNumber: Int?
+        let replyStarted: UInt64
+        /// In host time.
+        let time: UInt64
+        let words: Int
+        let outcome: String
+        let resultsThisReply: Int
+        let pipeline: Pipeline
+    }
+
+    private enum Event {
+        case cue(CueStart)
+        case replyStarted(ReplyStart)
+        case result(HeardResult)
+        case previewStopped
     }
 
     private let logger: Logger
@@ -87,13 +173,22 @@ final class EchoLog {
     /// When the last reply ended, in host time.
     private var replyEndTime: UInt64?
     private var lastCue: LastCue?
+    /// Replies so far, for `Reply.serial`.
+    private var replies = 0
     /// The reply being said; nil when none is.
     private var reply: Reply?
+    /// Replies that have ended, until their "reply playback" line is written.
+    private var endedReplies: [Reply] = []
+    /// Events noted and not yet written, oldest first.
+    private var events: [Event] = []
     private var levelLimiter = RateLimiter(interval: EchoLog.levelInterval)
 
     /// `log` is for tests: by default the `voice.echo` logger.
     init(log: Logger? = nil) {
         logger = log ?? Self.log
+        // Room for what a burst notes, so noting one doesn't allocate.
+        events.reserveCapacity(16)
+        endedReplies.reserveCapacity(4)
     }
 
     // MARK: - Engine
@@ -137,32 +232,27 @@ final class EchoLog {
         routeChangeTime = TimelineClock.now()
     }
 
-    // MARK: - Cues
+    // MARK: - Noting events
 
-    /// `cue` was scheduled as cue `id`, after `leadIn` seconds of silence, behind `queuedBehind`
-    /// cues that hadn't finished. `replyPlaying` says whether a reply is being said. A nil `id`
-    /// is the stop cue on a pipeline that has stopped listening (`closing=true`): it is logged,
-    /// but no reply follows it, so it isn't kept as the last cue.
+    /// `cue` has just been scheduled as cue `id`, after `leadIn` seconds of silence, behind
+    /// `queuedBehind` cues that hadn't finished. `replyPlaying` says whether a reply is being
+    /// said. A nil `id` is the stop cue on a pipeline that has stopped listening
+    /// (`closing=true`): it is logged, but no reply follows it, so it isn't kept as the last cue.
     func cueScheduled(_ cue: SoundCue, id: Int?, leadIn: Double, queuedBehind: Int, replyPlaying: Bool, on pipeline: Pipeline) {
         let time = TimelineClock.now()
         if let id {
             lastCue = LastCue(id: id, cue: cue, scheduled: time)
         }
-        let level = Self.level(of: cue)
-        var fields: [String: CustomStringConvertible] = [
-            "cue": "\(cue)",
-            "peakDb": level.peakDb,
-            "rmsDb": level.rmsDb,
-            "cueMs": Int((cue.duration / .milliseconds(1)).rounded()),
-            "leadInMs": Int((leadIn * 1000).rounded()),
-            "queuedBehind": queuedBehind,
-            "replyPlaying": replyPlaying,
-            "closing": id == nil,
-            "cueVolume": Self.volume(pipeline.cuePlayer.volume),
-            "mixerVolume": Self.volume(pipeline.engine.mainMixerNode.outputVolume),
-        ]
-        fields["sinceReplyEndMs"] = Self.milliseconds(since: replyEndTime, to: time)
-        logger.notice("cue played", context(pipeline, at: time, fields))
+        events.append(.cue(CueStart(
+            cue: cue,
+            id: id,
+            time: time,
+            leadIn: leadIn,
+            queuedBehind: queuedBehind,
+            replyPlaying: replyPlaying,
+            replyEndTime: replyEndTime,
+            pipeline: pipeline
+        )))
     }
 
     /// Cue `id` stopped sounding at `hostTime`: its completion ran, because it played out or its
@@ -183,68 +273,176 @@ final class EchoLog {
         lastCue?.cutOff = true
     }
 
-    // MARK: - Replies
-
     /// A reply was set up at `started`, and its synthesis has started. `firstAudio` tells when
-    /// its first buffer was scheduled on the player. `micGate` holds push-to-talk's and the
-    /// AirPods mute's state; `cuesUnfinished` the cues that hadn't finished as it started (a
-    /// working cue among them is cut off for it); `previewPlaying` whether the preview player's
-    /// own engine, outside voice processing, was playing.
+    /// its first buffer was scheduled on the player. `cuesUnfinished` are the cues that hadn't
+    /// finished as it started (a working cue among them is cut off for it); `previewPlaying`
+    /// says whether the preview player's own engine, outside voice processing, was playing.
     func replyStarted(
         _ pipeline: Pipeline,
         at started: UInt64,
         firstAudio: @escaping () -> UInt64?,
-        micGate: [String: CustomStringConvertible],
+        micGate: MicGate,
         cuesUnfinished: [SoundCue],
         previewPlaying: Bool
     ) {
         repliesSinceEngineStart += 1
+        replies += 1
+        let number = pipeline.timeline.replyNumber
         reply = Reply(
-            number: pipeline.timeline.replyNumber,
+            serial: replies,
+            number: number,
             started: started,
             firstAudio: firstAudio,
+            pipeline: pipeline,
             levels: ReplyLevels(started: started)
         )
-        // Buffers captured before its setup count for nothing; those since count before its
-        // first sound.
-        absorbLevels(from: pipeline)
-
-        var fields = micGate
-        fields["reply"] = pipeline.timeline.replyNumber
-        fields["replySinceEngineStart"] = repliesSinceEngineStart
-        fields["sinceEngineStartMs"] = Self.milliseconds(since: engineStartTime, to: started)
-        fields["sinceRouteChangeMs"] = Self.milliseconds(since: routeChangeTime, to: started)
-        fields["sinceReplyEndMs"] = Self.milliseconds(since: replyEndTime, to: started)
-        fields["lastCue"] = lastCue.map { "\($0.cue)" } ?? "none"
-        if let lastCue {
-            fields["sinceCueScheduledMs"] = TimelineClock.milliseconds(from: lastCue.scheduled, to: started)
-            // Nil while it still sounds, or hasn't reported stopping yet.
-            fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: started)
-            fields["lastCueCutOff"] = lastCue.cutOff
-        }
-        fields["cuesUnfinished"] = cuesUnfinished.isEmpty ? "none" : cuesUnfinished.map { "\($0)" }.joined(separator: ",")
-        fields["speechVolume"] = Self.volume(pipeline.speech.player.volume)
-        fields["cueVolume"] = Self.volume(pipeline.cuePlayer.volume)
-        fields["mixerVolume"] = Self.volume(pipeline.engine.mainMixerNode.outputVolume)
-        fields["pitchShifted"] = !pipeline.speech.pitchShift.bypass
-        fields["previewPlaying"] = previewPlaying
-        fields["echoCancellation"] = pipeline.hasVoiceProcessing
-        // Where the reply starts on the analyzer's timeline, to set against a result's audio
-        // range in `voice.timeline`. The fed audio lags the microphone by a tap buffer or so.
-        fields["audioMs"] = Self.milliseconds(pipeline.fedAudio.time)
-        #if os(iOS)
-        fields.merge(Self.routeContext()) { $1 }
-        #endif
-        logger.notice("reply started", context(pipeline, at: started, fields))
+        events.append(.replyStarted(ReplyStart(
+            number: number,
+            started: started,
+            pipeline: pipeline,
+            micGate: micGate,
+            cuesUnfinished: cuesUnfinished,
+            previewPlaying: previewPlaying,
+            repliesSinceEngineStart: repliesSinceEngineStart,
+            engineStartTime: engineStartTime,
+            routeChangeTime: routeChangeTime,
+            replyEndTime: replyEndTime,
+            lastCue: lastCue,
+            audio: pipeline.fedAudio.time
+        )))
     }
 
-    /// Called every 100 ms. Takes the microphone's readings, which keeps their buffer from
-    /// filling up, and from a reply's first sound until it stops, writes the level since the
-    /// last `mic level` line, at most every `levelInterval`. The first line comes an interval
-    /// after the first sound.
+    /// A recognizer result came while a reply is being said, the transcript having `words`
+    /// words with it. `outcome` is `bargeIn` if it stops the reply, why it was ignored, or
+    /// `filtered` if the transcript didn't take it (audio already consumed, or outside a
+    /// push-to-talk hold). On a barge-in, call it before stopping the reply.
+    func resultDuringReply(words: Int, outcome: String) {
+        guard let current = reply else { return }
+        let time = TimelineClock.now()
+        reply?.results += 1
+        if current.firstResultTime == nil {
+            reply?.firstResultTime = time
+        }
+        events.append(.result(HeardResult(
+            replySerial: current.serial,
+            replyNumber: current.number,
+            replyStarted: current.started,
+            time: time,
+            words: words,
+            outcome: outcome,
+            resultsThisReply: current.results + 1,
+            pipeline: current.pipeline
+        )))
+    }
+
+    /// The reply stopped: it played to its end, or `reason` (as "reply ended" in `voice.loop`
+    /// gives it) cut it off. `voiceStarts` counts the voice detector's starts while it played,
+    /// and `voiceActive` says whether voice was active as it stopped. Its line is written later,
+    /// with the readings captured up to now.
+    func replyEnded(reason: String, micGate: MicGate, voiceStarts: Int, voiceActive: Bool) {
+        guard var ended = reply else { return }
+        reply = nil
+        let time = TimelineClock.now()
+        replyEndTime = time
+        ended.end = ReplyEnd(time: time, reason: reason, micGate: micGate, voiceStarts: voiceStarts, voiceActive: voiceActive)
+        ended.levels.close(at: time)
+        endedReplies.append(ended)
+    }
+
+    /// A preview was playing on the preview player's own engine as voice mode starts; it is
+    /// stopped before the microphone is opened.
+    func previewStoppedForVoiceMode() {
+        events.append(.previewStopped)
+    }
+
+    // MARK: - Writing
+
+    /// Called every 100 ms while `pipeline` runs: takes its microphone readings, which keeps
+    /// their buffer from filling up, writes the lines noted since the last call and those of the
+    /// replies that have ended, and from a reply's first sound until it stops, writes the level
+    /// since the last `mic level` line, at most every `levelInterval`. The first comes an
+    /// interval after the first sound.
     func poll(_ pipeline: Pipeline) {
         absorbLevels(from: pipeline)
-        guard let current = reply, let firstAudio = current.firstAudio() else { return }
+        writeEvents()
+        writeEndedReplies(of: pipeline)
+        writeLevelLine(for: pipeline)
+    }
+
+    /// Writes the lines noted since the last call, for when a start is done.
+    func flush() {
+        writeEvents()
+    }
+
+    /// `pipeline` is gone, with its microphone tap: takes its last readings and writes every
+    /// line still waiting for it.
+    func pipelineEnded(_ pipeline: Pipeline) {
+        absorbLevels(from: pipeline)
+        writeEvents()
+        writeEndedReplies(of: pipeline)
+        if reply?.pipeline === pipeline {
+            reply = nil
+        }
+    }
+
+    /// Audio is about to play outside voice processing while voice mode runs, so echo
+    /// cancellation can't take it out of what the microphone hears. `source` says what plays it.
+    func audioOutsideVoiceProcessing(source: String, voiceMode: String) {
+        logger.notice("audio outside voice processing", ["source": source, "voiceMode": voiceMode])
+    }
+
+    /// Takes the readings of `pipeline`'s microphone buffers that have come since the last call,
+    /// and counts them for its replies.
+    private func absorbLevels(from pipeline: Pipeline) {
+        let (readings, dropped) = pipeline.micLevels.drain()
+        if var current = reply, current.pipeline === pipeline {
+            Self.absorb(readings, dropped: dropped, into: &current)
+            reply = current
+        }
+        for index in endedReplies.indices where endedReplies[index].pipeline === pipeline {
+            Self.absorb(readings, dropped: dropped, into: &endedReplies[index])
+        }
+    }
+
+    private static func absorb(_ readings: [MicrophoneLevels.Reading], dropped: Int, into reply: inout Reply) {
+        // Read after the readings were taken: if the first sound hadn't been scheduled by now,
+        // none of them was captured after it.
+        let firstAudio = reply.firstAudio()
+        for reading in readings {
+            reply.levels.add(reading, firstAudio: firstAudio)
+        }
+        reply.droppedBuffers += dropped
+    }
+
+    private func writeEvents() {
+        guard !events.isEmpty else { return }
+        let pending = events
+        events.removeAll(keepingCapacity: true)
+        for event in pending {
+            switch event {
+            case .cue(let cue): write(cue)
+            case .replyStarted(let start): write(start)
+            case .result(let result): write(result)
+            case .previewStopped: logger.notice("preview stopped as voice mode starts", [:])
+            }
+        }
+    }
+
+    /// Writes the "reply playback" line of each of `pipeline`'s replies that has ended.
+    private func writeEndedReplies(of pipeline: Pipeline) {
+        var finished: [Reply] = []
+        endedReplies.removeAll { ended in
+            guard ended.pipeline === pipeline else { return false }
+            finished.append(ended)
+            return true
+        }
+        for ended in finished {
+            writePlayback(ended)
+        }
+    }
+
+    private func writeLevelLine(for pipeline: Pipeline) {
+        guard let current = reply, current.pipeline === pipeline, let firstAudio = current.firstAudio() else { return }
         if !current.sawFirstAudio {
             reply?.sawFirstAudio = true
             levelLimiter.restart(at: firstAudio)
@@ -263,102 +461,103 @@ final class EchoLog {
         logger.notice("mic level", context(pipeline, at: time, fields))
     }
 
-    /// Takes the readings of the microphone buffers that have come since the last call, and
-    /// counts them for the reply being said, if any.
-    private func absorbLevels(from pipeline: Pipeline) {
-        let (readings, dropped) = pipeline.micLevels.drain()
-        guard var current = reply else { return }
-        // Read after the readings were taken: if the first sound hasn't been scheduled by now,
-        // none of them was captured after it.
-        let firstAudio = current.firstAudio()
-        for reading in readings {
-            current.levels.add(reading, firstAudio: firstAudio)
-        }
-        current.droppedBuffers += dropped
-        reply = current
-    }
-
-    /// The loudest levels of `levels`, with `prefix`: `<prefix>RmsDb` and `<prefix>SampleDb`.
-    /// Nothing without a buffer.
-    private static func levelFields(_ levels: LevelSummary, prefix: String) -> [String: CustomStringConvertible] {
-        guard levels.buffers > 0 else { return [:] }
-        return [prefix + "RmsDb": levels.rmsDb, prefix + "SampleDb": levels.sampleDb]
-    }
-
-    /// A recognizer result came while a reply is being said, the transcript having `words`
-    /// words with it. `outcome` is `bargeIn` if it stops the reply, why it was ignored, or
-    /// `filtered` if the transcript didn't take it (audio already consumed, or outside a
-    /// push-to-talk hold).
-    func resultDuringReply(_ pipeline: Pipeline, words: Int, outcome: String) {
-        absorbLevels(from: pipeline)
-        guard let current = reply else { return }
-        let time = TimelineClock.now()
-        let intoPlayback = Self.milliseconds(since: current.firstAudio(), to: time)
-        reply?.results += 1
-        if current.results == 0 {
-            reply?.firstResultIntoPlaybackMs = intoPlayback
-        }
+    private func write(_ cue: CueStart) {
+        let level = Self.level(of: cue.cue)
         var fields: [String: CustomStringConvertible] = [
-            "words": words,
-            "outcome": outcome,
-            "intoReplyMs": TimelineClock.milliseconds(from: current.started, to: time),
-            "resultsThisReply": current.results + 1,
+            "cue": "\(cue.cue)",
+            "peakDb": level.peakDb,
+            "rmsDb": level.rmsDb,
+            "cueMs": Int((cue.cue.duration / .milliseconds(1)).rounded()),
+            "leadInMs": Int((cue.leadIn * 1000).rounded()),
+            "queuedBehind": cue.queuedBehind,
+            "replyPlaying": cue.replyPlaying,
+            "closing": cue.id == nil,
+            "cueVolume": Self.volume(cue.pipeline.cuePlayer.volume),
+            "mixerVolume": Self.volume(cue.pipeline.engine.mainMixerNode.outputVolume),
         ]
-        fields["reply"] = current.number
-        fields["intoPlaybackMs"] = intoPlayback
-        // The loudest levels so far, before the first sound and since.
-        fields.merge(Self.levelFields(current.levels.pre, prefix: "pre")) { $1 }
-        fields.merge(Self.levelFields(current.levels.playback, prefix: "mic")) { $1 }
-        logger.notice("result during reply", context(pipeline, at: time, fields))
+        fields["sinceReplyEndMs"] = Self.milliseconds(since: cue.replyEndTime, to: cue.time)
+        logger.notice("cue played", context(cue.pipeline, at: cue.time, fields))
     }
 
-    /// The reply stopped: it played to its end, or `reason` (as "reply ended" in `voice.loop`
-    /// gives it) cut it off. `voiceStarts` counts the voice detector's starts while it played.
-    func replyEnded(_ pipeline: Pipeline?, reason: String, micGate: [String: CustomStringConvertible], voiceStarts: Int) {
-        if let pipeline {
-            absorbLevels(from: pipeline)
+    private func write(_ start: ReplyStart) {
+        let pipeline = start.pipeline
+        var fields = start.micGate.fields
+        fields["reply"] = start.number
+        fields["replySinceEngineStart"] = start.repliesSinceEngineStart
+        fields["sinceEngineStartMs"] = Self.milliseconds(since: start.engineStartTime, to: start.started)
+        fields["sinceRouteChangeMs"] = Self.milliseconds(since: start.routeChangeTime, to: start.started)
+        fields["sinceReplyEndMs"] = Self.milliseconds(since: start.replyEndTime, to: start.started)
+        fields["lastCue"] = start.lastCue.map { "\($0.cue)" } ?? "none"
+        if let lastCue = start.lastCue {
+            fields["sinceCueScheduledMs"] = TimelineClock.milliseconds(from: lastCue.scheduled, to: start.started)
+            // Nil while it still sounds, or hasn't reported stopping yet.
+            fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: start.started)
+            fields["lastCueCutOff"] = lastCue.cutOff
         }
-        guard let ended = reply else { return }
-        reply = nil
-        let time = TimelineClock.now()
-        replyEndTime = time
+        fields["cuesUnfinished"] = start.cuesUnfinished.isEmpty ? "none" : start.cuesUnfinished.map { "\($0)" }.joined(separator: ",")
+        // The volumes and the pitch shift as the line is written, a moment after the start.
+        fields["speechVolume"] = Self.volume(pipeline.speech.player.volume)
+        fields["cueVolume"] = Self.volume(pipeline.cuePlayer.volume)
+        fields["mixerVolume"] = Self.volume(pipeline.engine.mainMixerNode.outputVolume)
+        fields["pitchShifted"] = !pipeline.speech.pitchShift.bypass
+        fields["previewPlaying"] = start.previewPlaying
+        fields["echoCancellation"] = pipeline.hasVoiceProcessing
+        // Where the reply starts on the analyzer's timeline, to set against a result's audio
+        // range in `voice.timeline`. The fed audio lags the microphone by a tap buffer or so.
+        fields["audioMs"] = Self.milliseconds(start.audio)
+        #if os(iOS)
+        fields.merge(Self.routeContext()) { $1 }
+        #endif
+        logger.notice("reply started", context(pipeline, at: start.started, fields))
+    }
+
+    private func write(_ result: HeardResult) {
+        var fields: [String: CustomStringConvertible] = [
+            "words": result.words,
+            "outcome": result.outcome,
+            "intoReplyMs": TimelineClock.milliseconds(from: result.replyStarted, to: result.time),
+            "resultsThisReply": result.resultsThisReply,
+        ]
+        fields["reply"] = result.replyNumber
+        let replied = reply?.serial == result.replySerial ? reply : endedReplies.first { $0.serial == result.replySerial }
+        if let replied {
+            if let firstAudio = replied.firstAudio(), firstAudio <= result.time {
+                fields["intoPlaybackMs"] = TimelineClock.milliseconds(from: firstAudio, to: result.time)
+            }
+            // The loudest levels so far, as the line is written: before the first sound, and
+            // since.
+            fields.merge(Self.levelFields(replied.levels.pre, prefix: "pre")) { $1 }
+            fields.merge(Self.levelFields(replied.levels.playback, prefix: "mic")) { $1 }
+        }
+        logger.notice("result during reply", context(result.pipeline, at: result.time, fields))
+    }
+
+    private func writePlayback(_ ended: Reply) {
+        guard let end = ended.end else { return }
+        let clock = ended.pipeline.timeline.clock
         let firstAudio = ended.firstAudio()
-        var fields = micGate
-        fields["reason"] = reason
+        var fields = end.micGate.fields
+        fields["reason"] = end.reason
         fields["reply"] = ended.number
-        fields["voiceStarts"] = voiceStarts
+        fields["voiceStarts"] = end.voiceStarts
+        fields["voiceActive"] = end.voiceActive
         fields["results"] = ended.results
-        fields["firstResultIntoPlaybackMs"] = ended.firstResultIntoPlaybackMs
-        fields["replyMs"] = TimelineClock.milliseconds(from: ended.started, to: time)
-        if let pipeline {
-            fields["voiceActive"] = pipeline.timeline.isVoiceActive
-            fields["setupTMs"] = pipeline.timeline.clock.milliseconds(at: ended.started)
-            fields["firstAudioTMs"] = firstAudio.map { pipeline.timeline.clock.milliseconds(at: $0) }
+        if let firstResult = ended.firstResultTime, let firstAudio, firstAudio <= firstResult {
+            fields["firstResultIntoPlaybackMs"] = TimelineClock.milliseconds(from: firstAudio, to: firstResult)
         }
+        fields["replyMs"] = TimelineClock.milliseconds(from: ended.started, to: end.time)
+        fields["setupTMs"] = clock.milliseconds(at: ended.started)
+        fields["firstAudioTMs"] = firstAudio.map { clock.milliseconds(at: $0) }
         fields["synthMs"] = firstAudio.map { TimelineClock.milliseconds(from: ended.started, to: $0) }
-        fields["playedMs"] = Self.milliseconds(since: firstAudio, to: time)
-        // Before its first sound, and from then on, the last stretch no `mic level` line
-        // covers included.
+        fields["playedMs"] = firstAudio.map { TimelineClock.milliseconds(from: $0, to: end.time) }
+        // Before its first sound, and from then on, the stretch no `mic level` line covered
+        // included.
         fields.merge(Self.levelFields(ended.levels.pre, prefix: "pre")) { $1 }
         fields.merge(Self.levelFields(ended.levels.playback, prefix: "mic")) { $1 }
         if ended.droppedBuffers > 0 {
             fields["droppedBuffers"] = ended.droppedBuffers
         }
-        logger.notice("reply playback", context(pipeline, at: time, fields))
-    }
-
-    // MARK: - Outside voice processing
-
-    /// A preview was playing on the preview player's own engine as voice mode starts; it is
-    /// stopped before the microphone is opened.
-    func previewStoppedForVoiceMode() {
-        logger.notice("preview stopped as voice mode starts", [:])
-    }
-
-    /// Audio is about to play outside voice processing while voice mode runs, so echo
-    /// cancellation can't take it out of what the microphone hears. `source` says what plays it.
-    func audioOutsideVoiceProcessing(source: String, voiceMode: String) {
-        logger.notice("audio outside voice processing", ["source": source, "voiceMode": voiceMode])
+        logger.notice("reply playback", context(ended.pipeline, at: end.time, fields))
     }
 
     // MARK: - Helpers
@@ -375,6 +574,13 @@ final class EchoLog {
             context["tMs"] = pipeline.timeline.clock.milliseconds(at: hostTime)
         }
         return context
+    }
+
+    /// The loudest levels of `levels`, with `prefix`: `<prefix>RmsDb` and `<prefix>SampleDb`.
+    /// Nothing without a buffer.
+    private static func levelFields(_ levels: LevelSummary, prefix: String) -> [String: CustomStringConvertible] {
+        guard levels.buffers > 0 else { return [:] }
+        return [prefix + "RmsDb": levels.rmsDb, prefix + "SampleDb": levels.sampleDb]
     }
 
     /// Milliseconds from `start` to `end`; nil without a start.
@@ -397,7 +603,7 @@ final class EchoLog {
     private static var cueLevels: [SoundCue: (peakDb: Int, rmsDb: Int)] = [:]
 
     /// The loudest sample and the RMS level of `cue` as it is rendered, in dBFS. Rendered once
-    /// per cue, after the first play has been scheduled, so measuring never delays a cue.
+    /// per cue, when its line is first written, off the time-critical paths.
     private static func level(of cue: SoundCue) -> (peakDb: Int, rmsDb: Int) {
         if let level = cueLevels[cue] {
             return level
@@ -607,10 +813,13 @@ struct LevelSummary: Equatable {
 
 /// One reply's microphone levels, by when each buffer was captured: from the reply's setup to
 /// its first sound (`pre`), and from its first sound on (`playback`, and `window`, since the
-/// last `mic level` line). A buffer captured before the setup belongs to no reply.
+/// last `mic level` line), up to its end once it has one. A buffer captured before the setup,
+/// or at or after the end, isn't the reply's.
 struct ReplyLevels: Equatable {
     /// When the reply was set up, in host time.
     let started: UInt64
+    /// When it ended, in host time; nil while it is being said.
+    private(set) var end: UInt64?
     private(set) var pre = LevelSummary()
     private(set) var playback = LevelSummary()
     private(set) var window = LevelSummary()
@@ -619,10 +828,16 @@ struct ReplyLevels: Equatable {
         self.started = started
     }
 
+    /// The reply ended at `time` (host time).
+    mutating func close(at time: UInt64) {
+        end = time
+    }
+
     /// Counts `reading` before or after the reply's first sound, which was scheduled at
     /// `firstAudio` (host time), or hadn't been when the reading was taken if nil.
     mutating func add(_ reading: MicrophoneLevels.Reading, firstAudio: UInt64?) {
         guard reading.captureTime >= started else { return }
+        if let end, reading.captureTime >= end { return }
         if let firstAudio, reading.captureTime >= firstAudio {
             playback.add(reading)
             window.add(reading)
