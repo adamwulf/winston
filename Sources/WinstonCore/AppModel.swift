@@ -1099,10 +1099,13 @@ public final class AppModel {
 
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
     /// asks nothing until its `generate()` is called. Each candidate is checked against the
-    /// phoneme symbols Kokoro has as the suggester answers.
+    /// phoneme symbols Kokoro has as the suggester answers, and again each time the Kokoro
+    /// model's state changes, which changes them.
     public func pronunciationSuggestions(for word: String) -> PronunciationSuggestions {
         PronunciationSuggestions(word: word, suggester: pronunciationSuggester) { [voiceLoop] in
             await voiceLoop.kokoroPhonemeSymbols()
+        } readSymbolsSource: { [voiceLoop] in
+            _ = voiceLoop.kokoroModelState
         }
     }
 

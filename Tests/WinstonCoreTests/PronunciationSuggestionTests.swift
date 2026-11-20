@@ -97,6 +97,31 @@ struct PronunciationSuggestionTests {
         #expect(candidates.map(\.isUsable) == [true, false])
     }
 
+    @Test func theSuggestionsShownAreCheckedAgainWhenTheKokoroModelsSymbolsChange() async throws {
+        let harness = Harness()
+        let model = harness.model
+        // The loaded model's vocabulary has y, which misaki's US symbols lack.
+        harness.bed.kokoro.symbols = Set("lˈybɛk")
+        harness.bed.kokoro.loadBehavior = .waits
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { harness.bed.kokoro.loads == 1 })
+        harness.suggester.answers = [.success([suggestion("lˈybɛk")])]
+        let suggestions = model.pronunciationSuggestions(for: "Lübeck")
+        suggestions.generate()
+        #expect(await eventually { suggestions.phase != .loading })
+        // While the model loads, the fallback symbols are the ones there are.
+        #expect(try #require(candidates(of: suggestions)).map(\.isUsable) == [false])
+
+        harness.bed.kokoro.finishLoading(succeeding: true)
+
+        #expect(await eventually { candidates(of: suggestions)?.map(\.isUsable) == [true] })
+        // A system voice frees the model, and the fallback symbols are back.
+        model.voiceIdentifier = nil
+        #expect(await eventually { candidates(of: suggestions)?.map(\.isUsable) == [false] })
+        // Checked, not asked again.
+        #expect(harness.suggester.words == ["Lübeck"])
+    }
+
     @Test func aFailureSaysWhyAndRegenerateAsksAgain() async throws {
         let harness = Harness()
         harness.suggester.answers = [.failure(.declined), .success([suggestion("wˈɪnstən")])]
