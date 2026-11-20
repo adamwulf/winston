@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "VoiceLoop", targets: ["VoiceLoop"]),
         .library(name: "WinstonLogging", targets: ["WinstonLogging"]),
         .library(name: "WinstonCore", targets: ["WinstonCore"]),
+        .library(name: "ShareOutbox", targets: ["ShareOutbox"]),
     ],
     dependencies: [
         // TDLibKit release tags are prerelease-style versions, so they must be pinned exactly.
@@ -74,9 +75,25 @@ let package = Package(
             dependencies: [
                 "TelegramLink",
                 "VoiceLoop",
+                "ShareOutbox",
                 .product(name: "Logging", package: "swift-log"),
                 "LogSupport",
             ]
+        ),
+        // The hand-off between the iOS app and its share extension, through their App Group
+        // container: the agent list the extension shows, and the outbox of files shared to an
+        // agent that the app sends. Foundation and swift-log only, since the extension links it
+        // and can't run TDLib.
+        .target(
+            name: "ShareOutbox",
+            dependencies: [
+                .product(name: "Logging", package: "swift-log"),
+                "LogSupport",
+            ]
+        ),
+        .testTarget(
+            name: "ShareOutboxTests",
+            dependencies: ["ShareOutbox"]
         ),
         .testTarget(
             name: "WinstonCoreTests",
@@ -84,6 +101,7 @@ let package = Package(
                 "WinstonCore",
                 "TelegramLink",
                 "VoiceLoop",
+                "ShareOutbox",
                 "TelegramLinkTestSupport",
                 "VoiceLoopTestSupport",
             ]

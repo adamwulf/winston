@@ -15,6 +15,13 @@
     {
       "target" : {
         "containerPath" : "container:..",
+        "identifier" : "ShareOutboxTests",
+        "name" : "ShareOutboxTests"
+      }
+    },
+    {
+      "target" : {
+        "containerPath" : "container:..",
         "identifier" : "TelegramLinkTests",
         "name" : "TelegramLinkTests"
       }
