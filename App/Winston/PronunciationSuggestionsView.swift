@@ -178,13 +178,13 @@ private struct PronunciationSuggestionsView: View {
         }
     }
 
+    /// On while a request is under way too: `generate()` replaces it, such as one slow to answer.
     private var regenerateButton: some View {
         Button {
             suggestions.generate()
         } label: {
             Label("Regenerate", systemImage: "arrow.clockwise")
         }
-        .disabled(suggestions.phase == .loading)
         .help("Ask for other suggestions")
     }
 }
