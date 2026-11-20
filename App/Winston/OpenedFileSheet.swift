@@ -49,22 +49,30 @@ struct OpenedFileSheet: View {
 
     @ViewBuilder
     private var filesSection: some View {
-        if !model.openedFiles.isEmpty || model.openedFilesBeingCopied > 0 {
-            Section(model.openedFiles.count + model.openedFilesBeingCopied == 1 ? "File" : "Files") {
+        if !model.openedFiles.isEmpty {
+            Section(model.openedFiles.count == 1 ? "File" : "Files") {
                 ForEach(model.openedFiles) { file in
-                    Label(file.name, systemImage: file.isPhoto ? "photo" : "doc")
-                        .accessibilityValue(file.isPhoto ? "Sent as a photo" : "Sent as a file")
-                }
-                if model.openedFilesBeingCopied > 0 {
-                    Label {
-                        Text("Preparing…")
-                            .foregroundStyle(.secondary)
-                    } icon: {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
+                    fileRow(file)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func fileRow(_ file: OpenedFile) -> some View {
+        if file.isCopied {
+            Label(file.name, systemImage: file.isPhoto ? "photo" : "doc")
+                .accessibilityValue(file.isPhoto ? "Sent as a photo" : "Sent as a file")
+        } else {
+            // Being copied, as an iCloud Drive file downloads.
+            Label {
+                Text(file.name)
+                    .foregroundStyle(.secondary)
+            } icon: {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            .accessibilityValue("Preparing")
         }
     }
 
