@@ -621,7 +621,18 @@ public final class VoiceLoop {
         preview(spoken: text)
     }
 
-    /// Says `text`, ready to say as it is, for `preview(_:)` and `preview(asWritten:)`.
+    /// Says `word` with `phonemes`, as a phonetic `Pronunciation` would have it, saved or not, as
+    /// `preview(asWritten:)` otherwise does: for hearing a phonetic pronunciation in settings. A
+    /// Kokoro voice whose model is ready says the phonemes; any other voice says the word as
+    /// written. Nothing when either is empty.
+    public func preview(word: String, phonemes: String) {
+        guard !word.isEmpty, !phonemes.isEmpty else { return }
+        phoneticPlaceholders.setPreview(word: word, phonemes: phonemes)
+        preview(spoken: PhoneticPlaceholders.preview)
+    }
+
+    /// Says `text`, ready to say as it is, for `preview(_:)`, `preview(asWritten:)` and
+    /// `preview(word:phonemes:)`.
     private func preview(spoken text: String) {
         stopPreviewPlayer()
         // Starting or rebuilding counts as running: speech queues for the engine then, and
@@ -1534,9 +1545,12 @@ public final class VoiceLoop {
     /// Words starting this soon after a reply ends are dropped when there is no echo cancellation.
     private static let halfDuplexEchoMargin = CMTime(value: 3, timescale: 10)
 
-    /// `text` in the chosen voice and speed.
+    /// `text` in the chosen voice and speed, for the system voice: every system voice utterance is
+    /// made here. Phonetic pronunciations are for Kokoro, so each placeholder is said as its word.
     private func makeUtterance(_ text: String) -> AVSpeechUtterance {
-        let utterance = AVSpeechUtterance(string: text)
+        let written = phoneticPlaceholders.written(text)
+        environment.systemVoiceWillSay(written)
+        let utterance = AVSpeechUtterance(string: written)
         utterance.voice = voice()
         utterance.rate = speechRate
         return utterance
