@@ -1294,6 +1294,7 @@ public final class VoiceLoop {
         // The stop cue replaces any cue still playing.
         pipeline.cuePlayer.stop()
         pipeline.play(.listeningStopped) {}
+        echo.cueScheduled(.listeningStopped, id: nil, leadIn: 0, queuedBehind: 0, replyPlaying: false, on: pipeline)
         closingPipeline = pipeline
         // A timer rather than the cue's completion, which can come early or not at all if the
         // engine stops by itself. It holds the loop until then, so the engine is always stopped.

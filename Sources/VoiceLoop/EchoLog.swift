@@ -140,10 +140,14 @@ final class EchoLog {
     // MARK: - Cues
 
     /// `cue` was scheduled as cue `id`, after `leadIn` seconds of silence, behind `queuedBehind`
-    /// cues that hadn't finished. `replyPlaying` says whether a reply is being said.
-    func cueScheduled(_ cue: SoundCue, id: Int, leadIn: Double, queuedBehind: Int, replyPlaying: Bool, on pipeline: Pipeline) {
+    /// cues that hadn't finished. `replyPlaying` says whether a reply is being said. A nil `id`
+    /// is the stop cue on a pipeline that has stopped listening (`closing=true`): it is logged,
+    /// but no reply follows it, so it isn't kept as the last cue.
+    func cueScheduled(_ cue: SoundCue, id: Int?, leadIn: Double, queuedBehind: Int, replyPlaying: Bool, on pipeline: Pipeline) {
         let time = TimelineClock.now()
-        lastCue = LastCue(id: id, cue: cue, scheduled: time)
+        if let id {
+            lastCue = LastCue(id: id, cue: cue, scheduled: time)
+        }
         let level = Self.level(of: cue)
         var fields: [String: CustomStringConvertible] = [
             "cue": "\(cue)",
@@ -153,6 +157,7 @@ final class EchoLog {
             "leadInMs": Int((leadIn * 1000).rounded()),
             "queuedBehind": queuedBehind,
             "replyPlaying": replyPlaying,
+            "closing": id == nil,
             "cueVolume": Self.volume(pipeline.cuePlayer.volume),
             "mixerVolume": Self.volume(pipeline.engine.mainMixerNode.outputVolume),
         ]
