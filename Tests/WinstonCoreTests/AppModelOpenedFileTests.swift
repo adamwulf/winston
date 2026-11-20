@@ -563,6 +563,67 @@ struct OpenedFileTests {
         #expect(exists(inbox))
     }
 
+    @Test func quittingKeepsTheFilesOfUploadsUnderWayForTDLibToSendNextLaunch() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let inbox = folder.appending(path: "Inbox", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: inbox, withIntermediateDirectories: false)
+        let name = uniqueName("queued", "zip")
+        let systemCopy = try writeFile(name, Data("zip bytes".utf8), in: inbox)
+        let harness = twoBots(inboxes: [inbox])
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: systemCopy)
+        #expect(await copied(1, in: model))
+        let working = try workingCopies(named: name)
+        defer { working.forEach { try? FileManager.default.removeItem(at: $0) } }
+        await model.sendOpenedFiles(to: ChatID(1))
+        let upload = URL(filePath: try #require(sentDocuments(of: harness).first).path)
+        defer { removeDocumentCopies([upload.path(percentEncoded: false)]) }
+
+        // TDLib closes, which the link reports as logging out and then closed.
+        await model.closeForQuit()
+
+        #expect(await eventually { model.authState == .closed })
+        try await settle()
+        #expect(exists(upload))
+        #expect(working.count == 1)
+        #expect(working.allSatisfy(exists))
+        #expect(exists(systemCopy))
+    }
+
+    @Test func aLogoutDuringAHandoffEndsTheBatchAndRemovesWhatTDLibWasGiven() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let first = try writeFile("a.txt", Data("a".utf8), in: folder)
+        let second = try writeFile("b.txt", Data("b".utf8), in: folder)
+        let harness = twoBots()
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        model.openFile(at: first)
+        model.openFile(at: second)
+        #expect(await copied(2, in: model))
+        harness.fake.hold(.sendMessageReply)
+
+        let send = Task { await model.sendOpenedFiles(to: ChatID(1)) }
+
+        #expect(await eventually { harness.fake.isWaiting(on: .sendMessageReply) })
+        await model.logOut()
+        #expect(await eventually { model.authState == .needsPhoneNumber })
+        harness.fake.release(.sendMessageReply)
+        await send.value
+
+        // The first file's message went with the session; the second was never sent.
+        let sent = sentDocuments(of: harness)
+        #expect(sent.map { URL(filePath: $0.path).lastPathComponent } == ["a.txt"])
+        #expect(!exists(URL(filePath: try #require(sent.first).path)))
+        #expect(model.openedFilesSendingTo == nil)
+        // Both wait for a pick once logged in again.
+        #expect(model.openedFiles.map(\.name) == ["a.txt", "b.txt"])
+        #expect(model.openedFiles.map(\.isCopied) == [true, true])
+        model.cancelOpenedFiles()
+    }
+
     @Test func cancelRemovesWinstonsCopyAndSendsNothing() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }

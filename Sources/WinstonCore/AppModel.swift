@@ -98,6 +98,11 @@ public final class AppModel {
     /// TDLib's outcomes for pending messages that came while the opened files were being handed
     /// off, before the upload they settle was in `openedFileUploads`.
     @ObservationIgnored private var earlyUploadOutcomes: [PendingMessage: UploadOutcome] = [:]
+    /// Set by `logOut()` until TDLib starts logging out, to tell that from it closing as the app
+    /// quits, which comes as the same `.loggingOut`.
+    @ObservationIgnored private var isLogOutRequested = false
+    /// The session a logout last ended, for a handoff of an opened file that outlives it.
+    @ObservationIgnored private var loggedOutSessionGeneration: Int?
 
     public private(set) var isVoiceMode = false
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
@@ -559,9 +564,12 @@ public final class AppModel {
     }
 
     public func logOut() async {
+        // TDLib's closing as the app quits comes as `.loggingOut` too, but keeps what it was sending.
+        isLogOutRequested = true
         do {
             try await link?.logOut()
         } catch {
+            isLogOutRequested = false
             Self.log.error("log out failed", error.logContext())
             errorMessage = userMessage(for: error)
         }
@@ -575,10 +583,16 @@ public final class AppModel {
             sendOnlineStatus()
             Task { await loadChats() }
         case .loggingOut:
-            // Logged out, TDLib drops its pending messages, so these uploads end here.
-            discardOpenedFileUploads()
+            if isLogOutRequested {
+                isLogOutRequested = false
+                // Logged out, TDLib drops its pending messages, so these uploads end here. Not as it
+                // closes for the app to quit: it sends them on the next launch, from their files.
+                loggedOutSessionGeneration = sessionGeneration
+                discardOpenedFileUploads()
+            }
             clearSession()
         case .closed:
+            isLogOutRequested = false
             clearSession()
         default:
             break
@@ -608,6 +622,7 @@ public final class AppModel {
         // closing as the app quits, TDLib keeps its pending messages to send on the next launch,
         // so their files stay until that launch's sweep finds them a day old.
         openedFileUploads = [:]
+        earlyUploadOutcomes = [:]
     }
 
     // MARK: - Chats
@@ -1083,14 +1098,31 @@ public final class AppModel {
             earlyUploadOutcomes = [:]
         }
         openedFileError = nil
+        // The batch belongs to this session: a logout, or TDLib closing, ends it.
+        let generation = sessionGeneration
         // The files there now: one opened meanwhile waits for a pick of its own.
         for file in openedFiles {
             guard let copy = file.copy else { continue }
             let handedOff: (pending: MessageID, uploadFile: URL)
             do {
-                handedOff = try await handOff(file, copy: copy, to: chat, over: link)
+                handedOff = try await handOff(file, copy: copy, to: chat, over: link, in: generation)
             } catch {
+                guard generation == sessionGeneration else {
+                    Self.log.notice("opened files batch ended with its session", ["chatID": chat])
+                    return
+                }
                 openedFileError = Self.sendFailure(of: file, to: agent.title, reason: userMessage(for: error))
+                return
+            }
+            guard generation == sessionGeneration else {
+                // TDLib took it for the session that ended meanwhile. The file stays, for a pick once
+                // logged in again.
+                Self.log.notice("opened files batch ended with its session", ["chatID": chat])
+                if loggedOutSessionGeneration == generation {
+                    // Logged out: TDLib dropped the message. Closing as the app quits, it keeps it to
+                    // send on the next launch, from this file.
+                    Self.removeUploadFile(handedOff.uploadFile, of: file)
+                }
                 return
             }
             openedFiles.removeAll { $0.id == file.id }
@@ -1113,12 +1145,14 @@ public final class AppModel {
     /// made from it, as `sendPhoto` makes one, and a document as a copy of its own (a clone, on
     /// APFS), so Winston's can go once it is sent while the sent message keeps its file. Returns
     /// the pending message's ID and the file TDLib uploads. Throws what failed, logged, leaving
-    /// only Winston's copy, for another try.
+    /// only Winston's copy, for another try; and throws without sending if the session
+    /// `generation` ended while the file was being made.
     private func handOff(
         _ file: OpenedFile,
         copy: URL,
         to chat: ChatID,
-        over link: TelegramLink
+        over link: TelegramLink,
+        in generation: Int
     ) async throws -> (pending: MessageID, uploadFile: URL) {
         do {
             let uploadFile = if file.isPhoto {
@@ -1127,6 +1161,7 @@ public final class AppModel {
                 try await DocumentFiles.copyForSending(from: copy)
             }
             do {
+                guard generation == sessionGeneration else { throw CancellationError() }
                 let pending = if file.isPhoto {
                     try await link.sendPhoto(fileURL: uploadFile, caption: nil, to: chat)
                 } else {
@@ -1134,17 +1169,20 @@ public final class AppModel {
                 }
                 return (pending, uploadFile)
             } catch {
-                // Turned down, so nothing will upload it, and another try makes another.
+                // Turned down, or not sent, so nothing will upload it, and another try makes another.
                 Self.removeUploadFile(uploadFile, of: file)
                 throw error
             }
         } catch {
-            // Codes only: a file error's description names the file, and a TDLib upload error's
-            // message can hold the local path.
-            Self.log.error("sending opened file failed", error.tdlibLogCodes([
-                "chatID": chat.description,
-                "as": file.logKind,
-            ]))
+            // The caller logs the session ending.
+            if generation == sessionGeneration {
+                // Codes only: a file error's description names the file, and a TDLib upload
+                // error's message can hold the local path.
+                Self.log.error("sending opened file failed", error.tdlibLogCodes([
+                    "chatID": chat.description,
+                    "as": file.logKind,
+                ]))
+            }
             throw error
         }
     }
