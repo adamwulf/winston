@@ -1256,7 +1256,7 @@ public final class VoiceLoop {
         pauseDetector.reset()
         // A cue cut off here isn't played again; the next start plays its own.
         unfinishedCues = []
-        // For the echo log, which writes what it still holds for it once the teardown is done.
+        // For the echo log, which writes what it still holds for it after the teardown.
         let endedPipeline = pipeline
         if let pipeline {
             self.pipeline = nil
@@ -1294,7 +1294,9 @@ public final class VoiceLoop {
         }
         state = kind == .stop ? .off : .listening(partial: "")
         if let endedPipeline {
-            echo.pipelineEnded(endedPipeline)
+            // Once the caller is done too, so writing never delays what follows a teardown,
+            // such as the stop cue after the devices changed. The log keeps what it needs.
+            Task { [echo] in echo.pipelineEnded(endedPipeline) }
         }
     }
 
