@@ -440,7 +440,7 @@ private struct PronunciationsSection: View {
         } header: {
             Text("Pronunciations")
         } footer: {
-            Text("Say As: each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason. IPA: Kokoro voices say the word with the phonemes you write, in Kokoro's symbols, such as kˈOkəɹO for Kokoro; symbols Kokoro doesn't know are dropped. Other voices say the word as written.")
+            Text("Say As: each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason. IPA: Kokoro voices say the word with the phonemes you write, in Kokoro's symbols, such as kˈOkəɹO for Kokoro; symbols Kokoro doesn't know are dropped. Other voices say the word as written. With Apple Intelligence, the sparkles button suggests phonemes to try.")
         }
     }
 }
@@ -450,8 +450,9 @@ private struct PronunciationsSection: View {
 /// word matches only with the same case. Each side has a play button in the chosen voice: the
 /// word's says it as written, so it can be compared with the other side's, which says the text as
 /// written, or the word with the phonemes (with a system voice, the word as written, as a reply
-/// would). On the Mac a row is one line, with a remove button; on iOS it is two, the word over the
-/// replacement, and is removed by swiping it.
+/// would). An IPA row also has a Suggest button, which offers phonemes for the word (see
+/// `PronunciationSuggestButton`). On the Mac a row is one line, with a remove button; on iOS it is
+/// two, the word over the replacement, and is removed by swiping it.
 private struct PronunciationRow: View {
     @Binding var pronunciation: Pronunciation
     /// Says the text it's given: the word, or a Say As replacement.
@@ -521,6 +522,7 @@ private struct PronunciationRow: View {
             ) {
                 playPhonemes(pronunciation.word, pronunciation.replacement)
             }
+            PronunciationSuggestButton(word: pronunciation.word, pronunciationID: pronunciation.id)
         }
     }
 
@@ -529,9 +531,9 @@ private struct PronunciationRow: View {
     }
 }
 
-/// A pronunciation row's button for playing one of its sides, disabled while there's nothing to
-/// play.
-private struct PlayButton: View {
+/// A pronunciation row's button for playing one of its sides, or a suggestion's, disabled while
+/// there's nothing to play.
+struct PlayButton: View {
     let help: LocalizedStringKey
     let accessibilityLabel: LocalizedStringKey
     let isEnabled: Bool
