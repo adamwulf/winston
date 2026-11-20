@@ -54,6 +54,8 @@ package final class FakeKokoro: KokoroEngine {
         var downloadProgress: (@Sendable (Double) -> Void)?
         var stageChanged: (@Sendable (KokoroLoadStage) -> Void)?
         var requests: [Request] = []
+        /// How many of `requests` have returned or thrown.
+        var finishedRequests = 0
         /// The `requests` index that fails, if any.
         var failingRequest: Int?
         var holdsSynthesis = false
@@ -105,6 +107,10 @@ package final class FakeKokoro: KokoroEngine {
 
     /// Every sentence rendered or rendering, oldest first.
     package var requests: [Request] { state.withLock { $0.requests } }
+
+    /// How many of `requests` have come back to the loop, rendered or failed: for a test that
+    /// must know a held sentence has returned before it checks what the loop did with it.
+    package var finishedRequests: Int { state.withLock { $0.finishedRequests } }
 
     /// When set, the sentence with this index in `requests` fails to render.
     package var failingRequest: Int? {
@@ -282,6 +288,7 @@ package final class FakeKokoro: KokoroEngine {
             state.requests.append(Request(text: text, voice: voice, speed: speed, pronunciations: pronunciations))
             return (state.requests.count - 1, state.holdsSynthesis, state.loadedModel != nil)
         }
+        defer { state.withLock { $0.finishedRequests += 1 } }
         guard isLoaded else { throw FakeKokoroError.notLoaded }
         if holds {
             await withCheckedContinuation { continuation in

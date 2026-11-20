@@ -1499,11 +1499,11 @@ struct KokoroCancellingTests {
         bed.kokoro.holdsSynthesis = false
         bed.kokoro.releaseSyntheses()
 
+        // Both held sentences, the cut-off reply's and "Next.", come back to the loop.
+        #expect(await eventually { bed.kokoro.finishedRequests == 2 })
         #expect(await eventually { loop.state == .listening(partial: "") })
         // "Next." reaches the speaker a render pass after it counts as played, and the late
-        // sentence, had it gone anywhere, would play in the passes after: many passes, counted
-        // rather than timed, since a busy machine can take far longer than usual to render them.
-        try await settle()
+        // sentence, had the loop taken it, would play in the passes after.
         #expect(await renderPassesGoBy(20, on: bed))
         // Only "Next." played: the cut-off reply's late sentence went nowhere.
         #expect(bed.kokoro.requests.map(\.text) == ["The first sentence here.", "Next."])
@@ -1519,7 +1519,10 @@ struct KokoroCancellingTests {
         bed.recognizer.hear("Wait.", over: later, isFinal: true)
         #expect(await eventually { loop.state == .listening(partial: "Wait.") })
         bed.kokoro.releaseSyntheses()
-        try await settle()
+        // The held sentence comes back to the loop, and would play in the passes after, had the
+        // loop taken it.
+        #expect(await eventually { bed.kokoro.finishedRequests == 1 })
+        #expect(await renderPassesGoBy(20, on: bed))
 
         #expect(bed.kokoro.requests.count == 1)
         #expect(bed.audio.playedFrames == 0)
@@ -1532,6 +1535,9 @@ struct KokoroCancellingTests {
 
         loop.stop()
         bed.kokoro.releaseSyntheses()
+        // The held sentence comes back to the loop. With the engine gone there is nothing to
+        // render, so the settle only lets the loop's task run on with it.
+        #expect(await eventually { bed.kokoro.finishedRequests == 1 })
         try await settle()
 
         #expect(loop.state == .off)
