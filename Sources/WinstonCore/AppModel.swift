@@ -209,6 +209,10 @@ public final class AppModel {
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
         observeAppActivation()
+        // AirPods connecting or taken out end voice mode in the loop; the app leaves it too.
+        voiceLoop.onStoppedForDeviceChange = { [weak self] in
+            self?.leaveVoiceMode()
+        }
     }
 
     isolated deinit {
@@ -998,11 +1002,17 @@ public final class AppModel {
                 errorMessage = userMessage(for: error)
             }
         } else {
-            voiceModeOffCount += 1
-            voiceLoop.stop()
-            voiceLoop.isPushToTalk = false
-            isVoiceMode = false
+            leaveVoiceMode()
         }
+    }
+
+    /// Turns voice mode off, push-to-talk included, for `setVoiceMode(false)` and for when the
+    /// loop ended it because the audio devices changed.
+    private func leaveVoiceMode() {
+        voiceModeOffCount += 1
+        voiceLoop.stop()
+        voiceLoop.isPushToTalk = false
+        isVoiceMode = false
     }
 
     /// Enters or leaves push-to-talk, for the push-to-talk sheet, which opens from text mode.
