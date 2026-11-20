@@ -59,10 +59,18 @@ import Testing
     }
 }
 
-/// Whether `OnDevicePronunciationSuggesterRealModelTests` was asked for, with
-/// `WINSTON_SUGGESTER_REAL_MODEL=1`. It is off by default: it spends about 25 s on the model,
-/// beside suites that time things, and its answers differ from run to run.
-private let realSuggesterRequested = ProcessInfo.processInfo.environment["WINSTON_SUGGESTER_REAL_MODEL"] == "1"
+/// Whether `OnDevicePronunciationSuggesterRealModelTests` was asked for: with
+/// `WINSTON_SUGGESTER_REAL_MODEL=1`, or with a file named `suggester-real-model` in the package's
+/// `.build` folder, which git ignores (for where setting a variable is awkward, as
+/// `KokoroLoadTimingTests` takes `timing-models.txt`). It is off by default: it spends about 25 s
+/// on the model, beside suites that time things, and its answers differ from run to run.
+private let realSuggesterRequested: Bool = {
+    if ProcessInfo.processInfo.environment["WINSTON_SUGGESTER_REAL_MODEL"] == "1" {
+        return true
+    }
+    let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    return FileManager.default.fileExists(atPath: package.appending(path: ".build/suggester-real-model").path)
+}()
 
 /// The real on-device model, run only when asked for (`realSuggesterRequested`) and where it can
 /// run (Apple Intelligence on and its model downloaded): it prints what it suggests for a few
@@ -78,7 +86,7 @@ private let realSuggesterRequested = ProcessInfo.processInfo.environment["WINSTO
 /// fails every word.
 @Suite(
     .serialized,
-    .enabled(if: realSuggesterRequested, "WINSTON_SUGGESTER_REAL_MODEL=1 isn't set"),
+    .enabled(if: realSuggesterRequested, "neither WINSTON_SUGGESTER_REAL_MODEL=1 nor .build/suggester-real-model asks for it"),
     .enabled(if: OnDevicePronunciationSuggester().isAvailable, "the on-device language model isn't available"),
     .timeLimit(.minutes(5))
 )

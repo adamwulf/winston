@@ -209,10 +209,19 @@ downloads it.
 and prints what it suggests for a few words, for a person to judge. It is off
 by default: it spends about 25 s on the model beside suites that time things,
 and its answers differ from run to run. Ask for it where the model is
-available:
+available, with an environment variable:
 
 ```sh
 WINSTON_SUGGESTER_REAL_MODEL=1 swift test --filter OnDevicePronunciationSuggesterRealModelTests
+```
+
+or, where setting one is awkward, with a file in the package's `.build` folder,
+which git ignores; delete it to turn the check off again:
+
+```sh
+touch .build/suggester-real-model
+swift test --filter OnDevicePronunciationSuggesterRealModelTests
+rm .build/suggester-real-model
 ```
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
