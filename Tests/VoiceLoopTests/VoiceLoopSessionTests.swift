@@ -1602,7 +1602,8 @@ private struct Sound {
     var peak: Float
 
     /// Whether it is no louder than the working taps, which peak at about 0.03. Everything else
-    /// these tests play is far louder: `FakeKokoro`'s tone at 0.25, the other cues at 0.15 and up.
+    /// these tests play is far louder: `FakeKokoro`'s tone at 0.25, the other cues at about 0.11 and
+    /// up.
     /// So a quiet sound is the taps, or part of them, alone.
     var isQuiet: Bool { peak <= 0.05 }
 }
