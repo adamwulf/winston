@@ -2,8 +2,9 @@ import AVFoundation
 import Testing
 @testable import VoiceLoop
 
-// The `voice.echo` log's rate limit on its level lines, and its before and after of the
-// engine's state at a configuration change.
+// The `voice.echo` log's rate limit on its level lines, its before and after of the engine's
+// state at a configuration change, the microphone readings the tap hands over, and how a
+// reply counts them.
 
 @Suite struct EchoLogTests {
     @Test func theRateLimiterLetsAnEventThroughAtMostOncePerInterval() {
@@ -63,5 +64,63 @@ import Testing
             "changed": "formatsMatch,ioBufferMs,running,tapFormat",
         ])
         #expect(after.fields(changedFrom: after)["changed"]?.description == "none")
+    }
+
+    @Test func theTapHandsOverWholeReadingsInOrderAndCountsWhatDidNotFit() {
+        let levels = MicrophoneLevels()
+        func record(_ samples: [Float], at captureTime: UInt64) {
+            samples.withUnsafeBufferPointer { buffer in
+                levels.record(buffer.baseAddress!, count: buffer.count, capturedAt: captureTime)
+            }
+        }
+
+        record([0.5, -0.5, 0.5, -0.5], at: 10)
+        record([0, 0, 0, -0.25], at: 20)
+        let first = levels.drain()
+        #expect(first.readings == [
+            MicrophoneLevels.Reading(captureTime: 10, rms: 0.5, peak: 0.5),
+            MicrophoneLevels.Reading(captureTime: 20, rms: 0.125, peak: 0.25),
+        ])
+        #expect(first.dropped == 0)
+        #expect(levels.drain().readings.isEmpty)
+
+        // Two more than fit while nothing is taken: the newest two are dropped, and counted.
+        for time in 0..<UInt64(MicrophoneLevels.capacity + 2) {
+            record([0.1], at: 100 + time)
+        }
+        let full = levels.drain()
+        #expect(full.readings.count == MicrophoneLevels.capacity)
+        #expect(full.readings.first?.captureTime == 100)
+        #expect(full.readings.last?.captureTime == 100 + UInt64(MicrophoneLevels.capacity) - 1)
+        #expect(full.dropped == 2)
+        #expect(levels.drain().dropped == 0)
+    }
+
+    @Test func aReplyCountsBuffersBeforeItsFirstSoundApartFromThoseAfter() {
+        func reading(at captureTime: UInt64, rms: Float) -> MicrophoneLevels.Reading {
+            MicrophoneLevels.Reading(captureTime: captureTime, rms: rms, peak: rms * 2)
+        }
+        var levels = ReplyLevels(started: 1000)
+
+        // Before the setup: no reply's. Before the first sound: loud room noise, say a cough.
+        levels.add(reading(at: 900, rms: 0.5), firstAudio: nil)
+        levels.add(reading(at: 1100, rms: 0.1), firstAudio: nil)
+        // Taken once the first sound was scheduled at 1500: one buffer from before it.
+        levels.add(reading(at: 1400, rms: 0.01), firstAudio: 1500)
+        levels.add(reading(at: 1500, rms: 0.001), firstAudio: 1500)
+        levels.add(reading(at: 1600, rms: 0.002), firstAudio: 1500)
+
+        #expect(levels.pre.buffers == 2)
+        #expect(levels.pre.rmsDb == -20)
+        #expect(levels.playback.buffers == 2)
+        #expect(levels.playback.rmsDb == -54)
+        #expect(levels.playback.sampleDb == -48)
+
+        let window = levels.takeWindow()
+        #expect(window == levels.playback)
+        #expect(levels.takeWindow() == nil)
+        levels.add(reading(at: 1700, rms: 0.0001), firstAudio: 1500)
+        #expect(levels.takeWindow()?.buffers == 1)
+        #expect(levels.playback.buffers == 3)
     }
 }

@@ -18,11 +18,16 @@ import Synchronization
 ///   and the last cue stopped sounding; the volumes; the route and, on iOS, the microphone's
 ///   data source and gain; push-to-talk's and the AirPods mute's state.
 /// - `mic level`: the microphone's loudest buffer and sample after voice processing, at most
-///   every `levelInterval`, only while a reply is being said.
+///   every `levelInterval`, only from a reply's first sound until it stops.
 /// - `result during reply`: a recognizer result that came while a reply was being said, how
-///   long into its playback, and whether it stopped the reply.
+///   long into its playback, and whether it stopped the reply, was ignored, or was filtered out.
 /// - `reply playback`: how each reply ended: its first sound and its stop on the session's clock,
-///   whether the voice detector heard voice meanwhile, and the loudest microphone level.
+///   whether the voice detector heard voice meanwhile, and the loudest microphone level before
+///   its first sound and from then on.
+///
+/// The levels come from each microphone buffer's reading (`MicrophoneLevels`), counted for a
+/// reply by when the buffer was captured: from its setup to its first sound (`pre…`), and from
+/// its first sound on (`mic…`, and the `mic level` lines).
 /// - `preview stopped as voice mode starts` and `audio outside voice processing`: the preview
 ///   player's engine, which plays outside voice processing, playing around voice mode.
 ///
@@ -58,8 +63,12 @@ final class EchoLog {
         let started: UInt64
         /// When its first buffer was scheduled on the player, in host time; nil until then.
         let firstAudio: () -> UInt64?
-        /// The loudest levels of the `mic level` windows taken so far.
-        var loudest: MicrophoneLevels.Window?
+        /// The microphone's levels while it was being said.
+        var levels: ReplyLevels
+        /// Whether a `mic level` line has seen its first sound yet.
+        var sawFirstAudio = false
+        /// Microphone buffers whose readings were lost because the main actor fell behind.
+        var droppedBuffers = 0
         /// Results that came while it played.
         var results = 0
         /// How long after its first sound the first of them came.
@@ -185,10 +194,15 @@ final class EchoLog {
         previewPlaying: Bool
     ) {
         repliesSinceEngineStart += 1
-        reply = Reply(number: pipeline.timeline.replyNumber, started: started, firstAudio: firstAudio)
-        // The first level window starts with the reply.
-        _ = pipeline.micLevels.take()
-        levelLimiter.restart(at: started)
+        reply = Reply(
+            number: pipeline.timeline.replyNumber,
+            started: started,
+            firstAudio: firstAudio,
+            levels: ReplyLevels(started: started)
+        )
+        // Buffers captured before its setup count for nothing; those since count before its
+        // first sound.
+        absorbLevels(from: pipeline)
 
         var fields = micGate
         fields["reply"] = pipeline.timeline.replyNumber
@@ -219,27 +233,59 @@ final class EchoLog {
         logger.notice("reply started", context(pipeline, at: started, fields))
     }
 
-    /// Called every 100 ms. While a reply is being said, writes the microphone's level since the
-    /// last `mic level` line, at most every `levelInterval`.
+    /// Called every 100 ms. Takes the microphone's readings, which keeps their buffer from
+    /// filling up, and from a reply's first sound until it stops, writes the level since the
+    /// last `mic level` line, at most every `levelInterval`. The first line comes an interval
+    /// after the first sound.
     func poll(_ pipeline: Pipeline) {
-        guard let current = reply else { return }
+        absorbLevels(from: pipeline)
+        guard let current = reply, let firstAudio = current.firstAudio() else { return }
+        if !current.sawFirstAudio {
+            reply?.sawFirstAudio = true
+            levelLimiter.restart(at: firstAudio)
+        }
         let time = TimelineClock.now()
-        guard levelLimiter.allows(at: time), let window = pipeline.micLevels.take() else { return }
-        reply?.loudest = window.merged(with: current.loudest)
+        guard current.levels.window.buffers > 0, levelLimiter.allows(at: time),
+              let window = reply?.levels.takeWindow() else { return }
         var fields: [String: CustomStringConvertible] = [
             "rmsDb": window.rmsDb,
             "sampleDb": window.sampleDb,
             "buffers": window.buffers,
             "intoReplyMs": TimelineClock.milliseconds(from: current.started, to: time),
+            "intoPlaybackMs": TimelineClock.milliseconds(from: firstAudio, to: time),
         ]
         fields["reply"] = current.number
-        fields["intoPlaybackMs"] = Self.milliseconds(since: current.firstAudio(), to: time)
         logger.notice("mic level", context(pipeline, at: time, fields))
     }
 
-    /// A recognizer result came while a reply is being said, giving the transcript `words`
-    /// words. `outcome` is `bargeIn` if it stops the reply, or why it was ignored.
+    /// Takes the readings of the microphone buffers that have come since the last call, and
+    /// counts them for the reply being said, if any.
+    private func absorbLevels(from pipeline: Pipeline) {
+        let (readings, dropped) = pipeline.micLevels.drain()
+        guard var current = reply else { return }
+        // Read after the readings were taken: if the first sound hasn't been scheduled by now,
+        // none of them was captured after it.
+        let firstAudio = current.firstAudio()
+        for reading in readings {
+            current.levels.add(reading, firstAudio: firstAudio)
+        }
+        current.droppedBuffers += dropped
+        reply = current
+    }
+
+    /// The loudest levels of `levels`, with `prefix`: `<prefix>RmsDb` and `<prefix>SampleDb`.
+    /// Nothing without a buffer.
+    private static func levelFields(_ levels: LevelSummary, prefix: String) -> [String: CustomStringConvertible] {
+        guard levels.buffers > 0 else { return [:] }
+        return [prefix + "RmsDb": levels.rmsDb, prefix + "SampleDb": levels.sampleDb]
+    }
+
+    /// A recognizer result came while a reply is being said, the transcript having `words`
+    /// words with it. `outcome` is `bargeIn` if it stops the reply, why it was ignored, or
+    /// `filtered` if the transcript didn't take it (audio already consumed, or outside a
+    /// push-to-talk hold).
     func resultDuringReply(_ pipeline: Pipeline, words: Int, outcome: String) {
+        absorbLevels(from: pipeline)
         guard let current = reply else { return }
         let time = TimelineClock.now()
         let intoPlayback = Self.milliseconds(since: current.firstAudio(), to: time)
@@ -255,17 +301,18 @@ final class EchoLog {
         ]
         fields["reply"] = current.number
         fields["intoPlaybackMs"] = intoPlayback
-        // The loudest levels since the reply started, the window not yet logged included.
-        if let loudest = pipeline.micLevels.current()?.merged(with: current.loudest) ?? current.loudest {
-            fields["replyRmsDb"] = loudest.rmsDb
-            fields["replySampleDb"] = loudest.sampleDb
-        }
+        // The loudest levels so far, before the first sound and since.
+        fields.merge(Self.levelFields(current.levels.pre, prefix: "pre")) { $1 }
+        fields.merge(Self.levelFields(current.levels.playback, prefix: "mic")) { $1 }
         logger.notice("result during reply", context(pipeline, at: time, fields))
     }
 
     /// The reply stopped: it played to its end, or `reason` (as "reply ended" in `voice.loop`
     /// gives it) cut it off. `voiceStarts` counts the voice detector's starts while it played.
     func replyEnded(_ pipeline: Pipeline?, reason: String, micGate: [String: CustomStringConvertible], voiceStarts: Int) {
+        if let pipeline {
+            absorbLevels(from: pipeline)
+        }
         guard let ended = reply else { return }
         reply = nil
         let time = TimelineClock.now()
@@ -285,10 +332,12 @@ final class EchoLog {
         }
         fields["synthMs"] = firstAudio.map { TimelineClock.milliseconds(from: ended.started, to: $0) }
         fields["playedMs"] = Self.milliseconds(since: firstAudio, to: time)
-        // The last window, which no `mic level` line covers, counts too.
-        if let loudest = pipeline?.micLevels.take()?.merged(with: ended.loudest) ?? ended.loudest {
-            fields["micRmsDb"] = loudest.rmsDb
-            fields["micSampleDb"] = loudest.sampleDb
+        // Before its first sound, and from then on, the last stretch no `mic level` line
+        // covers included.
+        fields.merge(Self.levelFields(ended.levels.pre, prefix: "pre")) { $1 }
+        fields.merge(Self.levelFields(ended.levels.playback, prefix: "mic")) { $1 }
+        if ended.droppedBuffers > 0 {
+            fields["droppedBuffers"] = ended.droppedBuffers
         }
         logger.notice("reply playback", context(pipeline, at: time, fields))
     }
@@ -433,42 +482,60 @@ struct RateLimiter {
     }
 }
 
-/// How loud the microphone is after voice processing, for the `voice.echo` log while a reply is
-/// being said: the loudest buffer's RMS level and the loudest sample since the main actor last
-/// took them. The whole buffer counts, before push-to-talk's gate, so it measures what echo
-/// cancellation lets through even while the gate mutes it. The microphone tap writes it on the
-/// audio thread, with atomics only: no lock, no allocation, no logging.
-final class MicrophoneLevels: Sendable {
-    /// The levels over a stretch of buffers.
-    struct Window: Sendable, Equatable {
-        /// The loudest buffer's RMS level, in dBFS rounded to a whole number; -120 for silence.
-        /// The same measure as `micPeakDb` in `voice.loop`'s "reply ended", but over the whole
-        /// buffer rather than what the gate keeps.
-        let rmsDb: Int
-        /// The loudest single sample, the same way.
-        let sampleDb: Int
-        /// How many buffers it covers.
-        let buffers: Int
+/// How loud each microphone buffer is after voice processing, for the `voice.echo` log: its RMS
+/// level and its loudest sample, with when it was captured. The whole buffer counts, before
+/// push-to-talk's gate, so it measures what echo cancellation lets through even while the gate
+/// mutes it.
+///
+/// A ring of readings with one writer, the microphone tap on the audio thread, and one reader,
+/// the main actor, which takes them every 100 ms. Each reading is written whole into its slot
+/// before the write count is published, and the reader takes whole readings up to that count,
+/// so a buffer is never split between two takes. The tap neither locks nor allocates; when the
+/// ring is full it drops the reading and counts it. A tap's blocks run one at a time, so there
+/// is only ever one writer.
+final class MicrophoneLevels: @unchecked Sendable {
+    // `@unchecked`: the slots are plain memory, shared between the one writer and the one
+    // reader through the two counts' release and acquire, as described above.
 
-        /// The louder of each level, over the buffers of both.
-        func merged(with other: Window?) -> Window {
-            guard let other else { return self }
-            return Window(
-                rmsDb: max(rmsDb, other.rmsDb),
-                sampleDb: max(sampleDb, other.sampleDb),
-                buffers: buffers + other.buffers
-            )
-        }
+    /// One buffer's levels.
+    struct Reading: Sendable, Equatable {
+        /// When it was captured, in host time.
+        let captureTime: UInt64
+        /// Its RMS level, on a full scale of 1.
+        let rms: Float
+        /// Its loudest sample, the same way.
+        let peak: Float
     }
 
-    // Levels as their bit patterns: non-negative floats order the same way as their bit
-    // patterns, so an integer max works.
-    private let loudestBuffer = Atomic<UInt32>(0)
-    private let loudestSample = Atomic<UInt32>(0)
-    private let buffers = Atomic<Int>(0)
+    /// How many readings the ring holds: over 10 seconds of 4096-frame buffers at 48 kHz.
+    static let capacity = 128
 
-    /// Runs on the audio thread for each microphone buffer.
-    func record(_ samples: UnsafePointer<Float>, count: Int) {
+    /// Each slot's capture time.
+    private let times: UnsafeMutablePointer<UInt64>
+    /// Each slot's RMS level and loudest sample, as their bit patterns.
+    private let levels: UnsafeMutablePointer<UInt64>
+    /// Readings written since the start. Only the writer changes it.
+    private let written = Atomic<Int>(0)
+    /// Readings taken since the start. Only the reader changes it.
+    private let taken = Atomic<Int>(0)
+    /// Readings dropped because the ring was full, since the last take.
+    private let dropped = Atomic<Int>(0)
+
+    init() {
+        times = .allocate(capacity: Self.capacity)
+        times.initialize(repeating: 0, count: Self.capacity)
+        levels = .allocate(capacity: Self.capacity)
+        levels.initialize(repeating: 0, count: Self.capacity)
+    }
+
+    deinit {
+        times.deallocate()
+        levels.deallocate()
+    }
+
+    /// Runs on the audio thread for each microphone buffer: `count` samples, the first captured
+    /// at `captureTime` (host time).
+    func record(_ samples: UnsafePointer<Float>, count: Int, capturedAt captureTime: UInt64) {
         guard count > 0 else { return }
         var sum: Float = 0
         var peak: Float = 0
@@ -477,39 +544,93 @@ final class MicrophoneLevels: Sendable {
             sum += sample * sample
             peak = max(peak, abs(sample))
         }
-        loudestBuffer.max((sum / Float(count)).squareRoot().bitPattern, ordering: .relaxed)
-        loudestSample.max(peak.bitPattern, ordering: .relaxed)
-        buffers.wrappingAdd(1, ordering: .relaxed)
+        let rms = (sum / Float(count)).squareRoot()
+        let next = written.load(ordering: .relaxed)
+        guard next - taken.load(ordering: .acquiring) < Self.capacity else {
+            dropped.wrappingAdd(1, ordering: .relaxed)
+            return
+        }
+        let slot = next % Self.capacity
+        times[slot] = captureTime
+        levels[slot] = UInt64(rms.bitPattern) << 32 | UInt64(peak.bitPattern)
+        written.store(next &+ 1, ordering: .releasing)
     }
 
-    /// The levels since the last call, and a new window from here; nil if no buffer came. The
-    /// three values are taken one after another, so a buffer arriving meanwhile may count
-    /// partly toward the next window.
-    func take() -> Window? {
-        let count = buffers.exchange(0, ordering: .relaxed)
-        let rms = loudestBuffer.exchange(0, ordering: .relaxed)
-        let peak = loudestSample.exchange(0, ordering: .relaxed)
-        guard count > 0 else { return nil }
-        return Self.window(rms: rms, peak: peak, buffers: count)
+    /// The readings written since the last call, oldest first, and how many were dropped since
+    /// then. Main actor only: there must be one reader.
+    func drain() -> (readings: [Reading], dropped: Int) {
+        let first = taken.load(ordering: .relaxed)
+        let end = written.load(ordering: .acquiring)
+        var readings: [Reading] = []
+        readings.reserveCapacity(end - first)
+        for index in first..<end {
+            let slot = index % Self.capacity
+            let bits = levels[slot]
+            readings.append(Reading(
+                captureTime: times[slot],
+                rms: Float(bitPattern: UInt32(truncatingIfNeeded: bits >> 32)),
+                peak: Float(bitPattern: UInt32(truncatingIfNeeded: bits))
+            ))
+        }
+        taken.store(end, ordering: .releasing)
+        return (readings, dropped.exchange(0, ordering: .relaxed))
+    }
+}
+
+/// The loudest levels over some microphone buffers.
+struct LevelSummary: Equatable {
+    /// The loudest buffer's RMS level, on a full scale of 1.
+    private(set) var rms: Float = 0
+    /// The loudest single sample, the same way.
+    private(set) var peak: Float = 0
+    /// How many buffers it covers.
+    private(set) var buffers = 0
+
+    mutating func add(_ reading: MicrophoneLevels.Reading) {
+        rms = max(rms, reading.rms)
+        peak = max(peak, reading.peak)
+        buffers += 1
     }
 
-    /// The levels since `take()` last ran, leaving the window going; nil if no buffer came.
-    func current() -> Window? {
-        let count = buffers.load(ordering: .relaxed)
-        guard count > 0 else { return nil }
-        return Self.window(
-            rms: loudestBuffer.load(ordering: .relaxed),
-            peak: loudestSample.load(ordering: .relaxed),
-            buffers: count
-        )
+    /// `rms` in dBFS rounded to a whole number, -120 for silence: the same measure as
+    /// `micPeakDb` in `voice.loop`'s "reply ended", but over the whole buffer rather than what
+    /// the gate keeps.
+    var rmsDb: Int { VoiceActivity.decibels(rms) }
+    /// `peak` the same way.
+    var sampleDb: Int { VoiceActivity.decibels(peak) }
+}
+
+/// One reply's microphone levels, by when each buffer was captured: from the reply's setup to
+/// its first sound (`pre`), and from its first sound on (`playback`, and `window`, since the
+/// last `mic level` line). A buffer captured before the setup belongs to no reply.
+struct ReplyLevels: Equatable {
+    /// When the reply was set up, in host time.
+    let started: UInt64
+    private(set) var pre = LevelSummary()
+    private(set) var playback = LevelSummary()
+    private(set) var window = LevelSummary()
+
+    init(started: UInt64) {
+        self.started = started
     }
 
-    private static func window(rms: UInt32, peak: UInt32, buffers: Int) -> Window {
-        Window(
-            rmsDb: VoiceActivity.decibels(Float(bitPattern: rms)),
-            sampleDb: VoiceActivity.decibels(Float(bitPattern: peak)),
-            buffers: buffers
-        )
+    /// Counts `reading` before or after the reply's first sound, which was scheduled at
+    /// `firstAudio` (host time), or hadn't been when the reading was taken if nil.
+    mutating func add(_ reading: MicrophoneLevels.Reading, firstAudio: UInt64?) {
+        guard reading.captureTime >= started else { return }
+        if let firstAudio, reading.captureTime >= firstAudio {
+            playback.add(reading)
+            window.add(reading)
+        } else {
+            pre.add(reading)
+        }
+    }
+
+    /// The levels since the last call, and a new window from here; nil if no buffer since.
+    mutating func takeWindow() -> LevelSummary? {
+        guard window.buffers > 0 else { return nil }
+        defer { window = LevelSummary() }
+        return window
     }
 }
 

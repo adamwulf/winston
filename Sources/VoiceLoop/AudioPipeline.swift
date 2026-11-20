@@ -212,7 +212,7 @@ final class Pipeline {
             let frames = Int(buffer.frameLength)
             // What voice processing let through, before the gate mutes any of it.
             if let samples = buffer.floatChannelData?[0] {
-                levels.record(samples, count: frames)
+                levels.record(samples, count: frames, capturedAt: captureTime)
             }
             let kept = gate.keptFrames(
                 buffer.frameLength,
