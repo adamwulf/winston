@@ -158,6 +158,17 @@ public final class VoiceLoop {
     public private(set) var isInputMuted = false
     /// Follows the AirPods mute while voice mode runs (see `isInputMuted`). Nil while it is off.
     @ObservationIgnored private var inputMuteObserver: Task<Void, Never>?
+    /// Called when voice mode ends because the audio input or output device changed, such as
+    /// AirPods connecting or being taken out, right after `state` turns `.off`, so the app can
+    /// leave voice mode as if Adam had. Not called for any other stop. Voice mode doesn't start
+    /// again on its own, and plays the stop cue on the new devices, with push-to-talk too.
+    @ObservationIgnored public var onStoppedForDeviceChange: (@MainActor () -> Void)?
+    /// The audio devices voice mode compares with to tell when they change: those at its first
+    /// start, kept through rebuilds, and on iOS moved on by a route change that isn't a device
+    /// coming or going. Nil while voice mode is off.
+    @ObservationIgnored private var deviceBaseline: AudioDevices?
+    /// Follows the audio session's route changes while voice mode runs. Nil while it is off.
+    @ObservationIgnored private var routeChangeObserver: Task<Void, Never>?
     /// Whether voice mode may pause or turn down other apps' audio, such as music. When false,
     /// the iOS audio session mixes with other audio instead of interrupting it, and voice
     /// processing ducks other audio as little as it can (it has no setting for not at all).
@@ -392,16 +403,22 @@ public final class VoiceLoop {
         self.pipeline = pipeline
         resumeAfterInterruption = false
         state = .listening(partial: "")
-        // What voice mode listens and speaks through until it stops. The changes this start
-        // made itself, such as the session's category and the speaker, are part of it.
-        let devices = environment.audioDevices()
-        // Also after a rebuild (an engine that couldn't restart, or an interruption), which has
-        // no "stopped" before it.
+        // A rebuild (an engine that couldn't restart, a settings change, or an interruption) keeps
+        // the devices voice mode started with, so it can't take up new ones.
+        let isRebuild = deviceBaseline != nil
+        if !isRebuild {
+            // What voice mode listens and speaks through until it stops. The changes this start
+            // made itself, such as the session's category and the speaker, are part of it.
+            deviceBaseline = environment.audioDevices()
+            observeRouteChanges()
+        }
+        // Also after a rebuild, which has no "stopped" before it.
         Self.log.notice(
             "voice mode started",
             pipeline.formatContext.merging([
                 "echoCancellation": "\(pipeline.hasVoiceProcessing)",
-                "devices": devices.logDescription,
+                "devices": deviceBaseline?.logDescription ?? "unknown",
+                "rebuild": "\(isRebuild)",
             ]) { $1 }
         )
         pipeline.timeline.started(
@@ -411,12 +428,18 @@ public final class VoiceLoop {
             analyzerRate: recognizer.audioFormat.sampleRate
         )
         pipeline.timeline.recognizerStarted(called: recognizerStart.called, returned: recognizerStart.returned)
+        #if os(macOS)
+        // The rebuild may have come from the default input or output changing, which can show
+        // only after the engine's configuration change, with nothing to say so after.
+        if isRebuild, stopIfDevicesChanged(source: "rebuild") {
+            return
+        }
+        #endif
 
         let configurationChanges = NotificationCenter.default.notifications(
             named: .AVAudioEngineConfigurationChange,
             object: pipeline.engine
         )
-        let deviceChanges = environment.audioDeviceChanges()
         pipeline.tasks = [
             Task { [weak self] in
                 await self?.listen(to: recognizer, in: pipeline)
@@ -428,24 +451,20 @@ public final class VoiceLoop {
                 }
             },
             Task { [weak self, weak pipeline] in
-                // The engine stops itself when the audio hardware changes. A change of devices,
-                // such as AirPods connecting, ends voice mode; otherwise (on the iPhone every new
-                // engine stops once right after it starts) start it again so listening carries on.
+                // The engine stops itself when the audio hardware changes. Start it again so
+                // listening carries on (on the iPhone every new engine stops once right after it
+                // starts), unless the devices changed: that ends voice mode.
                 for await _ in configurationChanges {
                     guard let self, let pipeline, self.pipeline === pipeline else { return }
-                    if self.stopIfDevicesChanged(from: devices, on: pipeline, source: "configurationChange") {
+                    #if os(macOS)
+                    // On the Mac a change of the default input or output shows only here. On iOS
+                    // the route change says whether a device came or went (`routeChanged(_:)`).
+                    if self.stopIfDevicesChanged(source: "configurationChange") {
                         return
                     }
+                    #endif
                     if !pipeline.engine.isRunning {
                         self.engineStopped(pipeline, source: "configurationChange")
-                    }
-                }
-            },
-            Task { [weak self, weak pipeline] in
-                for await _ in deviceChanges {
-                    guard let self, let pipeline, self.pipeline === pipeline else { return }
-                    if self.stopIfDevicesChanged(from: devices, on: pipeline, source: "deviceChange") {
-                        return
                     }
                 }
             },
@@ -1081,7 +1100,9 @@ public final class VoiceLoop {
         case rebuild
     }
 
-    private func tearDown(_ kind: Teardown) {
+    /// `playingStopCue` false leaves the stop cue out of a stop, for a caller that plays it
+    /// another way.
+    private func tearDown(_ kind: Teardown, playingStopCue: Bool = true) {
         runID += 1
         if kind == .rebuild, let currentSpeech {
             speechQueue.insert(currentSpeech.text, at: 0)
@@ -1108,8 +1129,9 @@ public final class VoiceLoop {
         if let pipeline {
             self.pipeline = nil
             // No stop cue for a rebuild, for an engine that has stopped (an interruption, or one
-            // that keeps stopping), or with push-to-talk, where it marks a release.
-            if kind == .stop && playsSoundCues && pipeline.engine.isRunning && !isPushToTalk {
+            // that keeps stopping), with push-to-talk, where it marks a release, or for a change
+            // of devices, which plays it on an engine of its own.
+            if kind == .stop && playingStopCue && playsSoundCues && pipeline.engine.isRunning && !isPushToTalk {
                 close(pipeline)
             } else {
                 pipeline.tearDown()
@@ -1130,6 +1152,7 @@ public final class VoiceLoop {
             resumeAfterInterruption = false
             recentEngineStops = []
             stopObservingInputMute()
+            stopObservingRouteChanges()
             if state != .off {
                 Self.log.notice("voice mode stopped")
             }
@@ -1138,9 +1161,8 @@ public final class VoiceLoop {
     }
 
     /// Stops listening on `pipeline` at once, but keeps its engine running to play the stop cue,
-    /// then tears it down and deactivates the iOS session. If the engine stopped itself before
-    /// the cue's time was up, it starts it again and plays the cue once more. A start that builds
-    /// a new engine meanwhile ends it sooner, with `endClosingPipeline()`.
+    /// then tears it down and deactivates the iOS session. A start that builds a new engine
+    /// meanwhile ends it sooner, with `endClosingPipeline()`.
     private func close(_ pipeline: Pipeline) {
         pipeline.stopListening()
         // The stop cue replaces any cue still playing.
@@ -1151,30 +1173,13 @@ public final class VoiceLoop {
         // engine stops by itself. It holds the loop until then, so the engine is always stopped.
         let wait = SoundCue.listeningStopped.duration + Self.stopCueMargin
         pipeline.tasks = [Task { [self] in
-            var replayed = false
-            while true {
-                do {
-                    try await Task.sleep(for: wait)
-                } catch {
-                    // A new start ended the pipeline first, and owns the session now.
-                    return
-                }
-                guard closingPipeline === pipeline else { return }
-                // The audio hardware changed under the cue and stopped the engine, as it can just
-                // after a change of devices ended voice mode: play it once more, on the new ones.
-                guard !replayed, !pipeline.engine.isRunning else { break }
-                replayed = true
-                do {
-                    try pipeline.restartEngine()
-                } catch {
-                    Self.log.warning("restarting the audio engine for the stop cue failed", error.logContext(pipeline.formatContext))
-                    break
-                }
-                Self.log.notice("stop cue cut off by the engine stopping; playing it again", pipeline.formatContext)
-                // A player the engine stopped under never plays what is scheduled on it next.
-                pipeline.cuePlayer.stop()
-                pipeline.play(.listeningStopped) {}
+            do {
+                try await Task.sleep(for: wait)
+            } catch {
+                // A new start ended the pipeline first, and owns the session now.
+                return
             }
+            guard closingPipeline === pipeline else { return }
             closingPipeline = nil
             pipeline.tearDown()
             Self.deactivateAudioSession()
@@ -1192,32 +1197,6 @@ public final class VoiceLoop {
     /// How much longer than the stop cue its engine keeps running. On a device the sound
     /// reaches the speaker, or AirPods, a little after it is rendered.
     private static let stopCueMargin: Duration = .milliseconds(250)
-
-    /// Ends voice mode if the audio devices are no longer `started`, the ones it started with, as
-    /// when AirPods connect or are taken out, and returns whether it did. It doesn't start again
-    /// on the new devices. The stop cue plays on them: an engine the change stopped is started
-    /// again for it. `source` says what reported the change, for the logs.
-    private func stopIfDevicesChanged(from started: AudioDevices, on pipeline: Pipeline, source: String) -> Bool {
-        let current = environment.audioDevices()
-        let changed = current != started
-        Self.log.notice("audio devices checked", [
-            "source": source,
-            "before": started.logDescription,
-            "after": current.logDescription,
-            "engineRunning": "\(pipeline.engine.isRunning)",
-            "action": changed ? "stopVoiceMode" : "keepListening",
-        ])
-        guard changed else { return false }
-        if !pipeline.engine.isRunning {
-            do {
-                try pipeline.restartEngine()
-            } catch {
-                Self.log.warning("restarting the audio engine for the stop cue failed", error.logContext(pipeline.formatContext))
-            }
-        }
-        tearDown(.stop)
-        return true
-    }
 
     /// The engine stopped itself because the audio hardware changed. Starts the same engine
     /// again, keeping the analyzer and the utterance in progress, and rebuilds everything if
@@ -1489,6 +1468,75 @@ public final class VoiceLoop {
         guard isMuted != isInputMuted else { return }
         isInputMuted = isMuted
         play(isMuted ? .listeningStopped : .listeningStarted)
+    }
+
+    // MARK: - Audio devices
+
+    /// Starts following the audio session's route changes for `routeChanged(_:)`.
+    private func observeRouteChanges() {
+        let changes = environment.audioRouteChanges()
+        routeChangeObserver = Task { [weak self] in
+            for await change in changes {
+                guard let self, !Task.isCancelled else { return }
+                self.routeChanged(change)
+            }
+        }
+    }
+
+    /// Stops following the route changes and forgets the devices, when voice mode stops.
+    private func stopObservingRouteChanges() {
+        routeChangeObserver?.cancel()
+        routeChangeObserver = nil
+        deviceBaseline = nil
+    }
+
+    /// A device came or went: voice mode ends if that changed the devices. For any other reason,
+    /// such as the app's own category change or speaker override, or the route settling late
+    /// after the start, the route as it is now is what later changes are compared with.
+    private func routeChanged(_ change: AudioRouteChange) {
+        guard let deviceBaseline else { return }
+        if change.isDeviceChange {
+            stopIfDevicesChanged(source: "routeChange", reason: change.reason)
+        } else {
+            let current = environment.audioDevices()
+            self.deviceBaseline = current
+            Self.log.notice("audio devices baseline updated", [
+                "reason": change.reason,
+                "before": deviceBaseline.logDescription,
+                "after": current.logDescription,
+            ])
+        }
+    }
+
+    /// Ends voice mode if the devices are no longer those in `deviceBaseline`, as when AirPods
+    /// connect or are taken out, and returns whether it did. It doesn't start again, and tells
+    /// the app (`onStoppedForDeviceChange`). The stop cue plays once the loop's engine is gone, on
+    /// one of its own that only plays, so it reaches whatever output is current now, without the
+    /// microphone, and with push-to-talk too. `source` and `reason` say what asked, for the logs.
+    @discardableResult
+    private func stopIfDevicesChanged(source: String, reason: String? = nil) -> Bool {
+        guard let baseline = deviceBaseline else { return false }
+        let current = environment.audioDevices()
+        let changed = current != baseline
+        var context: [String: String] = [
+            "source": source,
+            "before": baseline.logDescription,
+            "after": current.logDescription,
+            "action": changed ? "stopVoiceMode" : "keepListening",
+        ]
+        context["reason"] = reason
+        Self.log.notice("audio devices checked", context)
+        guard changed else { return false }
+        tearDown(.stop, playingStopCue: false)
+        onStoppedForDeviceChange?()
+        if playsSoundCues {
+            do {
+                try previewPlayer.play(.listeningStopped)
+            } catch {
+                Self.log.warning("the stop cue failed to play after the audio devices changed", error.logContext())
+            }
+        }
+        return true
     }
 
     // MARK: - Speaking

@@ -22,7 +22,7 @@ extension VoiceEnvironment {
         makeEngine: { AVAudioEngine() },
         enableVoiceProcessing: { try $0.setVoiceProcessingEnabled(true) },
         audioDevices: { LiveAudioDevices.current() },
-        audioDeviceChanges: { LiveAudioDevices.changes() },
+        audioRouteChanges: { LiveAudioDevices.routeChanges() },
         kokoro: LiveKokoro(directory: URL.applicationSupportDirectory.appending(path: "Kokoro", directoryHint: .isDirectory)),
         languageCode: { AVSpeechSynthesisVoice.currentLanguageCode() },
         systemVoices: { VoiceLoop.systemVoices(language: $0) },
@@ -53,33 +53,20 @@ private enum LiveAudioDevices {
         #endif
     }
 
-    static func changes() -> AsyncStream<Void> {
-        let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+    static func routeChanges() -> AsyncStream<AudioRouteChange> {
+        let (stream, continuation) = AsyncStream.makeStream(of: AudioRouteChange.self)
         #if os(iOS)
-        let routeChanges = NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
+        let notifications = NotificationCenter.default.notifications(named: AVAudioSession.routeChangeNotification)
         let task = Task {
-            for await _ in routeChanges {
-                continuation.yield()
+            for await notification in notifications {
+                let reason = (notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt)
+                    .flatMap(AVAudioSession.RouteChangeReason.init(rawValue:)) ?? .unknown
+                continuation.yield(AudioRouteChange(reason))
             }
         }
         continuation.onTermination = { _ in task.cancel() }
         #else
-        // Called on a Core Audio thread. Removing it takes the same block.
-        let listener: @Sendable @convention(block) (UInt32, UnsafePointer<AudioObjectPropertyAddress>) -> Void = { _, _ in
-            continuation.yield()
-        }
-        let system = AudioObjectID(kAudioObjectSystemObject)
-        let selectors = [kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice]
-        for selector in selectors {
-            var address = systemAddress(selector)
-            AudioObjectAddPropertyListenerBlock(system, &address, nil, listener)
-        }
-        continuation.onTermination = { _ in
-            for selector in selectors {
-                var address = systemAddress(selector)
-                AudioObjectRemovePropertyListenerBlock(system, &address, nil, listener)
-            }
-        }
+        continuation.finish()
         #endif
         return stream
     }
@@ -87,20 +74,16 @@ private enum LiveAudioDevices {
     #if os(macOS)
     /// The default device that `selector` names, by its device ID. None if there is none.
     private static func defaultDevice(_ selector: AudioObjectPropertySelector) -> [AudioDevices.Device] {
-        var address = systemAddress(selector)
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
         var device = AudioDeviceID(kAudioObjectUnknown)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
         guard status == noErr, device != kAudioObjectUnknown else { return [] }
         return [AudioDevices.Device(id: "\(device)", kind: "\(device)")]
-    }
-
-    private nonisolated static func systemAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
     }
     #endif
 }

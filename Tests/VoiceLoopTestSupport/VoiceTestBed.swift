@@ -25,14 +25,14 @@ package final class VoiceTestBed {
     /// How many times the loop has tried to turn voice processing on.
     package private(set) var voiceProcessingAttempts = 0
     /// The audio devices in use: the built-in microphone and speaker unless a test changes them.
-    /// Changing them doesn't tell the loop; `reportAudioDeviceChange()` does, as a route change
-    /// does.
+    /// Changing them doesn't tell the loop; `reportRouteChange(isDeviceChange:)` does, as on iOS,
+    /// and so does the engine's configuration change, as on the Mac (where the tests run).
     package var audioDevices = AudioDevices(
         inputs: [.init(id: "built-in-microphone", kind: "MicrophoneBuiltIn")],
         outputs: [.init(id: "built-in-speaker", kind: "Speaker")]
     )
-    /// Each stream of device changes a loop asked for.
-    private var audioDeviceChanges: [AsyncStream<Void>.Continuation] = []
+    /// Each stream of route changes a loop asked for.
+    private var routeChanges: [AsyncStream<AudioRouteChange>.Continuation] = []
     /// The system's language. American English unless a test changes it, so the American Kokoro
     /// voices (`af_heart` and the like) are on offer whatever the Mac running the tests uses.
     package var languageCode = "en-US"
@@ -88,9 +88,9 @@ package final class VoiceTestBed {
                 }
             },
             audioDevices: { [self] in audioDevices },
-            audioDeviceChanges: { [self] in
-                let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
-                audioDeviceChanges.append(continuation)
+            audioRouteChanges: { [self] in
+                let (stream, continuation) = AsyncStream.makeStream(of: AudioRouteChange.self)
+                routeChanges.append(continuation)
                 return stream
             },
             kokoro: kokoro,
@@ -114,11 +114,16 @@ package final class VoiceTestBed {
         return loop
     }
 
-    /// Tells every loop on this bed that the audio devices may have changed, as the audio
-    /// session's route changing does on iOS. Whether they did is `audioDevices`.
-    package func reportAudioDeviceChange() {
-        for continuation in audioDeviceChanges {
-            continuation.yield()
+    /// Tells every loop on this bed that the iOS audio session's route changed: with
+    /// `isDeviceChange`, because a device came or went (`.newDeviceAvailable`), otherwise for
+    /// another reason (`.override`). The route is `audioDevices`.
+    package func reportRouteChange(isDeviceChange: Bool) {
+        let change = AudioRouteChange(
+            isDeviceChange: isDeviceChange,
+            reason: isDeviceChange ? "newDeviceAvailable" : "override"
+        )
+        for continuation in routeChanges {
+            continuation.yield(change)
         }
     }
 
