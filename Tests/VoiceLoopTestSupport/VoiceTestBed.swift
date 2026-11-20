@@ -24,6 +24,15 @@ package final class VoiceTestBed {
     package var hasVoiceProcessing = true
     /// How many times the loop has tried to turn voice processing on.
     package private(set) var voiceProcessingAttempts = 0
+    /// The audio devices in use: the built-in microphone and speaker unless a test changes them.
+    /// Changing them doesn't tell the loop; `reportAudioDeviceChange()` does, as a route change
+    /// does.
+    package var audioDevices = AudioDevices(
+        inputs: [.init(id: "built-in-microphone", kind: "MicrophoneBuiltIn")],
+        outputs: [.init(id: "built-in-speaker", kind: "Speaker")]
+    )
+    /// Each stream of device changes a loop asked for.
+    private var audioDeviceChanges: [AsyncStream<Void>.Continuation] = []
     /// The system's language. American English unless a test changes it, so the American Kokoro
     /// voices (`af_heart` and the like) are on offer whatever the Mac running the tests uses.
     package var languageCode = "en-US"
@@ -78,6 +87,12 @@ package final class VoiceTestBed {
                     throw VoiceTestBedError.noVoiceProcessing
                 }
             },
+            audioDevices: { [self] in audioDevices },
+            audioDeviceChanges: { [self] in
+                let (stream, continuation) = AsyncStream.makeStream(of: Void.self)
+                audioDeviceChanges.append(continuation)
+                return stream
+            },
             kokoro: kokoro,
             languageCode: { [self] in languageCode },
             systemVoices: { [self] language in
@@ -97,6 +112,14 @@ package final class VoiceTestBed {
         let loop = VoiceLoop(environment: environment)
         loop.playsSoundCues = soundCues
         return loop
+    }
+
+    /// Tells every loop on this bed that the audio devices may have changed, as the audio
+    /// session's route changing does on iOS. Whether they did is `audioDevices`.
+    package func reportAudioDeviceChange() {
+        for continuation in audioDeviceChanges {
+            continuation.yield()
+        }
     }
 
     /// The current listening session's recognizer.
