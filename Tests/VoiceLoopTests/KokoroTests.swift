@@ -1535,10 +1535,10 @@ struct KokoroCancellingTests {
 
         loop.stop()
         bed.kokoro.releaseSyntheses()
-        // The held sentence comes back to the loop. With the engine gone there is nothing to
-        // render, so the settle only lets the loop's task run on with it.
-        #expect(await eventually { bed.kokoro.finishedRequests == 1 })
-        try await settle()
+        // The held sentence comes back to a task the stop has cancelled, so the loop takes nothing
+        // more from Kokoro, neither that sentence nor the next, whenever its task runs on.
+        #expect(await eventually { bed.kokoro.cancelledWhenFinished.count == 1 })
+        #expect(bed.kokoro.cancelledWhenFinished == [true])
 
         #expect(loop.state == .off)
         #expect(bed.kokoro.requests.count == 1)

@@ -56,6 +56,8 @@ package final class FakeKokoro: KokoroEngine {
         var requests: [Request] = []
         /// How many of `requests` have returned or thrown.
         var finishedRequests = 0
+        /// For each of those, in the order they finished, whether the task asking had been cancelled.
+        var cancelledWhenFinished: [Bool] = []
         /// The `requests` index that fails, if any.
         var failingRequest: Int?
         var holdsSynthesis = false
@@ -111,6 +113,11 @@ package final class FakeKokoro: KokoroEngine {
     /// How many of `requests` have come back to the loop, rendered or failed: for a test that
     /// must know a held sentence has returned before it checks what the loop did with it.
     package var finishedRequests: Int { state.withLock { $0.finishedRequests } }
+
+    /// For each of `requests` that has come back, in the order they did, whether the task that
+    /// asked for it had been cancelled by then: for a test that must know the loop will drop a
+    /// sentence before it has had the chance to.
+    package var cancelledWhenFinished: [Bool] { state.withLock { $0.cancelledWhenFinished } }
 
     /// When set, the sentence with this index in `requests` fails to render.
     package var failingRequest: Int? {
@@ -288,7 +295,13 @@ package final class FakeKokoro: KokoroEngine {
             state.requests.append(Request(text: text, voice: voice, speed: speed, pronunciations: pronunciations))
             return (state.requests.count - 1, state.holdsSynthesis, state.loadedModel != nil)
         }
-        defer { state.withLock { $0.finishedRequests += 1 } }
+        defer {
+            let cancelled = Task.isCancelled
+            state.withLock { state in
+                state.finishedRequests += 1
+                state.cancelledWhenFinished.append(cancelled)
+            }
+        }
         guard isLoaded else { throw FakeKokoroError.notLoaded }
         if holds {
             await withCheckedContinuation { continuation in
