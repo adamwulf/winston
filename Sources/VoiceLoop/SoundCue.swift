@@ -51,13 +51,18 @@ extension SoundCue {
 
     /// C6 then G6, each ringing out like a small bell: 410 ms in all.
     private static let chime = [
-        Note(start: 0, length: 0.3, frequency: 1046.5, level: 0.15, decay: 0.09, overtone: 0.25),
-        Note(start: 0.11, length: 0.3, frequency: 1567.98, level: 0.15, decay: 0.11, overtone: 0.25),
+        Note(start: 0, length: 0.3, frequency: 1046.5, level: reactionLevel, decay: 0.09, overtone: 0.25),
+        Note(start: 0.11, length: 0.3, frequency: 1567.98, level: reactionLevel, decay: 0.11, overtone: 0.25),
     ]
+
+    /// The level of each of the chime's notes: 0.15, its first level, lowered by 2.5 dB because
+    /// Adam found it a little loud. About 0.112.
+    private static let reactionLevel: Float = 0.15 * pow(10, -2.5 / 20)
 
     /// Three soft taps around 320 Hz, each a little different in pitch and level, 120 ms then
     /// 110 ms apart: 300 ms in all. Low, and quick to fade, like fingers tapping a desk. They peak
-    /// at about 0.03, well below the other cues (0.15 and up), to sit quietly under everything else.
+    /// at about 0.03, well below the other cues (about 0.11 and up), to sit quietly under everything
+    /// else.
     private static let workingTaps = [
         tap(at: 0, frequency: 330, level: 0.024),
         tap(at: 0.12, frequency: 310, level: 0.02),
