@@ -1410,7 +1410,6 @@ public final class VoiceLoop {
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
         let acronyms = KokoroAcronyms(dictionaryWords: kokoroModel.dictionaryWords)
-        let placeholders = phoneticPlaceholders
         return Task {
             // Kokoro can't pronounce digits, or acronyms its dictionary doesn't have. Only its
             // text is changed: the system voice gets the sentences as written.
@@ -1427,11 +1426,13 @@ public final class VoiceLoop {
                     // Numbers first: their rules read the words around them as written. Both
                     // leave placeholders as they are.
                     let spoken = acronyms.spelledOut(numbers.spelledOut(sentence))
+                    // Read as the sentence starts: placeholders are only ever added, never
+                    // changed, so those queued with it are all there.
                     samples = try await engine.synthesize(
                         spoken,
                         voice: voice,
                         speed: speed,
-                        pronunciations: placeholders.phonemes(in: spoken)
+                        pronunciations: phoneticPlaceholders.phonemes(in: spoken)
                     )
                 } catch {
                     guard !Task.isCancelled else { return }
