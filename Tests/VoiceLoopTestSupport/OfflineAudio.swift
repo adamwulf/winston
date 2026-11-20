@@ -47,7 +47,7 @@ package final class OfflineAudio {
 
     /// A new engine that renders offline, with the pretend microphone as its input.
     package func makeEngine() throws -> AVAudioEngine {
-        let engine = AVAudioEngine()
+        let engine = OfflineEngine()
         guard let renderFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
             throw OfflineAudioError.noRenderFormat
         }
@@ -158,6 +158,24 @@ package final class OfflineAudio {
             renderPasses += 1
         }
         return !running.isEmpty
+    }
+}
+
+/// The engines `OfflineAudio` makes: an `AVAudioEngine` that notes when it was last stopped, for a
+/// test that must know how long the loop kept it running. By the clock, which the loop's own
+/// timers run on. Its only state of its own is behind a lock, so it stays as `Sendable` as the
+/// engine it extends.
+package final class OfflineEngine: AVAudioEngine, @unchecked Sendable {
+    private let lastStop = Mutex<ContinuousClock.Instant?>(nil)
+
+    /// When `stop()` was last called on it; nil if it never was.
+    package var lastStopped: ContinuousClock.Instant? {
+        lastStop.withLock { $0 }
+    }
+
+    override package func stop() {
+        lastStop.withLock { $0 = .now }
+        super.stop()
     }
 }
 

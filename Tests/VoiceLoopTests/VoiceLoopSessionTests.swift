@@ -77,6 +77,16 @@ private func cutOffSpeechDiesAway(on bed: VoiceTestBed) async -> Bool {
     await renderPassesGoBy(4, on: bed)
 }
 
+/// Whether the loop kept `engine` running for at least the whole stop cue after `stopped`, when
+/// the test called `stop()`. By the clock, which the loop's teardown timer runs on and which never
+/// runs fast; the tests render the cue themselves, so its frames can't show how long it was kept.
+@MainActor
+private func keptRunningThroughTheStopCue(_ engine: AVAudioEngine, since stopped: ContinuousClock.Instant) -> Bool {
+    let cue = Duration.seconds(Double(SoundCue.listeningStopped.samples(sampleRate: 48_000).count) / 48_000)
+    guard let engineStopped = (engine as? OfflineEngine)?.lastStopped else { return false }
+    return engineStopped - stopped >= cue
+}
+
 /// Tells the loop its engine's hardware configuration changed, as AVAudioEngine does.
 @MainActor
 private func postConfigurationChange(for engine: AVAudioEngine) {
@@ -1245,6 +1255,7 @@ struct SoundCueTests {
         let startCue = bed.audio.playedFrames
         #expect(startCue > 0)
 
+        let stopped = ContinuousClock.now
         loop.stop()
 
         // Listening ends at once; the engine runs on only to play the stop cue.
@@ -1255,6 +1266,7 @@ struct SoundCueTests {
         bed.audio.render(passes: 4)
         #expect(await eventually { bed.recognizer.isCancelled })
         #expect(await eventually { !engine.isRunning })
+        #expect(keptRunningThroughTheStopCue(engine, since: stopped))
         // The whole stop cue played: the same taps as the start cue, in the other order.
         let played = bed.audio.playedFrames
         #expect(abs(played - 2 * startCue) <= startCue / 10)
@@ -1989,6 +2001,7 @@ struct WorkingCueTests {
         #expect(loop.hasPlayedWorkingCue)
 
         // At once: the engine renders on the main actor, so none of the taps have played yet.
+        let stopped = ContinuousClock.now
         loop.stop()
 
         #expect(loop.state == .off)
@@ -1997,6 +2010,7 @@ struct WorkingCueTests {
         // teardown timer run: however slow the machine, the cue has played before the engine stops.
         bed.audio.render(passes: 4)
         #expect(await eventually { !engine.isRunning })
+        #expect(keptRunningThroughTheStopCue(engine, since: stopped))
         let stopCue = soundingFrames(of: .listeningStopped)
         #expect(abs(bed.audio.playedFrames - played - stopCue) <= stopCue / 10)
     }
