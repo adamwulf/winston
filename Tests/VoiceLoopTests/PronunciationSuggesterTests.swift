@@ -5,8 +5,8 @@ import Testing
 /// Standard IPA, as a language model writes it, in Kokoro's notation: what the on-device
 /// suggester does with each pronunciation the model gives it.
 @Suite struct IPAToMisakiTests {
-    private func misaki(_ ipa: String) -> String {
-        MisakiPhonemes.fromIPA(ipa)
+    private func misaki(_ ipa: String, asOneWord: Bool = false) -> String {
+        MisakiPhonemes.fromIPA(ipa, asOneWord: asOneWord)
     }
 
     @Test func eachDiphthongIsItsCapital() {
@@ -28,6 +28,11 @@ import Testing
     @Test func aStressMarkWithNoVowelAfterItIsDroppedAndPrimaryStressWins() {
         #expect(misaki("ˈpst") == "pst")
         #expect(misaki("ˌˈæp") == "ˈæp")
+    }
+
+    @Test func aStressMarkGoesBeforeAnIPAVowelMisakiDoesntUseToo() {
+        // Lübeck: Kokoro's vocabulary has y.
+        #expect(misaki("ˈlyːbɛk") == "lˈybɛk")
     }
 
     @Test func rAndGAreMisakis() {
@@ -61,6 +66,13 @@ import Testing
         #expect(misaki("ˈɡo-ɪŋ") == "ɡˈOɪŋ")
     }
 
+    @Test func inOneWordASpaceIsASyllableBreak() {
+        #expect(misaki("ˈɡo ɪŋ", asOneWord: true) == "ɡˈOɪŋ")
+        #expect(misaki(" ˈwɪn  stən ", asOneWord: true) == "wˈɪnstən")
+        // Otherwise it parts words.
+        #expect(misaki("ˈɡo ɪŋ") == "ɡˈO ɪŋ")
+    }
+
     @Test func theSlashesOrBracketsAroundATranscriptionAreDropped() {
         #expect(misaki("/ˈwɪn.stən/") == "wˈɪnstən")
         #expect(misaki("[ˈwɪn.stən]") == "wˈɪnstən")
@@ -75,10 +87,17 @@ import Testing
         #expect(misaki("ˈbɜːd") == "bˈɜɹd")
     }
 
-    @Test func eAndOAreTheVowelsOfAirAndOrBeforeAnRAndDiphthongsElsewhere() {
-        #expect(misaki("ˈker") == "kˈɛɹ")
+    @Test func aBareEIsTheVowelOfBedAndTheVowelOfSayIsEɪOrEː() {
+        #expect(misaki("ˈbed") == "bˈɛd")
+        #expect(misaki("ˈbɛd") == "bˈɛd")
+        #expect(misaki("ˈbeɪk") == "bˈAk")
+        #expect(misaki("ˈbeːk") == "bˈAk")
+        #expect(misaki("ˈber") == "bˈɛɹ")
+        #expect(misaki("ˈbɛr") == "bˈɛɹ")
+    }
+
+    @Test func oIsTheVowelOfOrBeforeAnRAndOfGoElsewhere() {
         #expect(misaki("ˈfor") == "fˈɔɹ")
-        #expect(misaki("ˈmek") == "mˈAk")
         #expect(misaki("ˈɡo") == "ɡˈO")
     }
 
@@ -111,6 +130,23 @@ import Testing
     @Test func symbolsItDoesntConvertAreKept() {
         #expect(misaki("ˈlɑx") == "lˈɑx")
         #expect(misaki("ˈbʌʔn") == "bˈʌʔn")
+    }
+
+    @Test func diacriticsAreDroppedWhetherTheLetterComesWithItsOwnOrNot() {
+        // ĩ as one character (U+0129), and as i and a combining tilde.
+        #expect(misaki("[b\u{0129}n]") == "bin")
+        #expect(misaki("[bi\u{0303}n]") == "bin")
+        #expect(misaki("ˈk\u{00E9}fe") == "kˈɛfɛ")
+    }
+
+    @Test func aLetterOfItsOwnInIPAWithADiacriticInItIsKept() {
+        // ç, as one character and as c with a combining cedilla: one character either way.
+        let precomposed = misaki("ˈ\u{00E7}iː")
+        let decomposed = misaki("ˈc\u{0327}iː")
+        #expect(precomposed == "\u{00E7}ˈi")
+        #expect(decomposed == "\u{00E7}ˈi")
+        #expect(precomposed.unicodeScalars.first == "\u{00E7}")
+        #expect(MisakiPhonemes.unknownSymbols(in: precomposed, symbols: MisakiPhonemes.usSymbols) == ["\u{00E7}"])
     }
 }
 

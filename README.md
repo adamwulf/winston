@@ -462,12 +462,14 @@ Apple's on-device model (`SystemLanguageModel.default`; no network, no key),
 which isn't there without Apple Intelligence, while it is turned off, or while
 its model downloads. The model knows standard IPA far better than Kokoro's
 notation, so it is asked for IPA for American English, and
-`MisakiPhonemes.fromIPA` converts each answer: diphthongs to capitals, r to ɹ,
-g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and ɜɹ, e and o to ɛ and ɔ before
-an r unless marked long, syllable dots, hyphens, length marks, slashes and tie
-bars dropped, a syllabic consonant given ᵊ, and
-each stress mark moved from the start of its syllable to right before its
-vowel. Repeats are dropped, and every symbol is checked against the loaded
+`MisakiPhonemes.fromIPA` converts each answer: diphthongs to capitals (the
+vowel of "say" is eɪ or eː, and a bare e is the vowel of "bed", ɛ, as the
+prompt asks), r to ɹ, g to ɡ, tʃ and dʒ to ʧ and ʤ, ɚ and ɝ to əɹ and ɜɹ, o to
+ɔ before an r unless marked long, syllable dots, hyphens, length marks,
+slashes, tie bars and other diacritics dropped (ç stays ç), a syllabic
+consonant given ᵊ, and each stress mark moved from the start of its syllable to
+right before its vowel. A word written without spaces gets one word of
+phonemes: a space in its IPA only breaks syllables. Repeats are dropped, and every symbol is checked against the loaded
 Kokoro model's `vocab_index.json` (misaki's US symbols while no model is
 ready); a suggestion with a symbol Kokoro doesn't have says so and can't be
 used. The model's IPA isn't held to IPA's symbols with a pattern guide: on

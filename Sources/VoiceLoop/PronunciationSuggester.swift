@@ -91,8 +91,13 @@ enum MisakiPhonemes {
     private static let consonants = "bdfhjklmnpstvwzɡŋɹʃʒðθʤʧɾ"
     private static let vowels = "əiuɑɔɛɜɪʊʌæᵻᵊAIOWY"
     /// The vowels a stress mark goes before: all but ᵊ, which is never stressed, and the IPA
-    /// vowels misaki doesn't use, which come through unconverted.
-    private static let stressedVowels: Set<Character> = Set(vowels.filter { $0 != "ᵊ" } + "øœɯɤɘɵɞɶ")
+    /// vowels misaki doesn't use, which come through unconverted (Kokoro's vocabulary has some,
+    /// such as y).
+    private static let stressedVowels: Set<Character> = Set(vowels.filter { $0 != "ᵊ" } + "yøœɯɤɘɵɞɶ")
+
+    /// The combining marks kept through `withoutDiacritics(_:)`: the cedilla of ç, a letter of
+    /// its own in IPA, and the syllabic marks, which `symbols(in:)` reads.
+    private static let keptMarks: Set<Unicode.Scalar> = ["\u{0327}", "\u{0329}", "\u{030D}"]
 
     /// The symbols of `phonemes` that aren't in `symbols`, each once, in order. Spaces don't count:
     /// they part the phonemes' words.
@@ -106,26 +111,43 @@ enum MisakiPhonemes {
 
     /// `ipa`, standard IPA for American English (such as "ˈwɪn.stən"), in misaki's notation
     /// ("wˈɪnstən"). Each word is converted on its own, and they are kept apart by one space.
-    /// Symbols it doesn't convert are kept, for `unknownSymbols(in:symbols:)` to find.
-    static func fromIPA(_ ipa: String) -> String {
-        ipa.precomposedStringWithCanonicalMapping
-            .split(whereSeparator: \.isWhitespace)
-            .map { word(fromIPA: $0) }
+    /// `asOneWord` says `ipa` is all one word, as for a word written without spaces: a space in it
+    /// then only breaks syllables, as a dot does ("ˈwɪn stən" is wˈɪnstən). Symbols it doesn't
+    /// convert are kept, for `unknownSymbols(in:symbols:)` to find.
+    static func fromIPA(_ ipa: String, asOneWord: Bool = false) -> String {
+        let words = withoutDiacritics(ipa).split(whereSeparator: \.isWhitespace).map(String.init)
+        if asOneWord {
+            return word(fromIPA: words.joined(separator: "."))
+        }
+        return words
+            .map(word(fromIPA:))
             .filter { !$0.isEmpty }
             .joined(separator: " ")
     }
 
-    /// One word of `fromIPA(_:)`.
-    private static func word(fromIPA ipa: Substring) -> String {
+    /// `ipa` without the diacritics misaki doesn't mark, such as the nasal tilde ([bĩn] is bin)
+    /// and tie bars (t͡ʃ), whether a letter comes with its diacritic or after it. A letter of its
+    /// own in IPA, such as ç, is kept, as are syllabic marks.
+    private static func withoutDiacritics(_ ipa: String) -> String {
+        var kept = String.UnicodeScalarView()
+        for scalar in ipa.decomposedStringWithCanonicalMapping.unicodeScalars
+        where scalar.properties.generalCategory != .nonspacingMark || keptMarks.contains(scalar) {
+            kept.append(scalar)
+        }
+        return String(kept).precomposedStringWithCanonicalMapping
+    }
+
+    /// One word of `fromIPA(_:asOneWord:)`.
+    private static func word(fromIPA ipa: String) -> String {
         stressMoved(converted(symbols(in: ipa)))
     }
 
     /// `ipa`'s symbols, one string each, without what misaki doesn't mark: the slashes or brackets
-    /// around a transcription, length (ː ˑ), aspiration (ʰ), tie bars (t͡ʃ) and other diacritics.
-    /// A syllabic consonant ("n̩") gets the faint vowel misaki puts before it (ᵊn), or a schwa
-    /// before ɹ. Syllable breaks, a dot or a hyphen, are kept as dots, so that `converted(_:)`
-    /// doesn't join the vowels on either side of one; it then drops them.
-    private static func symbols(in ipa: Substring) -> [String] {
+    /// around a transcription, length (ː ˑ) and aspiration (ʰ); `withoutDiacritics(_:)` has taken
+    /// out the diacritics. A syllabic consonant ("n̩") gets the faint vowel misaki puts before it
+    /// (ᵊn), or a schwa before ɹ. Syllable breaks, a dot or a hyphen, are kept as dots, so that
+    /// `converted(_:)` doesn't join the vowels on either side of one; it then drops them.
+    private static func symbols(in ipa: String) -> [String] {
         var symbols: [String] = []
         for scalar in ipa.unicodeScalars {
             switch scalar {
@@ -136,7 +158,7 @@ enum MisakiPhonemes {
             case "-", "‿":
                 symbols.append(".")
             case "ː", "ˑ":
-                // A long e or o is the vowel of "say" or "go" even before an r: kɔˈroːro is
+                // A long e or o is the vowel of "say" or "go", even before an r: kɔˈroːro is
                 // Kokoro, not "kor-or-o".
                 switch symbols.last {
                 case "e": symbols[symbols.count - 1] = "A"
@@ -146,7 +168,6 @@ enum MisakiPhonemes {
             case "/", "[", "]", "ʰ":
                 continue
             default:
-                guard scalar.properties.generalCategory != .nonspacingMark else { continue }
                 symbols.append(String(scalar))
             }
         }
@@ -155,7 +176,7 @@ enum MisakiPhonemes {
 
     /// Two IPA symbols that misaki writes as one.
     private static let pairs: [String: String] = [
-        "eɪ": "A", "ei": "A",
+        "eɪ": "A",
         "aɪ": "I", "ai": "I", "ɑɪ": "I", "ʌɪ": "I",
         "aʊ": "W", "au": "W", "ɑʊ": "W", "æʊ": "W",
         "ɔɪ": "Y", "oɪ": "Y", "ɔi": "Y",
@@ -168,15 +189,16 @@ enum MisakiPhonemes {
         "r": ["ɹ"], "ɻ": ["ɹ"],
         "g": ["ɡ"],
         "ɚ": ["ə", "ɹ"], "ɝ": ["ɜ", "ɹ"],
-        // On their own, in American English: the vowel of "father", and the reduced vowels.
-        "a": ["ɑ"], "ɒ": ["ɑ"], "ɐ": ["ə"], "ɨ": ["ᵻ"], "ʉ": ["u"],
+        // On their own, in American English: the vowels of "bed" and "father", and the reduced
+        // vowels. The vowel of "say" is eɪ, or eː (see `symbols(in:)`).
+        "e": ["ɛ"], "a": ["ɑ"], "ɒ": ["ɑ"], "ɐ": ["ə"], "ɨ": ["ᵻ"], "ʉ": ["u"],
         "ɫ": ["l"], "ʍ": ["w"],
         ".": [],
     ]
 
     /// `symbols` in misaki's: diphthongs and affricates joined, and each symbol misaki writes
-    /// otherwise replaced. Before an r, e and o are the vowels of "air" and "or" (ɛ, ɔ); elsewhere,
-    /// or marked long (see `symbols(in:)`), they are the diphthongs of "say" and "go" (A, O).
+    /// otherwise replaced. A bare e is the vowel of "bed" (ɛ). Before an r, o is the vowel of "or"
+    /// (ɔ); elsewhere, or marked long (see `symbols(in:)`), it is the diphthong of "go" (O).
     /// American English says ɜ only before an r, so one without is given it.
     private static func converted(_ symbols: [String]) -> [String] {
         var result: [String] = []
@@ -191,7 +213,6 @@ enum MisakiPhonemes {
             }
             let beforeR = next.map(isRhotic) ?? false
             switch symbol {
-            case "e": result.append(beforeR ? "ɛ" : "A")
             case "o": result.append(beforeR ? "ɔ" : "O")
             case "ɜ": result += beforeR ? ["ɜ"] : ["ɜ", "ɹ"]
             default: result += singles[symbol] ?? [symbol]

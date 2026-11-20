@@ -48,6 +48,8 @@ import Testing
 
     @Test func theIPAOfOneWordIsOneWordThoughTheModelSpacedItsSyllables() {
         #expect(suggestion("ˈwɪn stən", for: " Winston ").phonemes == "wˈɪnstən")
+        // The space breaks syllables: joined, o and ɪ would be the diphthong of "boy".
+        #expect(suggestion("ˈɡo ɪŋ", for: "going").phonemes == "ɡˈOɪŋ")
         // Several words keep their spaces.
         #expect(suggestion("ˈnu ˈjɔrk", for: "New York").phonemes == "nˈu jˈɔɹk")
     }

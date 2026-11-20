@@ -25,12 +25,11 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
 
     /// `pronunciation` of `word` in Kokoro's notation. The model sometimes puts a space between
     /// the syllables of one word ("ˈwɪn stən"), which Kokoro would say as two, so the IPA of a
-    /// word without spaces is made one word.
+    /// word without spaces is one word, its spaces syllable breaks.
     static func suggestion(from pronunciation: GeneratedPronunciation, for word: String) -> PronunciationSuggestion {
         let isOneWord = !word.trimmingCharacters(in: .whitespacesAndNewlines).contains(where: \.isWhitespace)
-        let ipa = isOneWord ? pronunciation.ipa.filter { !$0.isWhitespace } : pronunciation.ipa
         return PronunciationSuggestion(
-            phonemes: MisakiPhonemes.fromIPA(ipa),
+            phonemes: MisakiPhonemes.fromIPA(pronunciation.ipa, asOneWord: isOneWord),
             respelling: pronunciation.respelling,
             note: pronunciation.note
         )
@@ -114,7 +113,9 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         // character class nor anchors, and the alternation it does take, (?:p|b|…|ˈ|ˌ| )+, made
         // a request take 36 to 104 s rather than about 2. A symbol Kokoro doesn't have makes a
         // suggestion unusable instead (see `PronunciationCandidate`).
-        @Guide(description: "The same pronunciation in standard IPA for American English, with ˈ at the start of the stressed syllable and ˌ at the start of a syllable with secondary stress, such as wɑˈkin")
+        // The vowels of "say" and "bed" as eɪ and ɛ, which the conversion reads that way: a bare
+        // e is the vowel of "bed" to it.
+        @Guide(description: "The same pronunciation in standard IPA for American English, with ˈ at the start of the stressed syllable and ˌ at the start of a syllable with secondary stress, such as wɑˈkin. Write the vowel of say as eɪ, of bed as ɛ, and of go as oʊ")
         var ipa: String
         @Guide(description: "A few words on who says it this way or where it comes from, such as: Spanish name, the usual way")
         var note: String
