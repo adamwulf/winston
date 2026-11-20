@@ -684,7 +684,8 @@ final class EchoLog {
         // When its first buffer was scheduled; it could be heard `playbackOffsetMs` later.
         fields["firstAudioTMs"] = firstAudio.map { clock.milliseconds(at: $0) }
         fields["synthMs"] = firstAudio.map { TimelineClock.milliseconds(from: ended.started, to: $0) }
-        fields["playedMs"] = ended.playbackFrom.map { TimelineClock.milliseconds(from: $0, to: end.time) }
+        // 0 for a reply stopped before it could be heard, as on a route with a long latency.
+        fields["playedMs"] = ended.playbackFrom.map { max(0, TimelineClock.milliseconds(from: $0, to: end.time)) }
         // The stretch no `mic level` line covered included.
         fields.merge(Self.levelFields(of: ended)) { $1 }
         // False if the line was written before a buffer captured after the end came: after
