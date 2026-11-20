@@ -196,18 +196,35 @@ final class EchoLog {
     private var replies = 0
     /// The reply being said; nil when none is.
     private var reply: Reply?
-    /// Replies that have ended, until their "reply playback" line is written.
+    /// Replies that have ended, until their "reply playback" line is written. At most
+    /// `endedReplyLimit`.
     private var endedReplies: [Reply] = []
-    /// Events noted and not yet written, oldest first.
+    /// Events noted and not yet written, oldest first. At most `eventLimit`.
     private var events: [Event] = []
+    /// Events and ended replies dropped because their queue was full, for the next line written.
+    private var droppedEvents = 0
     private var levelLimiter = RateLimiter(interval: EchoLog.levelInterval)
+
+    /// The most events queued between two writes. A burst between polls brings a handful.
+    nonisolated static let eventLimit = 32
+    /// The most ended replies waiting for their line.
+    nonisolated static let endedReplyLimit = 8
 
     /// `log` is for tests: by default the `voice.echo` logger.
     init(log: Logger? = nil) {
         logger = log ?? Self.log
-        // Room for what a burst notes, so noting one doesn't allocate.
-        events.reserveCapacity(16)
-        endedReplies.reserveCapacity(4)
+        // Room for the most each queue holds, so noting never allocates.
+        events.reserveCapacity(Self.eventLimit)
+        endedReplies.reserveCapacity(Self.endedReplyLimit)
+    }
+
+    /// Queues `event`, or drops and counts it if the queue is full.
+    private func enqueue(_ event: Event) {
+        guard events.count < Self.eventLimit else {
+            droppedEvents += 1
+            return
+        }
+        events.append(event)
     }
 
     // MARK: - Engine
@@ -289,7 +306,7 @@ final class EchoLog {
         if let id {
             lastCue = LastCue(id: id, cue: cue, scheduled: time)
         }
-        events.append(.cue(CueStart(
+        enqueue(.cue(CueStart(
             cue: cue,
             id: id,
             time: time,
@@ -349,7 +366,7 @@ final class EchoLog {
             pipeline: pipeline,
             levels: ReplyLevels(started: started)
         )
-        events.append(.replyStarted(ReplyStart(
+        enqueue(.replyStarted(ReplyStart(
             number: number,
             started: started,
             pipeline: pipeline,
@@ -376,7 +393,7 @@ final class EchoLog {
         if current.firstResultTime == nil {
             reply?.firstResultTime = time
         }
-        events.append(.result(HeardResult(
+        enqueue(.result(HeardResult(
             replySerial: current.serial,
             replyNumber: current.number,
             replyStarted: current.started,
@@ -399,13 +416,17 @@ final class EchoLog {
         replyEndTime = time
         ended.end = ReplyEnd(time: time, reason: reason, micGate: micGate, voiceStarts: voiceStarts, voiceActive: voiceActive)
         ended.levels.close(at: time)
+        guard endedReplies.count < Self.endedReplyLimit else {
+            droppedEvents += 1
+            return
+        }
         endedReplies.append(ended)
     }
 
     /// A preview was playing on the preview player's own engine as voice mode starts; it is
     /// stopped before the microphone is opened.
     func previewStoppedForVoiceMode() {
-        events.append(.previewStopped)
+        enqueue(.previewStopped)
     }
 
     // MARK: - Writing
@@ -441,7 +462,7 @@ final class EchoLog {
     /// Audio is about to play outside voice processing while voice mode runs, so echo
     /// cancellation can't take it out of what the microphone hears. `source` says what plays it.
     func audioOutsideVoiceProcessing(source: String, voiceMode: String) {
-        logger.notice("audio outside voice processing", ["source": source, "voiceMode": voiceMode])
+        logger.notice("audio outside voice processing", context(nil, at: 0, ["source": source, "voiceMode": voiceMode]))
     }
 
     /// Takes the readings of `pipeline`'s microphone buffers that have come since the last call,
@@ -480,7 +501,7 @@ final class EchoLog {
             case .cue(let cue): write(cue)
             case .replyStarted(let start): write(start)
             case .result(let result): write(result)
-            case .previewStopped: logger.notice("preview stopped as voice mode starts", [:])
+            case .previewStopped: logger.notice("preview stopped as voice mode starts", context(nil, at: 0, [:]))
             }
         }
     }
@@ -631,7 +652,8 @@ final class EchoLog {
 
     // MARK: - Helpers
 
-    /// `fields` with `session` and `tMs` on `pipeline`'s timeline, if there is one.
+    /// `fields` with `session` and `tMs` on `pipeline`'s timeline, if there is one, and
+    /// `droppedEvents`, the events and ended replies dropped since the last line said so.
     private func context(
         _ pipeline: Pipeline?,
         at hostTime: UInt64,
@@ -641,6 +663,10 @@ final class EchoLog {
         if let pipeline {
             context["session"] = pipeline.timeline.session
             context["tMs"] = pipeline.timeline.clock.milliseconds(at: hostTime)
+        }
+        if droppedEvents > 0 {
+            context["droppedEvents"] = droppedEvents
+            droppedEvents = 0
         }
         return context
     }
