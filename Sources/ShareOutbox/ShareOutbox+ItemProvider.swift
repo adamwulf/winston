@@ -14,8 +14,11 @@ extension ShareOutbox {
     /// A shared file usually comes with both. The content's copy is named after the sharing app's
     /// suggested name, which it may not give, leaving a name such as "Zip archive.zip", so the
     /// file URL comes first. If it can't be read, the content is copied instead.
+    ///
+    /// Runs on the caller's actor, since `NSItemProvider` isn't Sendable: the share extension's
+    /// main actor. The content's copy is made on the provider's own queue.
     @discardableResult
-    public func add(_ provider: NSItemProvider, for agentID: Int64) async throws -> OutboxItem {
+    public nonisolated(nonsending) func add(_ provider: NSItemProvider, for agentID: Int64) async throws -> OutboxItem {
         let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
         // Highest fidelity first. A URL is data too, but not a file's content.
         let contentType = types.first { $0.conforms(to: .data) && !$0.conforms(to: .url) }
@@ -48,7 +51,7 @@ extension ShareOutbox {
 
     /// Copies the provider's content as `type` into the outbox. The file it loads is a temporary
     /// copy that is removed once the completion handler returns, so it's copied in the handler.
-    private func addFileRepresentation(
+    private nonisolated(nonsending) func addFileRepresentation(
         of provider: NSItemProvider,
         type: UTType,
         suggestedName: String?,
@@ -83,7 +86,7 @@ extension ShareOutbox {
         return try add(fileAt: url, named: url.lastPathComponent, typeIdentifier: type.identifier, for: agentID)
     }
 
-    private static func loadFileURL(from provider: NSItemProvider) async throws -> URL {
+    private nonisolated(nonsending) static func loadFileURL(from provider: NSItemProvider) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             _ = provider.loadObject(ofClass: URL.self) { url, error in
                 if let url, url.isFileURL {
