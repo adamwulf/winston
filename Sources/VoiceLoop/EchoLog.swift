@@ -160,7 +160,7 @@ final class EchoLog {
         let started: UInt64
         let pipeline: Pipeline
         let micGate: MicGate
-        let cuesUnfinished: [SoundCue]
+        let cuesUnfinished: [(id: Int, cue: SoundCue)]
         let previewPlaying: Bool
         let repliesSinceEngineStart: Int
         let engineStartTime: UInt64?
@@ -381,11 +381,11 @@ final class EchoLog {
         }
     }
 
-    /// The cue player was stopped to make way for a reply, cutting off cues `ids`: the stop
-    /// began at `stopStarted` and returned at `stopEnded` (host time). A cue whose natural end
-    /// has already been noted wasn't cut off.
-    func cuesCutOff(ids: [Int], stopStarted: UInt64, stopEnded: UInt64) {
-        guard let cue = lastCue, cue.ended == nil, ids.contains(cue.id) else { return }
+    /// The cue player was stopped to make way for a reply, cutting off `cues`: the stop began at
+    /// `stopStarted` and returned at `stopEnded` (host time). A cue whose natural end has
+    /// already been noted wasn't cut off.
+    func cuesCutOff(_ cues: [(id: Int, cue: SoundCue)], stopStarted: UInt64, stopEnded: UInt64) {
+        guard let cue = lastCue, cue.ended == nil, cues.contains(where: { $0.id == cue.id }) else { return }
         lastCue?.cutStarted = stopStarted
         lastCue?.ended = stopEnded
     }
@@ -399,7 +399,7 @@ final class EchoLog {
         at started: UInt64,
         firstAudio: @escaping () -> UInt64?,
         micGate: MicGate,
-        cuesUnfinished: [SoundCue],
+        cuesUnfinished: [(id: Int, cue: SoundCue)],
         previewPlaying: Bool
     ) {
         repliesSinceEngineStart += 1
@@ -650,7 +650,7 @@ final class EchoLog {
             fields["sinceCueEndMs"] = Self.milliseconds(since: lastCue.ended, to: start.started)
             fields["lastCueCutOff"] = lastCue.cutOff
         }
-        fields["cuesUnfinished"] = start.cuesUnfinished.isEmpty ? "none" : start.cuesUnfinished.map { "\($0)" }.joined(separator: ",")
+        fields["cuesUnfinished"] = start.cuesUnfinished.isEmpty ? "none" : start.cuesUnfinished.map { "\($0.cue)" }.joined(separator: ",")
         // The volumes and the pitch shift as the line is written, a moment after the start.
         fields["speechVolume"] = Self.volume(pipeline.speech.player.volume)
         fields["cueVolume"] = Self.volume(pipeline.cuePlayer.volume)

@@ -872,7 +872,6 @@ public final class VoiceLoop {
         guard playsSoundCues, let pipeline, pipeline.engine.isRunning else { return false }
         lastCueID += 1
         let id = lastCueID
-        let queuedBehind = unfinishedCues.count
         unfinishedCues.append((id, cue))
         // The working cue starts once the reply before it is out of the pitch shift.
         let leadIn = cue == .agentWorking ? workingCueLeadIn : 0
@@ -889,7 +888,7 @@ public final class VoiceLoop {
             cue,
             id: id,
             leadIn: leadIn,
-            queuedBehind: queuedBehind,
+            queuedBehind: unfinishedCues.count - 1,
             replyPlaying: currentSpeech != nil,
             on: pipeline
         )
@@ -1937,8 +1936,8 @@ public final class VoiceLoop {
         guard let pipeline, pipeline.engine.isRunning, currentSpeech == nil, transcript.isEmpty,
               !isTalking, release == nil, !speechQueue.isEmpty else { return }
         let text = speechQueue.removeFirst()
-        // For the echo log, before a working cue among them is cut off.
-        let cuesUnfinished = unfinishedCues.map(\.cue)
+        // For the echo log, before a working cue among them is cut off. A copy, not a new array.
+        let cuesUnfinished = unfinishedCues
         cutOffWorkingCue(on: pipeline)
         // Each message takes the pitch as it is now, also on a new or restarted engine.
         pipeline.speech.setPitch(speechPitch)
@@ -2232,12 +2231,13 @@ public final class VoiceLoop {
     private func cutOffWorkingCue(on pipeline: Pipeline) {
         guard unfinishedCues.contains(where: { $0.cue == .agentWorking }) else { return }
         let otherCues = unfinishedCues.map(\.cue).filter { $0 != .agentWorking }
-        // For the echo log: the cut-off is known here, before any completion reports it.
-        let cutOff = unfinishedCues.map(\.id)
+        // For the echo log: the cut-off is known here, before any completion reports it. A
+        // copy, not a new array.
+        let cutOff = unfinishedCues
         unfinishedCues = []
         let stopStarted = TimelineClock.now()
         pipeline.cuePlayer.stop()
-        echo.cuesCutOff(ids: cutOff, stopStarted: stopStarted, stopEnded: TimelineClock.now())
+        echo.cuesCutOff(cutOff, stopStarted: stopStarted, stopEnded: TimelineClock.now())
         hasPlayedWorkingCue = false
         Self.log.info("working cue cut off", ["reason": "speaking"])
         for cue in otherCues {
