@@ -1,5 +1,7 @@
 import Foundation
 import ImageIO
+import Logging
+import LogSupport
 import UniformTypeIdentifiers
 
 /// Image file work done off the main actor with ImageIO, the same way on iOS and macOS.
@@ -8,6 +10,8 @@ public enum PhotoFiles {
         case unreadableImage
         case encodingFailed
     }
+
+    private static let log = Logger(label: "app.photos")
 
     /// Downscales an image to at most 2560 px on its long side, encodes it as JPEG at quality 0.85,
     /// and writes it to a temporary file to pass to `sendPhoto`.
@@ -55,9 +59,23 @@ public enum PhotoFiles {
         let options = [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary
         CGImageDestinationAddImage(destination, image, options)
         guard CGImageDestinationFinalize(destination) else {
+            // Finalizing can fail after writing part of the file, which nothing else would remove.
+            removePartialFile(url)
             throw Failure.encodingFailed
         }
         return url
+    }
+
+    /// Removes what a failed encoding left at `url`, if anything.
+    private static func removePartialFile(_ url: URL) {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing was written.
+        } catch {
+            // Codes only: a file error's description names the file.
+            log.warning("removing a partial JPEG failed", error.logCodes())
+        }
     }
 
     /// Decodes an image file at a display size, upright. Nil if the file isn't a readable image.
