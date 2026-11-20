@@ -1115,23 +1115,23 @@ public final class AppModel {
     }
 
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
-    /// asks nothing until its `generate()` is called. Each candidate is checked against the
-    /// phoneme symbols Kokoro has as the suggester answers, and again each time the Kokoro
-    /// model's state changes, which changes them.
+    /// asks nothing until its `generate()` is called. Its candidates are checked against the
+    /// phoneme symbols the Kokoro voices can say now (`VoiceLoop.kokoroPhonemeSymbols`), each time
+    /// they are read.
     public func pronunciationSuggestions(for word: String) -> PronunciationSuggestions {
         PronunciationSuggestions(word: word, suggester: pronunciationSuggester) { [voiceLoop] in
-            await voiceLoop.kokoroPhonemeSymbols()
-        } readSymbolsSource: { [voiceLoop] in
-            _ = voiceLoop.kokoroModelState
+            voiceLoop.kokoroPhonemeSymbols
         }
     }
 
     /// Fills the pronunciation with `id` with `candidate`'s phonemes, as IPA, and saves it, for the
     /// suggestion list's Use button. Returns whether it did: not for a candidate with a symbol
-    /// Kokoro doesn't have, nor once the pronunciation is gone.
+    /// Kokoro doesn't have now, whatever it had when the candidate was made, nor once the
+    /// pronunciation is gone.
     @discardableResult
     public func use(_ candidate: PronunciationCandidate, forPronunciation id: Pronunciation.ID) -> Bool {
-        guard candidate.isUsable, let index = pronunciations.firstIndex(where: { $0.id == id }) else { return false }
+        let checked = PronunciationCandidate(candidate.suggestion, symbols: voiceLoop.kokoroPhonemeSymbols)
+        guard checked.isUsable, let index = pronunciations.firstIndex(where: { $0.id == id }) else { return false }
         pronunciations[index].replacement = candidate.suggestion.phonemes
         pronunciations[index].mode = .phonetic
         return true

@@ -2,7 +2,8 @@ import Foundation
 import Testing
 import VoiceLoop
 import VoiceLoopTestSupport
-// For `PronunciationSuggestions`' own init, which takes the symbols to check against.
+// For `PronunciationSuggestions`' own init, which takes the symbols to check against and tells
+// when an answer was handled.
 @testable import WinstonCore
 
 /// The Suggest button on an IPA pronunciation in settings, and the list it opens: when it shows,
@@ -14,10 +15,11 @@ struct PronunciationSuggestionTests {
         PronunciationSuggestion(phonemes: phonemes, respelling: respelling, note: note)
     }
 
-    /// The list's candidates once it has loaded, or nil.
+    /// The list's candidates, checked against the symbols Kokoro has now, once it has loaded, or
+    /// nil.
     private func candidates(of suggestions: PronunciationSuggestions) -> [PronunciationCandidate]? {
-        guard case .loaded(let candidates) = suggestions.phase else { return nil }
-        return candidates
+        guard case .loaded = suggestions.phase else { return nil }
+        return suggestions.candidates
     }
 
     @Test func theSuggestButtonShowsOnlyWhileTheSuggesterCanRun() {
@@ -122,7 +124,7 @@ struct PronunciationSuggestionTests {
         #expect(candidates.map(\.isUsable) == [true, false])
     }
 
-    @Test func theSuggestionsShownAreCheckedAgainWhenTheKokoroModelsSymbolsChange() async throws {
+    @Test func theSuggestionsShownFollowTheSymbolsKokoroCanSayNow() async throws {
         let harness = Harness()
         let model = harness.model
         // The loaded model's vocabulary has y, which misaki's US symbols lack.
@@ -135,16 +137,35 @@ struct PronunciationSuggestionTests {
         suggestions.generate()
         #expect(await eventually { suggestions.phase != .loading })
         // While the model loads, the fallback symbols are the ones there are.
-        #expect(try #require(candidates(of: suggestions)).map(\.isUsable) == [false])
+        #expect(try #require(candidates(of: suggestions)).map(\.unknownSymbols) == [["y"]])
 
         harness.bed.kokoro.finishLoading(succeeding: true)
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
 
-        #expect(await eventually { candidates(of: suggestions)?.map(\.isUsable) == [true] })
+        #expect(try #require(candidates(of: suggestions)).map(\.isUsable) == [true])
         // A system voice frees the model, and the fallback symbols are back.
         model.voiceIdentifier = nil
-        #expect(await eventually { candidates(of: suggestions)?.map(\.isUsable) == [false] })
-        // Checked, not asked again.
+        #expect(try #require(candidates(of: suggestions)).map(\.isUsable) == [false])
+        // Checked each time, not asked again.
         #expect(harness.suggester.words == ["Lübeck"])
+    }
+
+    @Test func theSuggestionsShownAreObservableThroughTheSymbolsKokoroCanSay() async throws {
+        let harness = Harness()
+        let model = harness.model
+        harness.bed.kokoro.symbols = Set("lˈybɛk")
+        harness.suggester.answers = [.success([suggestion("lˈybɛk")])]
+        let suggestions = model.pronunciationSuggestions(for: "Lübeck")
+        suggestions.generate()
+        #expect(await eventually { suggestions.phase != .loading })
+        // What a view showing the candidates sees change.
+        let usable = ValueLog { suggestions.candidates.map(\.isUsable) }
+
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+
+        #expect(usable.values.first == [false])
+        #expect(usable.values.last == [true])
     }
 
     @Test func aFailureSaysWhyAndRegenerateAsksAgain() async throws {
@@ -174,23 +195,23 @@ struct PronunciationSuggestionTests {
         #expect(suggestions.phase == .loaded([]))
     }
 
-    /// Counts the times a list read Kokoro's symbols: once for each answer it handled, right
-    /// before it shows that answer or drops it as stale, in the same turn of the main actor.
+    /// Counts the answers a list has handled, shown or dropped.
     @MainActor
-    private final class SymbolReads {
+    private final class HandledAnswers {
         var count = 0
     }
 
-    /// A list of `word`'s suggestions from `suggester`, counting its reads of Kokoro's symbols in
-    /// `reads`, so a test can tell when it has handled an answer it drops.
+    /// A list of `word`'s suggestions from `suggester`, counting the answers it handles in
+    /// `handled`, so a test can tell when it has dropped one.
     private func suggestions(
         for word: String,
         from suggester: FakePronunciationSuggester,
-        reads: SymbolReads
+        handled: HandledAnswers
     ) -> PronunciationSuggestions {
         PronunciationSuggestions(word: word, suggester: suggester) {
-            reads.count += 1
-            return Set("wˈɪnstənɑ")
+            Set("wˈɪnstənɑ")
+        } answerHandled: {
+            handled.count += 1
         }
     }
 
@@ -198,8 +219,8 @@ struct PronunciationSuggestionTests {
         let suggester = FakePronunciationSuggester()
         suggester.holdsAnswers = true
         suggester.answers = [.success([suggestion("wˈɪnstən")]), .success([suggestion("wɪnstˈɑn")])]
-        let reads = SymbolReads()
-        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
+        let handled = HandledAnswers()
+        let suggestions = suggestions(for: "Winston", from: suggester, handled: handled)
         suggestions.generate()
         #expect(await eventually { suggester.heldAnswers == 1 })
 
@@ -212,7 +233,7 @@ struct PronunciationSuggestionTests {
         #expect(await eventually { suggestions.phase != .loading })
         #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
         suggester.releaseAnswer(0)
-        #expect(await eventually { reads.count == 2 })
+        #expect(await eventually { handled.count == 2 })
         // Handled, and dropped.
         #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
     }
@@ -221,8 +242,8 @@ struct PronunciationSuggestionTests {
         let suggester = FakePronunciationSuggester()
         suggester.holdsAnswers = true
         suggester.answers = [.success([suggestion("wˈɪnstən")]), .success([suggestion("wɪnstˈɑn")])]
-        let reads = SymbolReads()
-        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
+        let handled = HandledAnswers()
+        let suggestions = suggestions(for: "Winston", from: suggester, handled: handled)
         suggestions.generate()
         #expect(await eventually { suggester.heldAnswers == 1 })
         suggestions.generate()
@@ -230,7 +251,7 @@ struct PronunciationSuggestionTests {
 
         suggester.releaseAnswer(0)
 
-        #expect(await eventually { reads.count == 1 })
+        #expect(await eventually { handled.count == 1 })
         // Handled, and dropped: the newer request is still under way.
         #expect(suggestions.phase == .loading)
         suggester.releaseAnswer(1)
@@ -242,8 +263,8 @@ struct PronunciationSuggestionTests {
         let suggester = FakePronunciationSuggester()
         suggester.holdsAnswers = true
         suggester.answers = [.success([suggestion("wˈɪnstən")])]
-        let reads = SymbolReads()
-        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
+        let handled = HandledAnswers()
+        let suggestions = suggestions(for: "Winston", from: suggester, handled: handled)
         suggestions.generate()
         #expect(await eventually { suggester.heldAnswers == 1 })
 
@@ -251,7 +272,7 @@ struct PronunciationSuggestionTests {
 
         #expect(await eventually { suggester.cancelledRequests == [0] })
         suggester.releaseAnswer(0)
-        #expect(await eventually { reads.count == 1 })
+        #expect(await eventually { handled.count == 1 })
         #expect(suggestions.phase == .loading)
     }
 
@@ -272,6 +293,29 @@ struct PronunciationSuggestionTests {
         #expect(model.pronunciations == [Pronunciation(id: model.pronunciations[0].id, word: "JSON", replacement: "Jason"), filled])
         #expect(model.voiceLoop.pronunciations == model.pronunciations)
         #expect(harness.relaunchedModel().pronunciations == model.pronunciations)
+    }
+
+    @Test func aSuggestionIsUsedOnlyIfKokoroCanSayItNow() async throws {
+        let harness = Harness()
+        let model = harness.model
+        harness.bed.kokoro.symbols = Set("lˈybɛk")
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        let lubeck = Pronunciation(word: "Lübeck", mode: .phonetic)
+        model.pronunciations = [lubeck]
+        harness.suggester.answers = [.success([suggestion("lˈybɛk")])]
+        let suggestions = model.pronunciationSuggestions(for: lubeck.word)
+        suggestions.generate()
+        #expect(await eventually { suggestions.phase != .loading })
+        // Usable while the model is ready, as the list showed it.
+        let candidate = try #require(candidates(of: suggestions)?.first)
+        #expect(candidate.isUsable)
+
+        // Freed before Use: the fallback symbols lack y.
+        model.voiceIdentifier = nil
+
+        #expect(!model.use(candidate, forPronunciation: lubeck.id))
+        #expect(model.pronunciations == [lubeck])
     }
 
     @Test func aSuggestionWithASymbolKokoroLacksOrForAPronunciationSinceRemovedIsNotUsed() async throws {

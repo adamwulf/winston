@@ -31,6 +31,23 @@ public struct PronunciationSuggestion: Hashable, Sendable {
         self.respelling = respelling
         self.note = note
     }
+
+    /// `suggestions` as settings lists them: trimmed, without those with no phonemes or the same
+    /// phonemes as one before. Each then has phonemes no other has.
+    public static func listed(_ suggestions: [PronunciationSuggestion]) -> [PronunciationSuggestion] {
+        var seen: Set<String> = []
+        var listed: [PronunciationSuggestion] = []
+        for suggestion in suggestions {
+            let phonemes = suggestion.phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !phonemes.isEmpty, seen.insert(phonemes).inserted else { continue }
+            listed.append(PronunciationSuggestion(
+                phonemes: phonemes,
+                respelling: suggestion.respelling.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: suggestion.note.trimmingCharacters(in: .whitespacesAndNewlines)
+            ))
+        }
+        return listed
+    }
 }
 
 /// Why a `PronunciationSuggester` suggested nothing.
@@ -45,12 +62,21 @@ public enum PronunciationSuggestionError: String, Error, Sendable {
     case failed
 }
 
-/// A suggestion as settings lists it: with the symbols in its phonemes that Kokoro doesn't have.
-/// One with any can't be used, since Kokoro would drop them.
+/// A suggestion as settings lists it, checked against the symbols Kokoro has: with the symbols in
+/// its phonemes that Kokoro doesn't have. One with any can't be used, since Kokoro would drop them.
+/// The check holds for the symbols it was made with; settings makes candidates afresh from the
+/// symbols Kokoro has now each time it shows them.
 public struct PronunciationCandidate: Hashable, Sendable, Identifiable {
     public let suggestion: PronunciationSuggestion
     /// The symbols of `suggestion.phonemes` that Kokoro doesn't have, each once, in order.
     public let unknownSymbols: [Character]
+
+    /// `suggestion` checked against `symbols`, the ones Kokoro has (see
+    /// `VoiceLoop.kokoroPhonemeSymbols`).
+    public init(_ suggestion: PronunciationSuggestion, symbols: Set<Character>) {
+        self.suggestion = suggestion
+        unknownSymbols = MisakiPhonemes.unknownSymbols(in: suggestion.phonemes, symbols: symbols)
+    }
 
     /// Its phonemes, which no other candidate in a list has.
     public var id: String { suggestion.phonemes }
@@ -58,26 +84,10 @@ public struct PronunciationCandidate: Hashable, Sendable, Identifiable {
     /// Whether Kokoro has every symbol of its phonemes, so it can fill an IPA pronunciation.
     public var isUsable: Bool { unknownSymbols.isEmpty }
 
-    /// `suggestions` as settings lists them: trimmed, without those with no phonemes or the same
-    /// phonemes as one before, and with their phonemes checked against `symbols`, the ones Kokoro
-    /// has (see `VoiceLoop.kokoroPhonemeSymbols()`).
+    /// `suggestions` as settings lists them (see `PronunciationSuggestion.listed(_:)`), each
+    /// checked against `symbols`.
     public static func candidates(from suggestions: [PronunciationSuggestion], symbols: Set<Character>) -> [PronunciationCandidate] {
-        var seen: Set<String> = []
-        var candidates: [PronunciationCandidate] = []
-        for suggestion in suggestions {
-            let phonemes = suggestion.phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !phonemes.isEmpty, seen.insert(phonemes).inserted else { continue }
-            let trimmed = PronunciationSuggestion(
-                phonemes: phonemes,
-                respelling: suggestion.respelling.trimmingCharacters(in: .whitespacesAndNewlines),
-                note: suggestion.note.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            candidates.append(PronunciationCandidate(
-                suggestion: trimmed,
-                unknownSymbols: MisakiPhonemes.unknownSymbols(in: phonemes, symbols: symbols)
-            ))
-        }
-        return candidates
+        PronunciationSuggestion.listed(suggestions).map { PronunciationCandidate($0, symbols: symbols) }
     }
 }
 

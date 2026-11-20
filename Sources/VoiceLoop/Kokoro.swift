@@ -190,6 +190,9 @@ final class KokoroModel {
     /// The model's dictionary words (see `KokoroEngine.dictionaryWords()`) while it is ready, and
     /// empty otherwise.
     @ObservationIgnored private(set) var dictionaryWords: Set<String> = []
+    /// The model's phoneme symbols (see `KokoroEngine.phonemeSymbols()`) while it is ready, read
+    /// once as it loads, and empty otherwise. Observed, like `state`, which it changes with.
+    private(set) var phonemeSymbols: Set<Character> = []
     @ObservationIgnored let engine: any KokoroEngine
     /// Whether a Kokoro voice is chosen: `load()` was called after the last `release()`.
     @ObservationIgnored private var isWanted = false
@@ -234,6 +237,7 @@ final class KokoroModel {
             let wasReady = state == .ready
             state = .notLoaded
             dictionaryWords = []
+            phonemeSymbols = []
             if variant == nil, wasReady {
                 Self.log.notice("kokoro model released; no model chosen")
                 callEngine { [engine] in
@@ -316,6 +320,7 @@ final class KokoroModel {
             // Before the check below, so no wait comes between it and `.ready`: a `release()`
             // during one would go unseen.
             let words = await engine.dictionaryWords()
+            let symbols = await engine.phonemeSymbols()
             guard self.isWanted, self.variant != nil else {
                 // A system voice, or no model, was chosen while it loaded. The download is kept.
                 // The state changes first, so a `load()` from now on queues a new load after the
@@ -340,6 +345,7 @@ final class KokoroModel {
                 return
             }
             self.dictionaryWords = words
+            self.phonemeSymbols = symbols
             self.state = .ready
             Self.log.notice("kokoro model ready", [
                 "model": requested.rawValue,
@@ -363,6 +369,7 @@ final class KokoroModel {
         case .ready:
             state = .notLoaded
             dictionaryWords = []
+            phonemeSymbols = []
             Self.log.notice("kokoro model released")
             callEngine { [engine] in
                 await engine.unload()
@@ -404,12 +411,14 @@ final class KokoroModel {
         if state == .ready {
             state = .notLoaded
             dictionaryWords = []
+            phonemeSymbols = []
         }
         callEngine { [engine] in
             // Again here: a load under way when the deletion was asked for has finished since.
             if self.state == .ready {
                 self.state = .notLoaded
                 self.dictionaryWords = []
+                self.phonemeSymbols = []
             }
             do {
                 let removed = try await engine.removeStoredModel()
@@ -420,6 +429,7 @@ final class KokoroModel {
             }
             // The engine freed the loaded model either way.
             self.dictionaryWords = []
+            self.phonemeSymbols = []
             self.state = .notLoaded
             if self.isWanted {
                 self.load()

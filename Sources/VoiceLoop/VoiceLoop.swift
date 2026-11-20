@@ -710,17 +710,15 @@ public final class VoiceLoop {
         readyKokoroVoice() != nil
     }
 
-    /// The phoneme symbols the Kokoro voices can say, for checking suggested phonemes: while the
-    /// model is ready, those in its vocabulary; otherwise, or if it can't be read, misaki's
-    /// American English symbols, which Kokoro's dictionaries use.
-    public func kokoroPhonemeSymbols() async -> Set<Character> {
-        if kokoroModel.state == .ready {
-            let symbols = await kokoroModel.engine.phonemeSymbols()
-            if !symbols.isEmpty {
-                return symbols
-            }
+    /// The phoneme symbols the Kokoro voices can say now, for checking suggested phonemes: while
+    /// the model is ready, those in its vocabulary, read as it loaded; otherwise, or if it couldn't
+    /// be read, misaki's American English symbols, which Kokoro's dictionaries use. Observable: it
+    /// changes as the model loads and is freed.
+    public var kokoroPhonemeSymbols: Set<Character> {
+        guard kokoroModel.state == .ready, !kokoroModel.phonemeSymbols.isEmpty else {
+            return MisakiPhonemes.usSymbols
         }
-        return MisakiPhonemes.usSymbols
+        return kokoroModel.phonemeSymbols
     }
 
     /// Says `text`, ready to say as it is, for `preview(_:)`, `preview(asWritten:)` and

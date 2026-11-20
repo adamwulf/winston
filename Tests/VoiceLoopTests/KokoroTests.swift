@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import Observation
 import Synchronization
 import Testing
 @testable import VoiceLoop
@@ -1825,30 +1826,63 @@ struct KokoroPhonemeSymbolTests {
         bed.kokoro.symbols = ["x"]
         let loop = bed.makeLoop()
 
-        #expect(await loop.kokoroPhonemeSymbols() == MisakiPhonemes.usSymbols)
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
         // Still loading.
         bed.kokoro.loadBehavior = .waits
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { bed.kokoro.loads == 1 })
-        #expect(await loop.kokoroPhonemeSymbols() == MisakiPhonemes.usSymbols)
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
         bed.kokoro.finishLoading(succeeding: true)
         #expect(await eventually { loop.kokoroModelState == .ready })
-        #expect(await loop.kokoroPhonemeSymbols() == ["x"])
+        #expect(loop.kokoroPhonemeSymbols == ["x"])
+        // A system voice frees the model.
+        loop.voiceIdentifier = nil
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
     }
 
-    @Test func whileTheModelIsReadyTheyAreItsVocabularysUnlessItCantBeRead() async throws {
+    @Test func theyAreReadOnceAsTheModelLoads() async throws {
         let bed = VoiceTestBed()
+        bed.kokoro.symbols = ["ɹ", "x"]
         let loop = bed.makeLoop()
         loop.voiceIdentifier = "kokoro.af_heart"
         #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroPhonemeSymbols == ["ɹ", "x"])
 
-        // The fake's vocabulary is empty, as when it can't be read.
-        #expect(await loop.kokoroPhonemeSymbols() == MisakiPhonemes.usSymbols)
-        bed.kokoro.symbols = ["ɹ", "x"]
-        #expect(await loop.kokoroPhonemeSymbols() == ["ɹ", "x"])
-        // A system voice frees the model.
+        // A change to the engine's vocabulary shows only once the model loads again.
+        bed.kokoro.symbols = ["y"]
+        #expect(loop.kokoroPhonemeSymbols == ["ɹ", "x"])
         loop.voiceIdentifier = nil
-        #expect(await loop.kokoroPhonemeSymbols() == MisakiPhonemes.usSymbols)
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        #expect(loop.kokoroPhonemeSymbols == ["y"])
+    }
+
+    @Test func aVocabularyThatCantBeReadGivesMisakisUSSymbols() async throws {
+        let bed = VoiceTestBed()
+        let loop = bed.makeLoop()
+
+        // The fake's vocabulary is empty, as the engine's is when its file can't be read.
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+
+        #expect(loop.kokoroPhonemeSymbols == MisakiPhonemes.usSymbols)
+    }
+
+    @Test func theyAreObservable() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.symbols = ["x"]
+        let loop = bed.makeLoop()
+        let changed = Mutex(false)
+        withObservationTracking {
+            _ = loop.kokoroPhonemeSymbols
+        } onChange: {
+            changed.withLock { $0 = true }
+        }
+
+        loop.voiceIdentifier = "kokoro.af_heart"
+
+        #expect(await eventually { loop.kokoroPhonemeSymbols == ["x"] })
+        #expect(changed.withLock { $0 })
     }
 }
 

@@ -105,11 +105,13 @@ private struct PronunciationSuggestionsView: View {
                 case .failed(let message):
                     Text(message)
                         .foregroundStyle(.secondary)
-                case .loaded(let candidates) where candidates.isEmpty:
+                case .loaded(let suggestions) where suggestions.isEmpty:
                     Text("No suggestions. Try Regenerate.")
                         .foregroundStyle(.secondary)
-                case .loaded(let candidates):
-                    ForEach(candidates) { candidate in
+                case .loaded:
+                    // Checked against the symbols Kokoro has now: the rows change as its model
+                    // loads or is freed.
+                    ForEach(suggestions.candidates) { candidate in
                         row(for: candidate)
                     }
                     if let playNote {

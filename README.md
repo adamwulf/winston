@@ -489,10 +489,12 @@ consonant given ᵊ, and each stress mark moved from the start of its syllable t
 right before its vowel. A word written without spaces gets one word of
 phonemes: a space in its IPA only breaks syllables. An optional sound in
 parentheses, such as the (h) of ˈsɪbə(h)n, gives a suggestion without it and
-one with it, so both can be heard. Repeats are dropped, and
-every symbol is checked against the loaded Kokoro model's `vocab_index.json`
-(misaki's US symbols while no model is
-ready); a suggestion with a symbol Kokoro doesn't have says so and can't be
+one with it, so both can be heard. Repeats are dropped, and every symbol is
+checked against the symbols Kokoro can say now (`VoiceLoop.kokoroPhonemeSymbols`):
+the loaded model's `vocab_index.json`, read once as it loads, next to its
+dictionary words, or misaki's US symbols while no model is ready. The check is
+made each time the list shows them, so it follows the model as it loads and is
+freed. A suggestion with a symbol Kokoro doesn't have says so and can't be
 used. The model's IPA isn't held to IPA's symbols with a pattern guide: on
 macOS 27 the guides take no character classes or anchors, and an alternation of
 the symbols made a request take 36 to 104 s rather than about 2. The logs hold
