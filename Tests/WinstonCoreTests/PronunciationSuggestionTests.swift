@@ -217,6 +217,27 @@ struct PronunciationSuggestionTests {
         #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
     }
 
+    @Test func regenerateDropsTheOlderAnswerWhenItComesFirst() async throws {
+        let suggester = FakePronunciationSuggester()
+        suggester.holdsAnswers = true
+        suggester.answers = [.success([suggestion("wˈɪnstən")]), .success([suggestion("wɪnstˈɑn")])]
+        let reads = SymbolReads()
+        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
+        suggestions.generate()
+        #expect(await eventually { suggester.heldAnswers == 1 })
+        suggestions.generate()
+        #expect(await eventually { suggester.cancelledRequests == [0] && suggester.heldAnswers == 2 })
+
+        suggester.releaseAnswer(0)
+
+        #expect(await eventually { reads.count == 1 })
+        // Handled, and dropped: the newer request is still under way.
+        #expect(suggestions.phase == .loading)
+        suggester.releaseAnswer(1)
+        #expect(await eventually { suggestions.phase != .loading })
+        #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
+    }
+
     @Test func closingTheListCancelsItsRequestAndDropsTheAnswer() async throws {
         let suggester = FakePronunciationSuggester()
         suggester.holdsAnswers = true
