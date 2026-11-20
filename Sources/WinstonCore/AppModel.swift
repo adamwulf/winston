@@ -1047,6 +1047,17 @@ public final class AppModel {
         guard !text.isEmpty else { return }
         voiceLoop.preview(asWritten: text)
     }
+
+    /// Plays `word` said with `phonemes`, both trimmed, as `previewPronunciation(_:)` plays text: for an
+    /// IPA pronunciation's phonemes in settings, saved or not. A Kokoro voice whose model is ready says the
+    /// phonemes; any other voice says the word as written, as it would in a reply. Nothing when either is
+    /// blank, so whatever is being said carries on.
+    public func previewPronunciation(word: String, phonemes: String) {
+        let word = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        let phonemes = phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty, !phonemes.isEmpty else { return }
+        voiceLoop.preview(word: word, phonemes: phonemes)
+    }
 }
 
 /// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.
