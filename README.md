@@ -9,7 +9,7 @@ mode, a hands-free voice mode, and [push-to-talk](#push-to-talk). See
 - `Package.swift`: library targets `TelegramLink` (TDLibKit wrapper),
   `VoiceLoop` (listening, pause detection, speech, barge-in) and `WinstonCore`
   (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`,
-  `DocumentFiles`), plus
+  `DocumentFiles`, `OpenedFile`), plus
   their tests. `LogSupport` and `WinstonLogging` hold the logging (see
   [Logging](#logging)).
 - `App/Winston.xcodeproj`: the multiplatform SwiftUI app (iOS 26+, macOS 26+).
@@ -314,6 +314,39 @@ files are listed under the bundles that test it (`Sources/VoiceLoop/` under
 `VoiceLoopTests`), and a bundle's total counts its test files too. The test
 action's result bundle, in the build's artifacts, opens in Xcode with the full
 report.
+
+## Opening files in Winston
+
+Winston declares document types (`CFBundleDocumentTypes` in
+`App/Config/Info.plist`: zip, PDF, images, plain text, and `public.data` for
+any other file) at `LSHandlerRank` Alternate, so it is offered for a file but
+never becomes its default app. There is no share extension and no App Group:
+nothing to set up in the developer portal.
+
+- iOS: Winston shows in the share sheet for a file (Files, Mail and Messages
+  attachments), in the app row or under More. iOS hands over a copy in
+  `Documents/Inbox` (`LSSupportsOpeningDocumentsInPlace` is NO on iOS), which
+  Winston removes once it has its own. The Photos app's share sheet lists
+  only share extensions, so it won't show Winston: Save to Files, then share
+  from Files.
+- Mac: Open With in Finder, or a file dropped on the Dock icon. Files dropped
+  on the window still go straight to the chat shown, as before.
+
+`AppModel.openFile(at:)` copies the file off the main actor as the + button's
+Files does (security-scoped, coordinated, so an iCloud Drive file downloads
+first; a folder is turned down). Once Winston is logged in with its bot chats
+a sheet lists the agents and Cancel, and asks even with one agent. A file
+opened before then waits. Picking an agent sends the file there, without
+changing the chat shown: a still image as a photo (a JPEG of at most 2560 px),
+anything else, an animated GIF included, as a document under its own name.
+Files opened together go to the same agent, in order. A failure shows in the
+sheet and keeps the file for another pick; Cancel removes Winston's copy.
+
+The logs (`label=app.model`) say `file opened` with its type, `opened file
+copied` with whether it goes as a photo or a document, then `opened file
+handed to telegram` with the chat, or `opened files cancelled`. Failures are
+`copying opened file failed` and `sending opened file failed`. No file name
+is logged.
 
 ## Push-to-talk
 
