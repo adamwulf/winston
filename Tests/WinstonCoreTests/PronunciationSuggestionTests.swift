@@ -2,7 +2,8 @@ import Foundation
 import Testing
 import VoiceLoop
 import VoiceLoopTestSupport
-import WinstonCore
+// For `PronunciationSuggestions`' own init, which takes the symbols to check against.
+@testable import WinstonCore
 
 /// The Suggest button on an IPA pronunciation in settings, and the list it opens: when it shows,
 /// what the list shows, and using a suggestion.
@@ -117,36 +118,63 @@ struct PronunciationSuggestionTests {
         #expect(suggestions.phase == .loaded([]))
     }
 
-    @Test func regenerateReplacesTheRequestUnderWay() async throws {
-        let harness = Harness()
-        harness.suggester.holdsAnswers = true
-        harness.suggester.answers = [.success([suggestion("wˈɪnstən")]), .success([suggestion("wɪnstˈɑn")])]
-        let suggestions = harness.model.pronunciationSuggestions(for: "Winston")
+    /// Counts the times a list read Kokoro's symbols: once for each answer it handled, right
+    /// before it shows that answer or drops it as stale, in the same turn of the main actor.
+    @MainActor
+    private final class SymbolReads {
+        var count = 0
+    }
+
+    /// A list of `word`'s suggestions from `suggester`, counting its reads of Kokoro's symbols in
+    /// `reads`, so a test can tell when it has handled an answer it drops.
+    private func suggestions(
+        for word: String,
+        from suggester: FakePronunciationSuggester,
+        reads: SymbolReads
+    ) -> PronunciationSuggestions {
+        PronunciationSuggestions(word: word, suggester: suggester) {
+            reads.count += 1
+            return Set("wˈɪnstənɑ")
+        }
+    }
+
+    @Test func regenerateReplacesTheRequestUnderWayWhicheverAnswersFirst() async throws {
+        let suggester = FakePronunciationSuggester()
+        suggester.holdsAnswers = true
+        suggester.answers = [.success([suggestion("wˈɪnstən")]), .success([suggestion("wɪnstˈɑn")])]
+        let reads = SymbolReads()
+        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
         suggestions.generate()
-        #expect(await eventually { harness.suggester.heldAnswers == 1 })
+        #expect(await eventually { suggester.heldAnswers == 1 })
 
         suggestions.generate()
-        #expect(await eventually { harness.suggester.heldAnswers == 2 })
-        // Both answer, the replaced one too.
-        harness.suggester.releaseAnswers()
 
+        // The first request is cancelled, but a model may answer it anyway.
+        #expect(await eventually { suggester.cancelledRequests == [0] && suggester.heldAnswers == 2 })
+        #expect(suggestions.phase == .loading)
+        suggester.releaseAnswer(1)
         #expect(await eventually { suggestions.phase != .loading })
-        try await settle(.milliseconds(50))
+        #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
+        suggester.releaseAnswer(0)
+        #expect(await eventually { reads.count == 2 })
+        // Handled, and dropped.
         #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wɪnstˈɑn"])
     }
 
-    @Test func closingTheListDropsItsAnswer() async throws {
-        let harness = Harness()
-        harness.suggester.holdsAnswers = true
-        harness.suggester.answers = [.success([suggestion("wˈɪnstən")])]
-        let suggestions = harness.model.pronunciationSuggestions(for: "Winston")
+    @Test func closingTheListCancelsItsRequestAndDropsTheAnswer() async throws {
+        let suggester = FakePronunciationSuggester()
+        suggester.holdsAnswers = true
+        suggester.answers = [.success([suggestion("wˈɪnstən")])]
+        let reads = SymbolReads()
+        let suggestions = suggestions(for: "Winston", from: suggester, reads: reads)
         suggestions.generate()
-        #expect(await eventually { harness.suggester.heldAnswers == 1 })
+        #expect(await eventually { suggester.heldAnswers == 1 })
 
         suggestions.cancel()
-        harness.suggester.releaseAnswers()
 
-        try await settle(.milliseconds(50))
+        #expect(await eventually { suggester.cancelledRequests == [0] })
+        suggester.releaseAnswer(0)
+        #expect(await eventually { reads.count == 1 })
         #expect(suggestions.phase == .loading)
     }
 
