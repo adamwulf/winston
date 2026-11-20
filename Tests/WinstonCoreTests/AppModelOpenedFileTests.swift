@@ -120,7 +120,7 @@ struct OpenedFileTests {
         let file = try #require(model.openedFiles.first)
         #expect(file.name == "logs.zip")
         #expect(!file.isPhoto)
-        #expect(model.openedFileCount == 1)
+        #expect(model.agentSheetCallCount == 1)
 
         // Not logged in: the sheet waits, and so does the file.
         model.start()
@@ -274,7 +274,7 @@ struct OpenedFileTests {
         #expect(model.openedFiles.map(\.name) == ["notes.txt", "photo.jpg"])
         #expect(model.openedFiles.map(\.isCopied) == [false, true])
         #expect(model.openedFilesBeingCopied == 1)
-        #expect(model.openedFileCount == 2)
+        #expect(model.agentSheetCallCount == 2)
         #expect(model.isPickingAgentForOpenedFiles)
         // Nothing goes until both are copied.
         await model.sendOpenedFiles(to: ChatID(2))
@@ -391,6 +391,8 @@ struct OpenedFileTests {
         #expect(model.openedFiles == [file])
         #expect(model.openedFileError == "Couldn't send logs.zip to Laptop: UPLOAD_FAILED")
         #expect(model.currentChat?.id == ChatID(1))
+        // Called up again, closing settings or whatever else is showing.
+        #expect(model.agentSheetCallCount == 2)
         // Its copy stays, for another try.
         let copy = URL(filePath: try #require(sentDocuments(of: harness).first).path)
         defer { removeDocumentCopies([copy.path(percentEncoded: false)]) }
@@ -630,7 +632,7 @@ struct OpenedFileTests {
 
         model.openFile(at: try #require(URL(string: "https://example.com/logs.zip")))
 
-        #expect(model.openedFileCount == 0)
+        #expect(model.agentSheetCallCount == 0)
         #expect(model.openedFiles.isEmpty)
         #expect(model.openedFileError == nil)
         #expect(!model.isPickingAgentForOpenedFiles)

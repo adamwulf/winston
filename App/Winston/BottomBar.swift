@@ -48,8 +48,8 @@ struct BottomBar: View {
         .onChange(of: model.notificationOpenCount) {
             closePresentations()
         }
-        // So the agent sheet for the file can show.
-        .onChange(of: model.openedFileCount) {
+        // So the agent sheet can show.
+        .onChange(of: model.agentSheetCallCount) {
             closePresentations()
         }
         // Closing it, however it closes, leaves push-to-talk for text mode.
@@ -64,7 +64,7 @@ struct BottomBar: View {
         }
     }
 
-    /// Closes the pickers and push-to-talk, for a notification tap or a file opened in Winston.
+    /// Closes the pickers and push-to-talk, for a notification tap or the agent sheet.
     private func closePresentations() {
         isPickingFile = false
         isShowingPushToTalk = false

@@ -39,8 +39,8 @@ struct ChatScreen: View {
         .onChange(of: model.notificationOpenCount) {
             showingSettings = false
         }
-        // So the agent sheet for the file can show.
-        .onChange(of: model.openedFileCount) {
+        // So the agent sheet can show.
+        .onChange(of: model.agentSheetCallCount) {
             showingSettings = false
         }
         #endif

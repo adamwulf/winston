@@ -80,9 +80,10 @@ public final class AppModel {
     public private(set) var openedFilesSendingTo: ChatID?
     /// Why an opened file couldn't be copied or sent, for the agent sheet, which stays open to show it.
     public private(set) var openedFileError: String?
-    /// Counts the files opened in Winston. Each closes the settings sheet, the pickers and
+    /// Counts the times the agent sheet is called up: for each file opened in Winston, and each
+    /// opened file whose upload fails. Each closes the settings sheet, the pickers and
     /// push-to-talk, as a notification tap does, so the agent sheet can show.
-    public private(set) var openedFileCount = 0
+    public private(set) var agentSheetCallCount = 0
     /// Where iOS puts the copy of a file it opens in Winston (see `appOpenedFileInboxes`).
     @ObservationIgnored private let openedFileInboxes: [URL]
     /// The opened files TDLib is uploading, by their pending message, until it says each was sent
@@ -992,7 +993,7 @@ public final class AppModel {
             "chatsLoaded": chatsLoaded,
             "waiting": openedFiles.count,
         ])
-        openedFileCount += 1
+        agentSheetCallCount += 1
         // Its place now, so a file opened later but copied sooner, such as a local one after an
         // iCloud Drive download, can't go ahead of it.
         let file = OpenedFile(name: url.lastPathComponent)
@@ -1110,6 +1111,8 @@ public final class AppModel {
             upload.jpeg.map(OpenedFile.remove)
             openedFiles.append(file)
             openedFileError = Self.sendFailure(of: file, to: upload.agent, reason: failure)
+            // Adam may be in settings by now, or anywhere else in the app.
+            agentSheetCallCount += 1
             return
         }
         Self.log.notice("opened file sent", ["chatID": message.chat, "as": file.logKind])
