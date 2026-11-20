@@ -473,6 +473,7 @@ public final class VoiceLoop {
             "appState": MediaDiagnostics.appState,
         ]) { $1 })
         #endif
+        echo.logEngineState(pipeline, reason: isRebuild ? "rebuild" : "start")
         #if os(macOS)
         // The rebuild may have come from the default input or output changing, which can show
         // only after the engine's configuration change, with nothing to say so after.
@@ -605,8 +606,7 @@ public final class VoiceLoop {
             pipeline.tearDown()
             throw error
         }
-        // Voice mode follows route changes from its first start until it stops.
-        echo.engineStarted(pipeline, reason: routeChangeObserver == nil ? "start" : "rebuild")
+        echo.noteEngineStart()
         return pipeline
     }
 
@@ -1356,8 +1356,8 @@ public final class VoiceLoop {
         }
         do {
             try pipeline.restartEngine()
+            echo.noteEngineStart()
             Self.log.notice("audio engine restarted", pipeline.formatContext)
-            echo.engineStarted(pipeline, reason: "restart")
             for cue in interruptedCues where cue != .agentWorking {
                 play(cue)
             }
@@ -1367,6 +1367,8 @@ public final class VoiceLoop {
             if !isStarting {
                 updateWorkingCue()
             }
+            // After the cues and the reply are under way again, so logging never delays them.
+            echo.logEngineState(pipeline, reason: "restart")
         } catch {
             Self.log.warning("restarting the audio engine failed; rebuilding", error.logContext(pipeline.formatContext))
             restart()

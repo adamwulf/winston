@@ -8,9 +8,9 @@ import Synchronization
 /// (docs/research/echo-cancellation-regression.md). Logging only: nothing here changes what
 /// voice mode does. One line per event, at notice level:
 ///
-/// - `engine audio state`: voice processing's settings and the formats on both sides of it, when
-///   an engine starts (`reason=start`), a new one replaces it (`rebuild`), or it starts again
-///   after it stopped itself (`restart`).
+/// - `engine audio state`: voice processing's settings and the formats on both sides of it, once
+///   an engine has started (`reason=start`), a new one has replaced it (`rebuild`), or it has
+///   started again after it stopped itself (`restart`).
 /// - `engine configuration changed`: the same, at each `AVAudioEngineConfigurationChange`, with
 ///   the values that changed since the line before (`<key>Before`, `changed`).
 /// - `cue played`: each cue the loop plays, with its level.
@@ -87,17 +87,24 @@ final class EchoLog {
 
     // MARK: - Engine
 
-    /// `pipeline`'s engine has started: `reason` is `start`, `rebuild` (a new engine while voice
-    /// mode was already running) or `restart` (the same engine again, after it stopped itself).
-    func engineStarted(_ pipeline: Pipeline, reason: String) {
-        let time = TimelineClock.now()
-        engineStartTime = time
+    /// An engine has just started or restarted. Only notes the time: the loop calls it right
+    /// after the start, then `logEngineState(_:reason:)` once it is done with what follows.
+    func noteEngineStart() {
+        engineStartTime = TimelineClock.now()
         repliesSinceEngineStart = 0
+    }
+
+    /// Logs the state of `pipeline`'s engine, which started at `noteEngineStart()`: `reason` is
+    /// `start`, `rebuild` (a new engine while voice mode was already running) or `restart` (the
+    /// same engine again, after it stopped itself).
+    func logEngineState(_ pipeline: Pipeline, reason: String) {
+        let time = TimelineClock.now()
         let state = EngineAudioState(pipeline)
         engineState = state
         var fields = state.fields
         fields["reason"] = reason
         fields["echoCancellation"] = pipeline.hasVoiceProcessing
+        fields["sinceEngineStartMs"] = Self.milliseconds(since: engineStartTime, to: time)
         fields["sinceRouteChangeMs"] = Self.milliseconds(since: routeChangeTime, to: time)
         logger.notice("engine audio state", context(pipeline, at: time, fields))
     }
