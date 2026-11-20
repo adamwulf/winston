@@ -200,9 +200,17 @@ every test target shares them.
 `KokoroRealModelTests` runs the real model through the real `VoiceLoop`, but
 only once the model is in `.build/kokoro-model` (or `WINSTON_KOKORO_MODEL_DIR`);
 otherwise it is skipped. Running `LiveKokoro(directory:)` on that folder once
-downloads it. `OnDevicePronunciationSuggesterRealModelTests` likewise runs
-Apple's on-device model only where it is available, and prints what it
-suggests for a few words for a person to judge.
+downloads it.
+
+`OnDevicePronunciationSuggesterRealModelTests` runs Apple's on-device model
+and prints what it suggests for a few words, for a person to judge. It is off
+by default: it spends about 25 s on the model beside suites that time things,
+and its answers differ from run to run. Ask for it where the model is
+available:
+
+```sh
+WINSTON_SUGGESTER_REAL_MODEL=1 swift test --filter OnDevicePronunciationSuggesterRealModelTests
+```
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
 when listening starts and stops, a chime for any reaction from the bot, and low
@@ -474,7 +482,7 @@ again. Its guardrails declined "Nguyen" once and answered it the other times
 (nothing turns them off for a structured, `@Generable`, answer), and once it ran
 on writing until the token cap cut it off.
 `OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
-for a few words; it runs only where the model is available.
+for a few words, when asked for (see [What the tests run](#what-the-tests-run)).
 
 ## Logging
 

@@ -53,19 +53,26 @@ import Testing
     }
 }
 
-/// The real on-device model, skipped unless it can run here (Apple Intelligence on and its model
-/// downloaded): it prints what it suggests for a few words, for a person to judge, as the
-/// suggestions settings would list. The phonemes are checked against misaki's US symbols, as
-/// they are while the Kokoro model isn't loaded.
+/// Whether `OnDevicePronunciationSuggesterRealModelTests` was asked for, with
+/// `WINSTON_SUGGESTER_REAL_MODEL=1`. It is off by default: it spends about 25 s on the model,
+/// beside suites that time things, and its answers differ from run to run.
+private let realSuggesterRequested = ProcessInfo.processInfo.environment["WINSTON_SUGGESTER_REAL_MODEL"] == "1"
+
+/// The real on-device model, run only when asked for (`realSuggesterRequested`) and where it can
+/// run (Apple Intelligence on and its model downloaded): it prints what it suggests for a few
+/// words, for a person to judge, as the suggestions settings would list. The phonemes are checked
+/// against misaki's US symbols, as they are while the Kokoro model isn't loaded.
 ///
-/// A word the model fails on is reported, and the check fails only if it fails on more than two:
-/// it fails now and then on its own, about 2 requests in 70 so far. Its guardrails declined
-/// "Nguyen" once and answered it the other times, and nothing turns them off for a @Generable
-/// answer; once it ran on writing for Siobhan until `maximumResponseTokens` cut it off, and its
-/// answer couldn't be read. Settings shows either as a message, and Regenerate asks again. A
-/// mistake of ours, such as a guide the model doesn't take, fails every word.
+/// A word is a failure if the model fails on it or gives it no usable suggestion. Each is
+/// reported, and the check fails only past two: the model fails now and then on its own, about 2
+/// requests in 70 so far. Its guardrails declined "Nguyen" once and answered it the other times,
+/// and nothing turns them off for a @Generable answer; once it ran on writing for Siobhan until
+/// `maximumResponseTokens` cut it off, and its answer couldn't be read. Settings shows either as a
+/// message, and Regenerate asks again. A mistake of ours, such as a guide the model doesn't take,
+/// fails every word.
 @Suite(
     .serialized,
+    .enabled(if: realSuggesterRequested, "WINSTON_SUGGESTER_REAL_MODEL=1 isn't set"),
     .enabled(if: OnDevicePronunciationSuggester().isAvailable, "the on-device language model isn't available"),
     .timeLimit(.minutes(5))
 )
@@ -105,18 +112,25 @@ struct OnDevicePronunciationSuggesterRealModelTests {
                 symbols: MisakiPhonemes.usSymbols
             )
             report.append("\(word) (\(seconds.formatted(.number.precision(.fractionLength(1)))) s, \(generated.count) generated, \(candidates.count) after dropping repeats):")
+            // The phonemes reported so far: a pronunciation with the same ones again was dropped.
+            var reported: Set<String> = []
             for pronunciation in generated {
                 let suggestion = OnDevicePronunciationSuggester.suggestion(from: pronunciation, for: word)
                 let candidate = candidates.first { $0.suggestion.phonemes == suggestion.phonemes }
+                let isRepeat = candidate.map { !reported.insert($0.id).inserted } ?? false
                 let status = switch candidate {
-                case nil: "repeat or empty, dropped"
+                case nil: "empty, dropped"
+                case _ where isRepeat: "repeat, dropped"
                 case let candidate? where candidate.isUsable: "usable"
                 case let candidate?: "unknown symbols: \(String(candidate.unknownSymbols))"
                 }
                 report.append("  \(pronunciation.respelling) | IPA \(pronunciation.ipa) → \(suggestion.phonemes) | \(pronunciation.note) | \(status)")
             }
             // Not 3 to 5, though the guide asks for that: the model gave Kokoro 2 once.
-            #expect(!candidates.isEmpty, "\(word)")
+            if !candidates.contains(where: \.isUsable) {
+                report.append("  no usable suggestion")
+                failedWords.append(word)
+            }
         }
         print(report.joined(separator: "\n"))
         #expect(failedWords.count <= 2, "the model failed on \(failedWords)")
