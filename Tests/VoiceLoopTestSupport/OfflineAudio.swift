@@ -30,6 +30,10 @@ package final class OfflineAudio {
     package private(set) var output: [Float] = []
     /// When true, the next engine made can't start, as when the hardware rejects the formats.
     package var nextEngineCannotStart = false
+    /// How many frames each render pass pulls through an engine made from now on, at 48 kHz:
+    /// 4096 (85 ms) unless a test sets it first. A device's audio hardware pulls far fewer at a
+    /// time, a few hundred to a thousand or so.
+    package var framesPerPass: AVAudioFrameCount = 4096
     private let microphone = Microphone()
     private var renderTask: Task<Void, Never>?
 
@@ -47,7 +51,7 @@ package final class OfflineAudio {
         guard let renderFormat = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1) else {
             throw OfflineAudioError.noRenderFormat
         }
-        try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: 4096)
+        try engine.enableManualRenderingMode(.offline, format: renderFormat, maximumFrameCount: framesPerPass)
 
         if nextEngineCannotStart {
             nextEngineCannotStart = false

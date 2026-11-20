@@ -1041,6 +1041,11 @@ struct VoiceSettingsTests {
 
     @Test func aShiftedReplyTakesAsLongAsAnUnshiftedOne() async throws {
         let bed = VoiceTestBed()
+        // Pulled 512 frames a pass, nearer what a device's audio hardware pulls, not 4096. At 4096
+        // frames every 2 ms the engine outruns the synthesizer: the player runs dry mid-reply and
+        // the shift smears sound into each gap, so a shifted reply's count jumped by up to 4,650
+        // frames from one run to the next. At 512 it stays within 1,400 of the unshifted one.
+        bed.audio.framesPerPass = 512
         let loop = try await startedLoop(on: bed)
         defer { loop.stop() }
         let text = "One, two, three."
