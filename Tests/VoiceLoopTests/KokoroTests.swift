@@ -124,8 +124,9 @@ private func framesPlayed(saying text: String, by loop: VoiceLoop, on bed: Voice
     #expect(loop.state == .speaking)
     #expect(await eventually { loop.state == .listening(partial: "") })
     // The pitch shift pulls the player a render pass ahead of the speaker, so the reply's
-    // last pass is rendered just after it counts as played.
-    try? await settle(.milliseconds(50))
+    // last pass is rendered just after it counts as played. Waits for twice that, counted in
+    // passes, not time: a busy machine can take far longer than usual to render them.
+    #expect(await renderPassesGoBy(2, on: bed))
     return bed.audio.playedFrames - before
 }
 
@@ -1502,7 +1503,11 @@ struct KokoroCancellingTests {
         bed.kokoro.releaseSyntheses()
 
         #expect(await eventually { loop.state == .listening(partial: "") })
+        // "Next." reaches the speaker a render pass after it counts as played, and the late
+        // sentence, had it gone anywhere, would play in the passes after: many passes, counted
+        // rather than timed, since a busy machine can take far longer than usual to render them.
         try await settle()
+        #expect(await renderPassesGoBy(20, on: bed))
         // Only "Next." played: the cut-off reply's late sentence went nowhere.
         #expect(bed.kokoro.requests.map(\.text) == ["The first sentence here.", "Next."])
         #expect(abs(bed.audio.playedFrames - fakeSentenceFrames) <= fakeSentenceFrames / 20)
