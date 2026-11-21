@@ -996,10 +996,12 @@ final class MicrophoneLevels: @unchecked Sendable {
         levels.deallocate()
     }
 
-    /// Runs on the audio thread for each microphone buffer: `count` samples lasting `duration`
-    /// (host time units), the first captured at `captureTime` (host time).
-    func record(_ samples: UnsafePointer<Float>, count: Int, capturedAt captureTime: UInt64, duration: UInt64) {
-        guard count > 0 else { return }
+    /// Runs on the audio thread for each microphone buffer: `count` frames of one channel, each
+    /// `stride` samples after the last (1 deinterleaved, the channel count interleaved; the
+    /// buffer's `stride`), lasting `duration` (host time units), the first captured at
+    /// `captureTime` (host time).
+    func record(_ samples: UnsafePointer<Float>, count: Int, stride: Int = 1, capturedAt captureTime: UInt64, duration: UInt64) {
+        guard count > 0, stride > 0 else { return }
         // A full ring would drop the reading, so it isn't measured.
         let next = written.load(ordering: .relaxed)
         guard next - taken.load(ordering: .acquiring) < Self.capacity else {
@@ -1008,8 +1010,8 @@ final class MicrophoneLevels: @unchecked Sendable {
         }
         var rms: Float = 0
         var peak: Float = 0
-        vDSP_rmsqv(samples, 1, &rms, vDSP_Length(count))
-        vDSP_maxmgv(samples, 1, &peak, vDSP_Length(count))
+        vDSP_rmsqv(samples, vDSP_Stride(stride), &rms, vDSP_Length(count))
+        vDSP_maxmgv(samples, vDSP_Stride(stride), &peak, vDSP_Length(count))
         let slot = next % Self.capacity
         times[slot] = captureTime
         durations[slot] = duration

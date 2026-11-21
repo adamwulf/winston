@@ -84,6 +84,13 @@ import Testing
         #expect(first.dropped == 0)
         #expect(levels.drain().readings.isEmpty)
 
+        // An interleaved two-channel buffer: only the first channel is measured, every other
+        // sample.
+        [0.5, 9, -0.5, 9, 0.5, -9, -0.5, 9].withUnsafeBufferPointer { buffer in
+            levels.record(buffer.baseAddress!, count: 4, stride: 2, capturedAt: 30, duration: 4)
+        }
+        #expect(levels.drain().readings == [MicrophoneLevels.Reading(captureTime: 30, duration: 4, rms: 0.5, peak: 0.5)])
+
         // Two more than fit while nothing is taken: the newest two are dropped, and counted.
         for time in 0..<UInt64(MicrophoneLevels.capacity + 2) {
             record([0.1], at: 100 + time)

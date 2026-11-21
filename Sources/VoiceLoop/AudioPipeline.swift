@@ -236,7 +236,7 @@ final class Pipeline {
             defer {
                 if let samples = buffer.floatChannelData?[0], buffer.format.sampleRate > 0 {
                     let duration = AVAudioTime.hostTime(forSeconds: Double(frames) / buffer.format.sampleRate)
-                    levels.record(samples, count: frames, capturedAt: captureTime, duration: duration)
+                    levels.record(samples, count: frames, stride: buffer.stride, capturedAt: captureTime, duration: duration)
                 }
             }
             guard let converted = convert(buffer, with: converter) else { return }
