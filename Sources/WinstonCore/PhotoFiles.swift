@@ -1,5 +1,7 @@
 import Foundation
 import ImageIO
+import Logging
+import LogSupport
 import UniformTypeIdentifiers
 
 /// Image file work done off the main actor with ImageIO, the same way on iOS and macOS.
@@ -9,6 +11,8 @@ public enum PhotoFiles {
         case encodingFailed
     }
 
+    private static let log = Logger(label: "app.photos")
+
     /// Downscales an image to at most 2560 px on its long side, encodes it as JPEG at quality 0.85,
     /// and writes it to a temporary file to pass to `sendPhoto`.
     @concurrent
@@ -16,6 +20,30 @@ public enum PhotoFiles {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else {
             throw Failure.unreadableImage
         }
+        return try jpeg(from: source)
+    }
+
+    /// The same, from an image file, which ImageIO reads without loading it all first.
+    @concurrent
+    public static func jpegForSending(fromFileAt url: URL) async throws -> URL {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            throw Failure.unreadableImage
+        }
+        return try jpeg(from: source)
+    }
+
+    /// Whether a file is a still image `jpegForSending` converts: of an image type ImageIO reads,
+    /// with one frame. Not a PDF, which ImageIO may read but isn't an image type, nor an animated
+    /// GIF or PNG or a multi-page TIFF, whose JPEG would keep only the first frame.
+    @concurrent
+    public static func isStillImage(at url: URL) async -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let type = CGImageSourceGetType(source) as String?,
+              UTType(type)?.conforms(to: .image) == true else { return false }
+        return CGImageSourceGetCount(source) == 1
+    }
+
+    private static func jpeg(from source: CGImageSource) throws -> URL {
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         let width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
         let height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
@@ -31,9 +59,23 @@ public enum PhotoFiles {
         let options = [kCGImageDestinationLossyCompressionQuality: 0.85] as CFDictionary
         CGImageDestinationAddImage(destination, image, options)
         guard CGImageDestinationFinalize(destination) else {
+            // Finalizing can fail after writing part of the file, which nothing else would remove.
+            removePartialFile(url)
             throw Failure.encodingFailed
         }
         return url
+    }
+
+    /// Removes what a failed encoding left at `url`, if anything.
+    private static func removePartialFile(_ url: URL) {
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch CocoaError.fileNoSuchFile {
+            // Nothing was written.
+        } catch {
+            // Codes only: a file error's description names the file.
+            log.warning("removing a partial JPEG failed", error.logCodes())
+        }
     }
 
     /// Decodes an image file at a display size, upright. Nil if the file isn't a readable image.

@@ -2,6 +2,31 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Winston is offered for these files in the iOS share sheet and in the Mac's Open With
+	     menu and Dock. Alternate ranks it a secondary handler: Launch Services prefers an app
+	     that owns the type or ranks it Default, so Winston becomes a type's default only when
+	     no such app is installed or Adam picks it. It doesn't edit or keep the files: it sends
+	     them to an agent (AppModel.openFile). public.data covers any file but a folder; the
+	     types sent most often are named as well. -->
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>File</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.zip-archive</string>
+				<string>com.adobe.pdf</string>
+				<string>public.image</string>
+				<string>public.plain-text</string>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>TelegramAPIID</key>

@@ -17,6 +17,8 @@ struct MessageList: View {
     #else
     @Environment(\.scenePhase) private var scenePhase
     private var isActive: Bool { scenePhase == .active }
+    /// Holds the document Quick Look shows, which a document row sets.
+    @Environment(Presentations.self) private var presentations
     #endif
 
     var body: some View {
@@ -65,6 +67,27 @@ struct MessageList: View {
                 }
             }
         }
+        #if os(iOS)
+        // Here rather than on the document's row, which can scroll away, and be unloaded, while
+        // the preview shows.
+        .quickLookPreview(Binding {
+            presentations.previewURL
+        } set: {
+            presentations.previewURL = $0
+        })
+        .onChange(of: model.notificationOpenCount) {
+            presentations.closePreview()
+        }
+        // A document of the chat before, still downloading, doesn't open over this one.
+        .onChange(of: model.selectedChatID) {
+            presentations.dropPendingPreview()
+        }
+        // As after a logout: the preview went with the list, and a download still under way
+        // shows nothing.
+        .onDisappear {
+            presentations.closePreview()
+        }
+        #endif
     }
 }
 
@@ -241,7 +264,8 @@ struct PhotoView: View {
     }
 }
 
-/// A document as a filename row. Tapping downloads it, then opens Quick Look (iOS) or the default app (macOS).
+/// A document as a filename row. Tapping downloads it, then opens Quick Look (iOS), which the
+/// message list presents, or the default app (macOS).
 struct DocumentRow: View {
     private static let log = Logger(label: "app.document")
     @Environment(AppModel.self) private var model
@@ -249,7 +273,7 @@ struct DocumentRow: View {
     let fileName: String
     let size: Int64
     #if os(iOS)
-    @State private var previewURL: URL?
+    @Environment(Presentations.self) private var presentations
     #endif
 
     var body: some View {
@@ -276,21 +300,19 @@ struct DocumentRow: View {
         }
         .buttonStyle(.plain)
         .disabled(model.isDownloading(file))
-        #if os(iOS)
-        .quickLookPreview($previewURL)
-        .onChange(of: model.notificationOpenCount) {
-            previewURL = nil
-        }
-        #endif
     }
 
     private func open() async {
         let notificationCount = model.notificationOpenCount
+        #if os(iOS)
+        // The download can outlive this row, and its chat being shown.
+        let request = presentations.requestPreview()
+        #endif
         do {
             let url = try await model.download(file)
             guard notificationCount == model.notificationOpenCount else { return }
             #if os(iOS)
-            previewURL = url
+            presentations.showPreview(url, for: request)
             #else
             NSWorkspace.shared.open(url)
             #endif

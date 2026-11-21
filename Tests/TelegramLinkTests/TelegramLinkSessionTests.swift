@@ -380,7 +380,7 @@ struct SendingTests {
         session.fake.addBotChat(id: 5, title: "Home", username: "home_bot")
         try await session.startAndLogIn()
 
-        try await session.link.sendPhoto(fileURL: photo, caption: "a red rectangle", to: ChatID(5))
+        let pendingID = try await session.link.sendPhoto(fileURL: photo, caption: "a red rectangle", to: ChatID(5))
 
         let path = photo.path(percentEncoded: false)
         #expect(session.fake.requests.last == .sendPhoto(
@@ -394,6 +394,8 @@ struct SendingTests {
             Issue.record("expected the pending photo as a new message")
             return
         }
+        // The ID its .sendSucceeded or .sendFailed will name.
+        #expect(pending.id == pendingID)
         #expect(pending.text == "a red rectangle")
         #expect(pending.attachment == .photo(FileRef(id: 1, localPath: path), width: 40, height: 30))
         #expect(pending.sendState == .pending)
@@ -447,7 +449,7 @@ struct SendingTests {
         session.fake.addBotChat(id: 5, title: "Home", username: "home_bot")
         try await session.startAndLogIn()
 
-        try await session.link.sendDocument(fileURL: report, caption: "last night's run", to: ChatID(5))
+        let pendingID = try await session.link.sendDocument(fileURL: report, caption: "last night's run", to: ChatID(5))
 
         let path = report.path(percentEncoded: false)
         #expect(session.fake.requests.last == .sendDocument(
@@ -460,6 +462,8 @@ struct SendingTests {
             Issue.record("expected the pending document as a new message")
             return
         }
+        // The ID its .sendSucceeded or .sendFailed will name.
+        #expect(pending.id == pendingID)
         #expect(pending.text == "last night's run")
         #expect(pending.attachment == .document(
             FileRef(id: 1, localPath: path),

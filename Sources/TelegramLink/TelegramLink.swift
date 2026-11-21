@@ -216,10 +216,12 @@ public actor TelegramLink {
     }
 
     /// Sends a local image file. TDLib uploads it after this returns, so leave the file
-    /// in place until `.sendSucceeded` or `.sendFailed` arrives for the message.
+    /// in place until `.sendSucceeded` or `.sendFailed` arrives for the message, whose
+    /// temporary ID this returns.
     /// The image should be upright with no EXIF orientation tag (the app's export bakes the
     /// orientation in), because the width and height passed to TDLib are the stored pixel size.
-    public func sendPhoto(fileURL: URL, caption: String?, to chat: ChatID) async throws {
+    @discardableResult
+    public func sendPhoto(fileURL: URL, caption: String?, to chat: ChatID) async throws -> MessageID {
         let size = Self.pixelSize(of: fileURL)
         let photo = InputPhoto(
             addedStickerFileIds: [],
@@ -236,14 +238,15 @@ public actor TelegramLink {
             selfDestructType: nil,
             showCaptionAboveMedia: false
         ))
-        try await send(content, to: chat)
+        return try await send(content, to: chat)
     }
 
     /// Sends a local file as a document, named as the file is. TDLib uploads it after this
     /// returns, so leave the file in place until `.sendSucceeded` or `.sendFailed` arrives for the
-    /// message. It always arrives as a document: TDLib doesn't turn a video or song into a video or
-    /// audio message, which the app couldn't show.
-    public func sendDocument(fileURL: URL, caption: String?, to chat: ChatID) async throws {
+    /// message, whose temporary ID this returns. It always arrives as a document: TDLib doesn't
+    /// turn a video or song into a video or audio message, which the app couldn't show.
+    @discardableResult
+    public func sendDocument(fileURL: URL, caption: String?, to chat: ChatID) async throws -> MessageID {
         let document = InputDocument(
             disableContentTypeDetection: true,
             document: .inputFileLocal(InputFileLocal(path: fileURL.path(percentEncoded: false))),
@@ -253,7 +256,7 @@ public actor TelegramLink {
             caption: caption.map { FormattedText(entities: [], text: $0) },
             document: document
         ))
-        try await send(content, to: chat)
+        return try await send(content, to: chat)
     }
 
     /// Adds `emoji` to the message if Adam hasn't reacted with it, otherwise removes it.
@@ -339,8 +342,11 @@ public actor TelegramLink {
         }
     }
 
-    private func send(_ content: InputMessageContent, to chat: ChatID) async throws {
-        try await perform {
+    /// Sends a message, and returns its temporary ID while it is pending, which its
+    /// `.sendSucceeded` or `.sendFailed` names.
+    @discardableResult
+    private func send(_ content: InputMessageContent, to chat: ChatID) async throws -> MessageID {
+        let pending = try await perform {
             try await $0.sendMessage(
                 chatId: chat.rawValue,
                 inputMessageContent: content,
@@ -350,6 +356,7 @@ public actor TelegramLink {
                 topicId: nil
             )
         }
+        return MessageID(pending.id)
     }
 
     // MARK: - Updates

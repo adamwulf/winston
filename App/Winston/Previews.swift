@@ -60,6 +60,7 @@ extension AppModel {
 #Preview("Chat") {
     ChatScreen()
         .environment(AppModel.preview())
+        .environment(Presentations())
 }
 
 #Preview("Login: phone") {

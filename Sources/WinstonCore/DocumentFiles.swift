@@ -11,14 +11,14 @@ public enum DocumentFiles {
 
     private static let log = Logger(label: "app.documents")
 
-    /// Copies a picked or dropped file into a new folder in the temporary directory, under its own
-    /// name, which Telegram shows as the document's name, and returns the copy to pass to
-    /// `sendDocument`.
+    /// Copies a picked or dropped file into a new folder in `parent`, the temporary directory unless
+    /// given, under its own name, which Telegram shows as the document's name, and returns the copy
+    /// to pass to `sendDocument`.
     ///
     /// The file picker and a drop hand over a URL whose access ends long before TDLib's upload does,
     /// so the copy is made while access lasts and TDLib reads the copy.
     @concurrent
-    public static func copyForSending(from url: URL) async throws -> URL {
+    public static func copyForSending(from url: URL, into parent: URL = .temporaryDirectory) async throws -> URL {
         // False for a URL that isn't security scoped, which is still readable if it's the app's own.
         let isAccessing = url.startAccessingSecurityScopedResource()
         defer {
@@ -29,7 +29,7 @@ public enum DocumentFiles {
         if try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
             throw Failure.folder
         }
-        let folder = URL.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        let folder = parent.appending(path: UUID().uuidString, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let copy = folder.appending(path: url.lastPathComponent)
         // A coordinated read, so a file provider such as iCloud Drive can download the file first.

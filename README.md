@@ -9,7 +9,7 @@ mode, a hands-free voice mode, and [push-to-talk](#push-to-talk). See
 - `Package.swift`: library targets `TelegramLink` (TDLibKit wrapper),
   `VoiceLoop` (listening, pause detection, speech, barge-in) and `WinstonCore`
   (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`,
-  `DocumentFiles`), plus
+  `DocumentFiles`, `OpenedFile`), plus
   their tests. `LogSupport` and `WinstonLogging` hold the logging (see
   [Logging](#logging)).
 - `App/Winston.xcodeproj`: the multiplatform SwiftUI app (iOS 26+, macOS 26+).
@@ -314,6 +314,63 @@ files are listed under the bundles that test it (`Sources/VoiceLoop/` under
 `VoiceLoopTests`), and a bundle's total counts its test files too. The test
 action's result bundle, in the build's artifacts, opens in Xcode with the full
 report.
+
+## Opening files in Winston
+
+Winston declares document types (`CFBundleDocumentTypes` in
+`App/Config/Info.plist`: zip, PDF, images, plain text, and `public.data` for
+any other file) at `LSHandlerRank` Alternate, a secondary handler. Launch
+Services prefers an app that owns a type or ranks it Default, so Winston
+becomes a type's default only if no such app is installed or Adam picks it.
+There is no share extension and no App Group: nothing to set up in the
+developer portal.
+
+- iOS: Winston shows in the share sheet for a file (Files, Mail and Messages
+  attachments), in the app row or under More. iOS hands over a copy
+  (`LSSupportsOpeningDocumentsInPlace` is NO on iOS) in `Documents/Inbox`, or
+  `tmp/<bundle ID>-Inbox` for some imports from Files. Winston removes that
+  file, and only that one, once it is sent or cancelled. The Photos app's
+  share sheet lists only share extensions, so it won't show Winston: Save to
+  Files, then share from Files.
+- Mac: Open With in Finder, or a file dropped on the Dock icon, which brings
+  the chat window forward, even from behind Settings. Files dropped on the
+  window still go straight to the chat shown, as before.
+
+`AppModel.openFile(at:)` gives the file its place in the sheet at once, so
+files go in the order they were opened, and copies it off the main actor into
+`tmp/OpenedFiles` as the + button's Files does (security-scoped, coordinated,
+so an iCloud Drive file downloads first; a folder is turned down). A file that
+can't be copied keeps its place with the error and Try Again, without holding
+up the others. Once Winston is logged in with its bot chats a sheet lists the
+agents and Cancel, and asks even with one agent. A file opened before then
+waits. Picking an agent sends the file there, without changing the chat
+shown: a still image as a photo (a JPEG of at most 2560 px), anything else, an
+animated GIF included, as a document under its own name, from a copy of
+TDLib's own. Files opened together go to the same agent, in order.
+
+A file Adam opens closes Settings and the pickers, as a notification tap does,
+but never push-to-talk, which could be in a hold: the sheet waits until
+push-to-talk, or an alert, closes.
+
+Winston follows each upload until TDLib says it was sent or failed, even when
+TDLib says so before its answer to the send arrives. A failure, whether TDLib
+turns the file down at once or its upload fails later, brings the sheet back
+with "Couldn't send *name* to *agent*" and the file kept, in its place, for
+another pick. A failure in the background closes nothing: the sheet waits for
+whatever is showing. Once a file is sent, or cancelled, Winston's copy and the
+file iOS handed over go. Uploads aren't followed across launches: a failure
+after a relaunch shows only in the chat. Logging out removes the files of
+uploads under way; quitting keeps them, for TDLib to send on the next launch.
+Each launch removes what opened files left at least a day ago.
+
+The logs (`label=app.model`) say `file opened` with its type, `opened file
+copied` with whether it goes as a photo or a document, `opened file handed to
+telegram` with the chat, then `opened file sent`, or `opened files cancelled`.
+Failures are `copying opened file failed` (then `retrying opened file copy` on
+Try Again), `sending opened file failed` (turned down at once) and `opened
+file upload failed` (later). At launch, `opened file leftovers removed` gives a
+count, and a logout during uploads logs `opened file uploads discarded`. No
+file name is logged.
 
 ## Push-to-talk
 

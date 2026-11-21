@@ -3,6 +3,7 @@ import Logging
 import LogSupport
 import Observation
 import TelegramLink
+import UniformTypeIdentifiers
 import VoiceLoop
 #if os(iOS)
 import UIKit
@@ -70,6 +71,40 @@ public final class AppModel {
     public private(set) var downloadingFiles: Set<Int32> = []
     /// True while a picked photo or file, or dropped files, are being prepared and handed to TDLib.
     public private(set) var isSendingAttachment = false
+
+    /// The files opened in Winston from another app (`openFile(at:)`), in the order they came,
+    /// each from when it is opened, while Winston copies it, until it is handed to TDLib for an
+    /// agent or cancelled. One whose copy fails stays, to try again; one whose upload fails comes
+    /// back in its place.
+    public private(set) var openedFiles: [OpenedFile] = []
+    /// The agent the opened files are going to, while `sendOpenedFiles(to:)` runs.
+    public private(set) var openedFilesSendingTo: ChatID?
+    /// Why an opened file couldn't be sent, for the agent sheet, which stays open to show it.
+    public private(set) var openedFileError: String?
+    /// Counts the files Adam opened in Winston. Each closes the settings sheet and the pickers, as
+    /// a notification tap does, so the agent sheet can show. Not push-to-talk, which could be
+    /// holding: the sheet waits for it to close.
+    public private(set) var openedFileCount = 0
+    /// Where iOS puts the copy of a file it opens in Winston (see `appOpenedFileInboxes`).
+    @ObservationIgnored private let openedFileInboxes: [URL]
+    /// Where Winston keeps its working copies of opened files, in the temporary directory: a folder
+    /// of their own, which each launch clears of what an earlier run left.
+    @ObservationIgnored private let openedFileFolder: URL
+    /// Gives each opened file its place in the order they were opened.
+    @ObservationIgnored private var nextOpenedFileSequence = 0
+    /// The copies being made, by file (see `waitForOpenedFileCopies()`).
+    @ObservationIgnored private var openedFileCopies: [OpenedFile.ID: Task<Void, Never>] = [:]
+    /// The opened files TDLib is uploading, by their pending message, until it says each was sent
+    /// or failed. Not kept across launches.
+    @ObservationIgnored private var openedFileUploads: [PendingMessage: OpenedFileUpload] = [:]
+    /// TDLib's outcomes for pending messages that came while the opened files were being handed
+    /// off, before the upload they settle was in `openedFileUploads`.
+    @ObservationIgnored private var earlyUploadOutcomes: [PendingMessage: UploadOutcome] = [:]
+    /// Set by `logOut()` until TDLib starts logging out, to tell that from it closing as the app
+    /// quits, which comes as the same `.loggingOut`.
+    @ObservationIgnored private var isLogOutRequested = false
+    /// The session a logout last ended, for a handoff of an opened file that outlives it.
+    @ObservationIgnored private var loggedOutSessionGeneration: Int?
 
     public private(set) var isVoiceMode = false
     /// True while `voiceLoop.start()` runs (permission prompts, model download). The loop stays `.off` until then.
@@ -187,19 +222,21 @@ public final class AppModel {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
             voiceLoop: voiceLoop,
-            defaults: defaults
+            defaults: defaults,
+            openedFileInboxes: Self.appOpenedFileInboxes
         )
     }
 
-    /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own, and
-    /// a fake pronunciation suggester. `hasCredentials` defaults to whether there is a link; only
-    /// previews have one without the other.
+    /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own,
+    /// a fake pronunciation suggester, and folders of their own as the inboxes for opened files.
+    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
     package init(
         link: TelegramLink?,
         voiceLoop: VoiceLoop,
         defaults: UserDefaults,
         hasCredentials: Bool? = nil,
-        pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester()
+        pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester(),
+        openedFileInboxes: [URL] = []
     ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
@@ -207,6 +244,8 @@ public final class AppModel {
         self.defaults = defaults
         self.hasCredentials = hasCredentials ?? (link != nil)
         self.pronunciationSuggester = pronunciationSuggester
+        self.openedFileInboxes = openedFileInboxes
+        openedFileFolder = URL.temporaryDirectory.appending(path: "OpenedFiles", directoryHint: .isDirectory)
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
@@ -418,6 +457,21 @@ public final class AppModel {
         voiceLoop.deleteKokoroModels()
     }
 
+    /// Where iOS puts the copy of a file it opens in Winston, as LSSupportsOpeningDocumentsInPlace
+    /// is NO: Documents/Inbox, or tmp/<bundle ID>-Inbox for some imports from Files. None on the
+    /// Mac, which hands over the file itself, Adam's own, which stays.
+    private static var appOpenedFileInboxes: [URL] {
+        #if os(iOS)
+        var inboxes = [URL.documentsDirectory.appending(path: "Inbox", directoryHint: .isDirectory)]
+        if let bundleID = Bundle.main.bundleIdentifier {
+            inboxes.append(URL.temporaryDirectory.appending(path: "\(bundleID)-Inbox", directoryHint: .isDirectory))
+        }
+        return inboxes
+        #else
+        []
+        #endif
+    }
+
     /// Where TDLib keeps its data, and how the app describes itself to Telegram.
     static func telegramConfig(_ secrets: AppSecrets) -> TelegramConfig {
         let directory = URL.applicationSupportDirectory.appending(path: "Telegram", directoryHint: .isDirectory)
@@ -450,6 +504,7 @@ public final class AppModel {
     public func start() {
         guard let link, !started else { return }
         started = true
+        removeOpenedFileLeftovers()
         Task {
             for await state in link.authStates {
                 handle(state)
@@ -511,9 +566,12 @@ public final class AppModel {
     }
 
     public func logOut() async {
+        // TDLib's closing as the app quits comes as `.loggingOut` too, but keeps what it was sending.
+        isLogOutRequested = true
         do {
             try await link?.logOut()
         } catch {
+            isLogOutRequested = false
             Self.log.error("log out failed", error.logContext())
             errorMessage = userMessage(for: error)
         }
@@ -526,7 +584,17 @@ public final class AppModel {
         case .ready:
             sendOnlineStatus()
             Task { await loadChats() }
-        case .loggingOut, .closed:
+        case .loggingOut:
+            if isLogOutRequested {
+                isLogOutRequested = false
+                // Logged out, TDLib drops its pending messages, so these uploads end here. Not as it
+                // closes for the app to quit: it sends them on the next launch, from their files.
+                loggedOutSessionGeneration = sessionGeneration
+                discardOpenedFileUploads()
+            }
+            clearSession()
+        case .closed:
+            isLogOutRequested = false
             clearSession()
         default:
             break
@@ -552,6 +620,11 @@ public final class AppModel {
         addedThumbsUp = nil
         thumbsUpBeingAdded = nil
         downloadedFiles = [:]
+        // Their outcomes won't come to this session. After a logout their files are gone already;
+        // closing as the app quits, TDLib keeps its pending messages to send on the next launch,
+        // so their files stay until that launch's sweep finds them a day old.
+        openedFileUploads = [:]
+        earlyUploadOutcomes = [:]
     }
 
     // MARK: - Chats
@@ -775,6 +848,7 @@ public final class AppModel {
                 typingChats.remove(chat)
             }
         case .sendSucceeded(let chat, let oldID, let message):
+            settleUpload(of: PendingMessage(chat: chat, id: oldID), .sent)
             guard isBotChat(chat) else { return }
             let isNew = upsert(message, replacing: oldID)
             Self.log.info("sent message confirmed", [
@@ -786,6 +860,7 @@ public final class AppModel {
             ])
         case .sendFailed(let chat, let id, let error):
             updateMessage(id, in: chat) { $0.sendState = .failed(error) }
+            settleUpload(of: PendingMessage(chat: chat, id: id), .failed(error))
         }
     }
 
@@ -919,6 +994,302 @@ public final class AppModel {
         // message can hold the local path.
         Self.log.error("sending document failed", error.tdlibLogCodes(["chatID": chat.id.description]))
         errorMessage = userMessage(for: error)
+    }
+
+    // MARK: - Opened files
+
+    /// Whether the agent sheet shows: a file was opened, or couldn't be sent, and Winston is
+    /// logged in with its bot chats, the agents it lists. Until then the file waits, through a
+    /// login if need be. The sheet also waits for whatever else is showing to close.
+    public var isPickingAgentForOpenedFiles: Bool {
+        (!openedFiles.isEmpty || openedFileError != nil) && authState == .ready && chatsLoaded
+    }
+
+    /// How many opened files are still being copied.
+    public var openedFilesBeingCopied: Int {
+        openedFiles.count(where: \.isBeingCopied)
+    }
+
+    /// A file opened in Winston from another app: Copy to Winston from the iOS share sheet, which
+    /// hands over a copy in one of `openedFileInboxes`, or Open With or a drop on the Dock icon on
+    /// the Mac, which hands over the file itself. It takes its place in `openedFiles` at once, for
+    /// the agent sheet, and Winston copies it off the main actor (see `makeCopy(of:)`). The chat
+    /// shown stays the same.
+    public func openFile(at url: URL) {
+        guard url.isFileURL else {
+            Self.log.notice("opened URL ignored: not a file", ["scheme": url.scheme ?? "none"])
+            return
+        }
+        Self.log.notice("file opened", [
+            "type": Self.logType(of: url),
+            "authState": authState.logName,
+            "chatsLoaded": chatsLoaded,
+            "waiting": openedFiles.count,
+        ])
+        openedFileCount += 1
+        // Its place now, so a file opened later but copied sooner, such as a local one after an
+        // iCloud Drive download, can't go ahead of it.
+        let file = OpenedFile(
+            name: url.lastPathComponent,
+            sequence: nextOpenedFileSequence,
+            source: url,
+            inboxes: openedFileInboxes
+        )
+        nextOpenedFileSequence += 1
+        openedFiles.append(file)
+        makeCopy(of: file)
+    }
+
+    /// Try Again on an opened file whose copy failed.
+    public func retryCopy(of id: OpenedFile.ID) {
+        guard let index = openedFiles.firstIndex(where: { $0.id == id }),
+              openedFiles[index].copyError != nil else { return }
+        Self.log.notice("retrying opened file copy")
+        openedFiles[index].copyError = nil
+        makeCopy(of: openedFiles[index])
+    }
+
+    /// Makes Winston's working copy of an opened file, off the main actor (see
+    /// `DocumentFiles.copyForSending`, which turns down a folder). If it can't, as with the disk
+    /// full, the file keeps its place with the error, and what was handed over stays, for Try
+    /// Again or Cancel. The other files can go meanwhile.
+    private func makeCopy(of file: OpenedFile) {
+        let folder = openedFileFolder
+        openedFileCopies[file.id] = Task {
+            defer { openedFileCopies[file.id] = nil }
+            let result: Result<OpenedFile.Copied, any Error>
+            do {
+                result = .success(try await OpenedFile.copy(file.source, into: folder))
+            } catch {
+                result = .failure(error)
+            }
+            guard let index = openedFiles.firstIndex(where: { $0.id == file.id }) else {
+                // Cancelled while it was being copied.
+                if case .success(let copied) = result {
+                    DocumentFiles.removeCopy(copied.copy)
+                }
+                return
+            }
+            switch result {
+            case .success(let copied):
+                openedFiles[index].copy = copied.copy
+                openedFiles[index].isPhoto = copied.isPhoto
+                Self.log.notice("opened file copied", ["as": openedFiles[index].logKind, "waiting": openedFiles.count])
+            case .failure(let error):
+                // Codes only: a file error's description names the file.
+                Self.log.error("copying opened file failed", error.logCodes())
+                openedFiles[index].copyError = userMessage(for: error)
+            }
+        }
+    }
+
+    /// Waits until every opened file's copy is done, for the tests: one dropped by a cancel leaves
+    /// nothing else to wait on.
+    package func waitForOpenedFileCopies() async {
+        while let copy = openedFileCopies.values.first {
+            await copy.value
+        }
+    }
+
+    /// Sends the opened files to the agent `chat`, whichever chat is shown, in the order they came,
+    /// with no caption: a still image as a photo, as the + button's Photos sends one, anything else
+    /// as a document under its own name, as its Files does. Each one TDLib takes leaves
+    /// `openedFiles`, and comes back if its upload fails (see `finishUpload(of:_:)`). At the first
+    /// TDLib turns down, it and the rest stay, with the error in `openedFileError`, for another
+    /// pick or Cancel. One whose copy failed stays too, for Try Again. Does nothing while a file is
+    /// still being copied or the files are being sent.
+    public func sendOpenedFiles(to chat: ChatID) async {
+        guard let link, isPickingAgentForOpenedFiles, let agent = chats.first(where: { $0.id == chat }),
+              openedFiles.contains(where: \.isCopied), openedFilesBeingCopied == 0,
+              openedFilesSendingTo == nil else { return }
+        openedFilesSendingTo = chat
+        defer {
+            openedFilesSendingTo = nil
+            // The rest were for messages sent some other way meanwhile.
+            earlyUploadOutcomes = [:]
+        }
+        openedFileError = nil
+        // The batch belongs to this session: a logout, or TDLib closing, ends it.
+        let generation = sessionGeneration
+        // The files there now: one opened meanwhile waits for a pick of its own.
+        for file in openedFiles {
+            guard let copy = file.copy else { continue }
+            let handedOff: (pending: MessageID, uploadFile: URL)
+            do {
+                handedOff = try await handOff(file, copy: copy, to: chat, over: link, in: generation)
+            } catch {
+                guard generation == sessionGeneration else {
+                    Self.log.notice("opened files batch ended with its session", ["chatID": chat])
+                    return
+                }
+                openedFileError = Self.sendFailure(of: file, to: agent.title, reason: userMessage(for: error))
+                return
+            }
+            guard generation == sessionGeneration else {
+                // TDLib took it for the session that ended meanwhile. The file stays, for a pick once
+                // logged in again.
+                Self.log.notice("opened files batch ended with its session", ["chatID": chat])
+                if loggedOutSessionGeneration == generation {
+                    // Logged out: TDLib dropped the message. Closing as the app quits, it keeps it to
+                    // send on the next launch, from this file.
+                    Self.removeUploadFile(handedOff.uploadFile, of: file)
+                }
+                return
+            }
+            openedFiles.removeAll { $0.id == file.id }
+            let message = PendingMessage(chat: chat, id: handedOff.pending)
+            openedFileUploads[message] = OpenedFileUpload(file: file, agent: agent.title, uploadFile: handedOff.uploadFile)
+            Self.log.notice("opened file handed to telegram", [
+                "chatID": chat,
+                "as": file.logKind,
+                "waiting": openedFiles.count,
+            ])
+            // TDLib answers sendMessage before it can finish the upload, but its outcome can still
+            // reach the model first.
+            if let outcome = earlyUploadOutcomes.removeValue(forKey: message) {
+                finishUpload(of: message, outcome)
+            }
+        }
+    }
+
+    /// Hands one opened file to TDLib for `chat`, from Winston's working copy: a photo as a JPEG
+    /// made from it, as `sendPhoto` makes one, and a document as a copy of its own (a clone, on
+    /// APFS), so Winston's can go once it is sent while the sent message keeps its file. Returns
+    /// the pending message's ID and the file TDLib uploads. Throws what failed, logged, leaving
+    /// only Winston's copy, for another try; and throws without sending if the session
+    /// `generation` ended while the file was being made.
+    private func handOff(
+        _ file: OpenedFile,
+        copy: URL,
+        to chat: ChatID,
+        over link: TelegramLink,
+        in generation: Int
+    ) async throws -> (pending: MessageID, uploadFile: URL) {
+        do {
+            let uploadFile = if file.isPhoto {
+                try await PhotoFiles.jpegForSending(fromFileAt: copy)
+            } else {
+                try await DocumentFiles.copyForSending(from: copy)
+            }
+            do {
+                guard generation == sessionGeneration else { throw CancellationError() }
+                let pending = if file.isPhoto {
+                    try await link.sendPhoto(fileURL: uploadFile, caption: nil, to: chat)
+                } else {
+                    try await link.sendDocument(fileURL: uploadFile, caption: nil, to: chat)
+                }
+                return (pending, uploadFile)
+            } catch {
+                // Turned down, or not sent, so nothing will upload it, and another try makes another.
+                Self.removeUploadFile(uploadFile, of: file)
+                throw error
+            }
+        } catch {
+            // The caller logs the session ending.
+            if generation == sessionGeneration {
+                // Codes only: a file error's description names the file, and a TDLib upload
+                // error's message can hold the local path.
+                Self.log.error("sending opened file failed", error.tdlibLogCodes([
+                    "chatID": chat.description,
+                    "as": file.logKind,
+                ]))
+            }
+            throw error
+        }
+    }
+
+    /// Removes the file TDLib was to upload for an opened file: a photo's JPEG, or a document's
+    /// copy and its folder.
+    private static func removeUploadFile(_ url: URL, of file: OpenedFile) {
+        if file.isPhoto {
+            OpenedFile.remove(url)
+        } else {
+            DocumentFiles.removeCopy(url)
+        }
+    }
+
+    /// TDLib's outcome for a pending message, which finishes an opened file's upload. While the
+    /// opened files are being handed off, it is kept for a message not known yet, whose handoff
+    /// may not have returned. Nothing for any other message.
+    private func settleUpload(of message: PendingMessage, _ outcome: UploadOutcome) {
+        if openedFileUploads[message] != nil {
+            finishUpload(of: message, outcome)
+        } else if openedFilesSendingTo != nil {
+            earlyUploadOutcomes[message] = outcome
+        }
+    }
+
+    /// Ends an opened file's upload. Once sent, the file is done with: Winston's copy and what iOS
+    /// handed over go, and the file TDLib uploaded stays, as the sent message's file. If it
+    /// failed, TDLib's file goes and the opened file is back in the agent sheet, in its place,
+    /// with an error naming the agent, for another pick or Cancel. Nothing closes for it: the sheet
+    /// waits for whatever Adam has open.
+    private func finishUpload(of message: PendingMessage, _ outcome: UploadOutcome) {
+        guard let upload = openedFileUploads.removeValue(forKey: message) else { return }
+        let file = upload.file
+        switch outcome {
+        case .sent:
+            Self.log.notice("opened file sent", ["chatID": message.chat, "as": file.logKind])
+            file.removeFiles()
+        case .failed(let reason):
+            // Not TDLib's message, which can hold the local path.
+            Self.log.error("opened file upload failed", ["chatID": message.chat, "as": file.logKind])
+            Self.removeUploadFile(upload.uploadFile, of: file)
+            let index = openedFiles.firstIndex { $0.sequence > file.sequence } ?? openedFiles.endIndex
+            openedFiles.insert(file, at: index)
+            openedFileError = Self.sendFailure(of: file, to: upload.agent, reason: reason)
+        }
+    }
+
+    /// At logout, which ends TDLib's pending messages: removes the opened files' uploads with
+    /// their files, Winston's copies, what iOS handed over, and the files TDLib was uploading.
+    private func discardOpenedFileUploads() {
+        guard !openedFileUploads.isEmpty else { return }
+        Self.log.notice("opened file uploads discarded", ["count": openedFileUploads.count])
+        for upload in openedFileUploads.values {
+            upload.file.removeFiles()
+            Self.removeUploadFile(upload.uploadFile, of: upload.file)
+        }
+        openedFileUploads = [:]
+    }
+
+    /// Clears out, at launch, what opened files left in an earlier run, at least a day old (see
+    /// `OpenedFile.removeLeftovers`): uploads aren't followed across launches.
+    private func removeOpenedFileLeftovers() {
+        let folder = openedFileFolder
+        let inboxes = openedFileInboxes
+        let cutoff = Date(timeIntervalSinceNow: -24 * 60 * 60)
+        Task {
+            let removed = await OpenedFile.removeLeftovers(in: folder, inboxes: inboxes, before: cutoff)
+            Self.log.notice("opened file leftovers removed", ["count": removed])
+        }
+    }
+
+    /// The agent sheet's error for a file that couldn't be sent. It names the file: the sheet
+    /// shows names, which the logs never do.
+    private static func sendFailure(of file: OpenedFile, to agent: String, reason: String) -> String {
+        "Couldn't send \(file.name) to \(agent): \(reason)"
+    }
+
+    /// Cancel in the agent sheet: removes the opened files, Winston's copies and the ones iOS
+    /// handed over, and the sheet's error. A copy still being made is removed once it is. Not
+    /// while the files are being sent.
+    public func cancelOpenedFiles() {
+        guard openedFilesSendingTo == nil else { return }
+        Self.log.notice("opened files cancelled", [
+            "count": openedFiles.count,
+            "beingCopied": openedFilesBeingCopied,
+        ])
+        openedFiles.forEach { $0.removeFiles() }
+        openedFiles = []
+        openedFileError = nil
+    }
+
+    /// A file's type by its extension, for the logs, which never hold its name. A type the system
+    /// doesn't know is "unknown": its dynamic identifier would spell out the extension.
+    private static func logType(of url: URL) -> String {
+        guard let type = UTType(filenameExtension: url.pathExtension), !type.isDynamic else { return "unknown" }
+        return type.identifier
     }
 
     /// Adds Adam's 👍 to `message`, or removes it. An added 👍 becomes `addedThumbsUp` once it shows.
@@ -1136,6 +1507,27 @@ public final class AppModel {
         pronunciations[index].mode = .phonetic
         return true
     }
+}
+
+/// A message TDLib is sending, by its chat and its temporary ID.
+private struct PendingMessage: Hashable {
+    let chat: ChatID
+    let id: MessageID
+}
+
+/// An opened file TDLib is uploading, in `AppModel.openedFileUploads`.
+private struct OpenedFileUpload {
+    let file: OpenedFile
+    /// The agent's name, for the error if the upload fails.
+    let agent: String
+    /// What TDLib uploads: a photo's JPEG, or a document's copy of its own.
+    let uploadFile: URL
+}
+
+/// What TDLib said of a pending message.
+private enum UploadOutcome {
+    case sent
+    case failed(String)
 }
 
 /// Whether the suggestion list's play buttons play: `AppModel.suggestionPlayback`. Only a ready

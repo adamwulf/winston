@@ -46,6 +46,9 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
         /// Not a request: the answer to `getChatHistory`, after TDLib has read the history. Only
         /// for `hold(_:)`, to make the answer arrive after something that happened meanwhile.
         case chatHistoryReply
+        /// Not a request: the answer to `sendMessage`, once the pending message is made and the
+        /// link told of it. Only for `hold(_:)`, to settle the message before the answer arrives.
+        case sendMessageReply
     }
 
     private struct State {
@@ -625,6 +628,7 @@ package final class FakeTDLib: TDLibClientSource, TDLibRequests, @unchecked Send
             return pending
         }
         send(.updateNewMessage(UpdateNewMessage(message: pending)))
+        await waitWhileHeld(.sendMessageReply)
         return pending
     }
 
