@@ -3,8 +3,8 @@ import VoiceLoop
 import WinstonCore
 
 /// An IPA pronunciation's Suggest button: it opens a list of suggested phonemes for the word, from
-/// Apple Intelligence on this device. Shown only while suggestions can be made, and disabled
-/// while the word is blank.
+/// Apple Intelligence on this device. Disabled while the word is blank. Shown even when Apple
+/// Intelligence can't run: the list then says why, and what would let it.
 struct PronunciationSuggestButton: View {
     @Environment(AppModel.self) private var model
     let word: String
@@ -13,27 +13,39 @@ struct PronunciationSuggestButton: View {
     @State private var suggestions: PronunciationSuggestions?
 
     var body: some View {
-        if model.canSuggestPronunciations {
-            Button {
-                let suggestions = model.pronunciationSuggestions(for: word)
-                suggestions.generate()
-                self.suggestions = suggestions
-            } label: {
-                Image(systemName: "sparkles")
-                    #if os(iOS)
-                    // Borderless, only the symbol itself would take a tap: too small a target.
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(Rectangle())
-                    #endif
+        Button {
+            // The list asks as it shows.
+            openSuggestions.wrappedValue = model.pronunciationSuggestions(for: word)
+        } label: {
+            Image(systemName: "sparkles")
+                #if os(iOS)
+                // Borderless, only the symbol itself would take a tap: too small a target.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                #endif
+        }
+        // Borderless, so on iOS only the button opens the list, not a tap anywhere in the row.
+        .buttonStyle(.borderless)
+        .disabled(word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .help("Suggest IPA")
+        .accessibilityLabel("Suggest phonemes")
+        .popover(item: openSuggestions) { suggestions in
+            PronunciationSuggestionsView(suggestions: suggestions, pronunciationID: pronunciationID)
+        }
+    }
+
+    /// `suggestions`, stopping the open list's request as the list closes. Not as its content
+    /// disappears: on the iPhone, where the popover becomes a sheet, the first content shown
+    /// disappears right after it shows, while the sheet stays, and that stopped every request and
+    /// left the list loading for good.
+    private var openSuggestions: Binding<PronunciationSuggestions?> {
+        Binding {
+            suggestions
+        } set: { newValue in
+            if let open = suggestions, newValue?.id != open.id {
+                open.cancel()
             }
-            // Borderless, so on iOS only the button opens the list, not a tap anywhere in the row.
-            .buttonStyle(.borderless)
-            .disabled(word.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .help("Suggest IPA")
-            .accessibilityLabel("Suggest phonemes")
-            .popover(item: $suggestions) { suggestions in
-                PronunciationSuggestionsView(suggestions: suggestions, pronunciationID: pronunciationID)
-            }
+            suggestions = newValue
         }
     }
 }
@@ -51,8 +63,10 @@ private struct PronunciationSuggestionsView: View {
 
     var body: some View {
         content
-            .onDisappear {
-                suggestions.cancel()
+            // Asks once, though the content may show twice (see `PronunciationSuggestButton`).
+            // Closing the list stops the request; this content disappearing doesn't.
+            .onAppear {
+                suggestions.start()
             }
     }
 

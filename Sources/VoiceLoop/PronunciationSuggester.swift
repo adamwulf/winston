@@ -4,9 +4,9 @@ import Foundation
 /// app has one on-device backend (`OnDevicePronunciationSuggester`); another can be added without
 /// changing the settings screen.
 public protocol PronunciationSuggester: Sendable {
-    /// Whether it can suggest now. The on-device model, for one, isn't there on a device without
-    /// Apple Intelligence, while it is turned off, or while its model downloads.
-    var isAvailable: Bool { get }
+    /// Whether it can suggest now, and if not, why. The on-device model, for one, isn't there on a
+    /// device without Apple Intelligence, while it is turned off, or while its model downloads.
+    var availability: PronunciationSuggesterAvailability { get }
     /// A sentence saying where its suggestions come from, for the suggestion list's footer, such
     /// as "Suggested by Apple Intelligence on this device."
     var attribution: String { get }
@@ -50,16 +50,55 @@ public struct PronunciationSuggestion: Hashable, Sendable {
     }
 }
 
+/// Whether a `PronunciationSuggester` can suggest now, and if not, why.
+public enum PronunciationSuggesterAvailability: Hashable, Sendable {
+    case available
+    case unavailable(UnavailableReason)
+
+    /// Why a suggester can't suggest now: each says what would let it.
+    public enum UnavailableReason: String, Hashable, Sendable, CaseIterable {
+        /// The device can't run Apple Intelligence.
+        case deviceNotEligible
+        /// Apple Intelligence is turned off, or not set up.
+        case appleIntelligenceNotEnabled
+        /// Apple Intelligence's model is downloading, or isn't ready for another reason.
+        case modelNotReady
+        /// A reason newer than this code.
+        case other
+    }
+
+    /// As the logs name it: "available", or the reason.
+    public var logName: String {
+        switch self {
+        case .available: "available"
+        case .unavailable(let reason): reason.rawValue
+        }
+    }
+}
+
 /// Why a `PronunciationSuggester` suggested nothing.
-public enum PronunciationSuggestionError: String, Error, Sendable {
-    /// It can't run now: see `PronunciationSuggester.isAvailable`.
-    case unavailable
+public enum PronunciationSuggestionError: Error, Hashable, Sendable {
+    /// It can't run now: see `PronunciationSuggester.availability`.
+    case unavailable(PronunciationSuggesterAvailability.UnavailableReason)
     /// The model's safety guardrails stopped it, or it refused.
     case declined
     /// Too many requests: it is rate limited or busy with another.
     case busy
+    /// It didn't answer in time: the suggestion list gave up waiting.
+    case timedOut
     /// Anything else.
     case failed
+
+    /// As the logs name it.
+    public var logName: String {
+        switch self {
+        case .unavailable(let reason): "unavailable.\(reason.rawValue)"
+        case .declined: "declined"
+        case .busy: "busy"
+        case .timedOut: "timedOut"
+        case .failed: "failed"
+        }
+    }
 }
 
 /// A suggestion as settings lists it, checked against the symbols Kokoro has: with the symbols in

@@ -2,12 +2,13 @@ import Foundation
 import Synchronization
 import VoiceLoop
 
-/// The pronunciation suggester for tests: no model. It is available while the test says so, and
-/// answers each request with the next answer the test gave it (or with none, once they run out),
-/// holding each answer back while `holdsAnswers` is on. It notes which requests were cancelled.
+/// The pronunciation suggester for tests: no model. It is available unless the test says
+/// otherwise, and answers each request with the next answer the test gave it (or with none, once
+/// they run out), holding each answer back while `holdsAnswers` is on. It notes which requests
+/// were cancelled.
 final class FakePronunciationSuggester: PronunciationSuggester {
     private struct State {
-        var isAvailable = true
+        var availability = PronunciationSuggesterAvailability.available
         var answers: [Result<[PronunciationSuggestion], PronunciationSuggestionError>] = []
         var words: [String] = []
         var holdsAnswers = false
@@ -20,9 +21,9 @@ final class FakePronunciationSuggester: PronunciationSuggester {
 
     let attribution = "Suggested by the fake suggester."
 
-    var isAvailable: Bool {
-        get { state.withLock { $0.isAvailable } }
-        set { state.withLock { $0.isAvailable = newValue } }
+    var availability: PronunciationSuggesterAvailability {
+        get { state.withLock { $0.availability } }
+        set { state.withLock { $0.availability = newValue } }
     }
 
     /// What the requests get, in order: the first request the first answer, and on.
