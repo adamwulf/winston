@@ -697,12 +697,16 @@ final class EchoLog {
         #if os(iOS)
         // The route of the configuration it started on, as its snapshot took it; unknown if a
         // new configuration (a route change, say) began before the line was written.
+        let session = AVAudioSession.sharedInstance()
         if let snapshot, snapshot.configuration == start.configuration {
             fields.merge(snapshot.route) { $1 }
+            // As the line is written: the volume buttons change it with no new configuration,
+            // and every route change begins one, so it is this route's volume.
+            fields["outputVolume"] = Self.volume(session.outputVolume)
         } else {
             fields["route"] = "unknown"
         }
-        fields["otherAudioPlaying"] = AVAudioSession.sharedInstance().isOtherAudioPlaying
+        fields["otherAudioPlaying"] = session.isOtherAudioPlaying
         #endif
         logger.notice("reply started", context(pipeline, at: start.started, fields))
     }
@@ -848,10 +852,10 @@ final class EchoLog {
     /// The route replies play through and what the microphone hears them with, for a
     /// configuration's snapshot: `route` is `speaker`, `receiver`, `bluetooth`, `headphones`,
     /// `car`, `airPlay`, `usb`, `none` or `other`, from the first output. Also the ports, the
-    /// output volume (which goes with the route), the input data source's name, polar pattern
-    /// and orientation, and the input gain and whether it can be set. "reply started" adds
-    /// whether another app's audio plays, which no echo canceller hears as a reference, as it
-    /// is written.
+    /// input data source's name, polar pattern and orientation, and the input gain and whether
+    /// it can be set. "reply started" adds the output volume, while its configuration is
+    /// current, and whether another app's audio plays, which no echo canceller hears as a
+    /// reference, as it is written.
     private static func routeFields(_ session: AVAudioSession = .sharedInstance()) -> [String: CustomStringConvertible] {
         let route = session.currentRoute
         let source = session.inputDataSource
@@ -862,7 +866,6 @@ final class EchoLog {
             "route": routeKind(route.outputs.first?.portType),
             "inputs": portTypes(route.inputs),
             "outputs": portTypes(route.outputs),
-            "outputVolume": volume(session.outputVolume),
             "inputGain": volume(session.inputGain),
             "inputGainSettable": session.isInputGainSettable,
             "inputDataSource": source?.dataSourceName ?? "none",
