@@ -263,7 +263,7 @@ struct PronunciationSuggestionTests {
 
     /// So the logs of a list closed while its request winds down and of the next list opened
     /// can be told apart.
-    @Test func requestsAreNumberedAcrossLists() async {
+    @Test func requestsAreNumberedAcrossLists() async throws {
         let first = FakePronunciationSuggester()
         let second = FakePronunciationSuggester()
         let handled = HandledAnswers()
@@ -274,7 +274,9 @@ struct PronunciationSuggestionTests {
         secondList.start()
 
         #expect(await eventually { first.requestNumbers.count == 1 && second.requestNumbers.count == 1 })
-        #expect(second.requestNumbers[0] > first.requestNumbers[0])
+        let firstNumber = try #require(first.requestNumbers.first)
+        let secondNumber = try #require(second.requestNumbers.first)
+        #expect(secondNumber > firstNumber)
     }
 
     @Test func aRequestNotAnsweredInTimeIsCancelledAndTheListSaysSo() async throws {

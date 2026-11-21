@@ -578,7 +578,9 @@ iPhone a second time, right after `requested`, with `asks=false`, the list's
 model's availability, and starts its clock. Then one of `listed`, `failed`
 (also at once, when the model can't run), `timed out` or `cancelled`, and
 `answer dropped` for an answer that came after the list stopped waiting, each
-with `request` and `ms`.
+with `request` and `ms`. Regenerate during a request logs no `cancelled`: the
+next `requested` names the request it replaced (`replacedRequest`), and that
+request's answer, if it comes, is `answer dropped`.
 
 `label=voice.suggestions` is the model, every line with `request` and `ms`
 since the request reached it: `model checked`, `session created` with the
