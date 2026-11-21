@@ -46,6 +46,8 @@ struct ContentView: View {
         .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         .sheet(isPresented: isPickingAgent) {
             OpenedFileSheet()
+                // A document still downloading would open Quick Look, closing this mid-pick.
+                .onAppear { presentations.dropPendingPreview() }
         }
     }
 
