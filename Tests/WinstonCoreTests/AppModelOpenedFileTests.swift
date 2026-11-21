@@ -667,7 +667,7 @@ struct OpenedFileTests {
         hold.release()
 
         // The copy is made, then removed, and the file doesn't come back.
-        try await settle()
+        await model.waitForOpenedFileCopies()
         #expect(try workingCopies(named: name).isEmpty)
         #expect(model.openedFiles.isEmpty)
         #expect(!model.isPickingAgentForOpenedFiles)

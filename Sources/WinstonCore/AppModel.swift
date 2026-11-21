@@ -92,6 +92,8 @@ public final class AppModel {
     @ObservationIgnored private let openedFileFolder: URL
     /// Gives each opened file its place in the order they were opened.
     @ObservationIgnored private var nextOpenedFileSequence = 0
+    /// The copies being made, by file (see `waitForOpenedFileCopies()`).
+    @ObservationIgnored private var openedFileCopies: [OpenedFile.ID: Task<Void, Never>] = [:]
     /// The opened files TDLib is uploading, by their pending message, until it says each was sent
     /// or failed. Not kept across launches.
     @ObservationIgnored private var openedFileUploads: [PendingMessage: OpenedFileUpload] = [:]
@@ -1053,7 +1055,8 @@ public final class AppModel {
     /// Again or Cancel. The other files can go meanwhile.
     private func makeCopy(of file: OpenedFile) {
         let folder = openedFileFolder
-        Task {
+        openedFileCopies[file.id] = Task {
+            defer { openedFileCopies[file.id] = nil }
             let result: Result<OpenedFile.Copied, any Error>
             do {
                 result = .success(try await OpenedFile.copy(file.source, into: folder))
@@ -1077,6 +1080,14 @@ public final class AppModel {
                 Self.log.error("copying opened file failed", error.logCodes())
                 openedFiles[index].copyError = userMessage(for: error)
             }
+        }
+    }
+
+    /// Waits until every opened file's copy is done, for the tests: one dropped by a cancel leaves
+    /// nothing else to wait on.
+    package func waitForOpenedFileCopies() async {
+        while let copy = openedFileCopies.values.first {
+            await copy.value
         }
     }
 
