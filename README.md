@@ -261,7 +261,7 @@ system:
   clock and the standard user defaults.
 - `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
   `KokoroRealModelTests` runs.
-- `OnDevicePronunciationSuggester.generatedPronunciations(for:)`: Apple's
+- `OnDevicePronunciationSuggester.generatedPronunciations(for:request:started:)`: Apple's
   on-device model. Covered only when
   `OnDevicePronunciationSuggesterRealModelTests` runs.
 - `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
@@ -525,9 +525,11 @@ An IPA row has a Suggest button (sparkles). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
 fills the row's IPA; Regenerate asks again, even while a request is under way.
 The list asks as it shows (`PronunciationSuggestions.start()`), once though its
-content shows twice on the iPhone, where the popover becomes a sheet, and stops
-the request only when it is closed: stopping it as that first content
-disappeared left the list loading for good. When the suggester can't run, the
+content shows twice on the iPhone, where the popover becomes a sheet. Its
+request stops when the list is closed, replaced by Regenerate, or given up on,
+but not when its content disappears: on the iPhone the first content disappears
+as the sheet shows, and stopping the request then left the list loading for
+good. When the suggester can't run, the
 button still shows, and the list says why and what would let it: Apple
 Intelligence turned off, its model not ready, or a device without it. A request
 that hasn't answered after a minute is cancelled, and the list says so.
@@ -564,17 +566,25 @@ the symbols made a request take 36 to 104 s rather than about 2.
 
 Each step is logged at notice level, and a failure or a timeout at warning, with
 counts, sizes, token counts and error codes, never the word or what the model
-wrote. `grep suggestions` on a log file shows a request through.
-`label=app.suggestions` is the list: `opened` as Suggest is tapped and `shown`
-as the list shows (twice on the iPhone, the second with `asks=false`), then
-`requested` with the model's availability, and one of `listed`, `failed`,
-`timed out` or `cancelled`, then `answer dropped` for an answer that came after
-the list stopped waiting. `label=voice.suggestions` is the model: `model
-checked`, `session created` with the prompt's sizes, `request started`, `answer
-started` and `answer progress` as it streams in, and one of `generated`,
-`failed` or `cancelled`, then `IPA converted`. Each line after `requested` has
-the time since the request started (`ms`), and both labels number the request
-(`request=`), so a request replaced by Regenerate can be told from the next.
+wrote. `grep suggestions` on a log file shows a request through. Requests are
+numbered across lists (`request=`), in both labels, so a request replaced by
+Regenerate, or one still winding down after its list closed, can be told from
+the next.
+
+`label=app.suggestions` is the list. `opened` (as Suggest is tapped) has neither
+a number nor a time. `shown` comes as the list shows, with `asks`: on the
+iPhone a second time, right after `requested`, with `asks=false`, the list's
+`latestRequest` and its `ms`. `requested` has the request's number and the
+model's availability, and starts its clock. Then one of `listed`, `failed`
+(also at once, when the model can't run), `timed out` or `cancelled`, and
+`answer dropped` for an answer that came after the list stopped waiting, each
+with `request` and `ms`.
+
+`label=voice.suggestions` is the model, every line with `request` and `ms`
+since the request reached it: `model checked`, `session created` with the
+prompt's sizes, `request started`, `answer started` and `answer progress` as
+the answer streams in, and one of `generated` (then `IPA converted`), `failed`
+or `cancelled`.
 
 The suggestions are often wrong, above all for names from other languages, and
 change from one request to the next: play each before using it. About 1

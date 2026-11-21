@@ -137,9 +137,9 @@ private struct PronunciationSuggestionsView: View {
             } header: {
                 Text("Suggestions for \(suggestions.word)")
             } footer: {
-                // Where they come from, in the suggester's own words. Not beside a failure, such
-                // as a device without Apple Intelligence, where there are none.
-                if !isFailed {
+                // Where they come from, in the suggester's own words. Not when there are none to
+                // play, as after a failure, such as on a device without Apple Intelligence.
+                if !hasNone {
                     Text(suggestions.attribution + " " + String(localized: "Suggestions are often wrong: play each before you use it."))
                 }
             }
@@ -147,8 +147,13 @@ private struct PronunciationSuggestionsView: View {
         .formStyle(.grouped)
     }
 
-    private var isFailed: Bool {
-        if case .failed = suggestions.phase { true } else { false }
+    /// Whether the list has ended with no suggestions: a failure, or an answer with none.
+    private var hasNone: Bool {
+        switch suggestions.phase {
+        case .loading: false
+        case .loaded(let suggestions): suggestions.isEmpty
+        case .failed: true
+        }
     }
 
     private func row(for candidate: PronunciationCandidate) -> some View {

@@ -220,7 +220,7 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         respelling JOH-uh-kin; ipa ˈdʒoʊəkɪn; note read as it is spelled
         """
 
-    /// What the model's answer to `suggestions(for:)` is: its pronunciations.
+    /// What the model's answer to `suggestions(for:request:)` is: its pronunciations.
     @Generable
     struct GeneratedPronunciations {
         @Guide(description: "Different ways to say the word, the most likely first", .count(3...5))
@@ -246,7 +246,8 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     }
 
     /// The `PronunciationSuggestionError` for a failure of the model's, or of ours. Its assets
-    /// missing means its model isn't ready, as while it downloads.
+    /// missing is taken as its model not ready, as while it downloads; `generatedPronunciations`
+    /// then asks the model why it is unavailable, and keeps that reason if it has one.
     static func reason(for error: any Error) -> PronunciationSuggestionError {
         if let error = error as? PronunciationSuggestionError {
             return error

@@ -15,8 +15,10 @@ import VoiceLoop
 /// nothing asked again. Made by `AppModel.pronunciationSuggestions(for:)`.
 ///
 /// Each step is logged under `app.suggestions` at notice level, and a failure or a timeout at
-/// warning, with the request's number and the time since it started (`ms`): counts and codes
-/// only, never the word or the suggestions.
+/// warning: counts and codes only, never the word or the suggestions. `opened` has no number or
+/// time; `shown` has the latest request's number and time once there is one; the rest have the
+/// request's number, and those after `requested` the time since it started (`ms`). Requests are
+/// numbered across lists.
 @MainActor
 @Observable
 public final class PronunciationSuggestions: Identifiable {
@@ -55,8 +57,11 @@ public final class PronunciationSuggestions: Identifiable {
     @ObservationIgnored private var request: Task<Void, Never>?
     /// Gives up on the latest request once the timeout has passed.
     @ObservationIgnored private var deadline: Task<Void, Never>?
-    /// Numbers the requests, from 1, for the logs and to tell their answers apart.
-    @ObservationIgnored private var requestCount = 0
+    /// Numbers the requests of every list, from 1, for the logs and to tell their answers apart:
+    /// a list closed while its request winds down and the next one opened never share a number.
+    private static var requestCount = 0
+    /// This list's latest request; nil before it asks.
+    @ObservationIgnored private var latestRequest: Int?
     /// The request whose answer the list shows when it comes; nil when there is none, so an
     /// answer to a request replaced, cancelled or given up on is dropped.
     @ObservationIgnored private var awaitedRequest: Int?
@@ -92,10 +97,12 @@ public final class PronunciationSuggestions: Identifiable {
     /// sheet.
     public func start() {
         let asks = phase == .loading && awaitedRequest == nil
-        Self.log.notice("pronunciation suggestions shown", [
-            "asks": asks,
-            "latestRequest": requestCount,
-        ])
+        var fields: [String: CustomStringConvertible] = ["asks": asks]
+        if let latestRequest {
+            fields["latestRequest"] = latestRequest
+            fields["ms"] = Self.milliseconds(since: requestStarted)
+        }
+        Self.log.notice("pronunciation suggestions shown", fields)
         if asks {
             generate()
         }
@@ -106,8 +113,9 @@ public final class PronunciationSuggestions: Identifiable {
     public func generate() {
         let replaced = awaitedRequest
         stopRequest()
-        requestCount += 1
-        let number = requestCount
+        Self.requestCount += 1
+        let number = Self.requestCount
+        latestRequest = number
         requestStarted = .now
         let started = requestStarted
         let availability = suggester.availability
@@ -121,7 +129,13 @@ public final class PronunciationSuggestions: Identifiable {
         Self.log.notice("pronunciation suggestions requested", fields)
         if case .unavailable(let reason) = availability {
             // It would only fail: the list says why, and what would let it run.
-            phase = .failed(userMessage(for: PronunciationSuggestionError.unavailable(reason)))
+            let error = PronunciationSuggestionError.unavailable(reason)
+            Self.log.warning("pronunciation suggestions failed", [
+                "request": number,
+                "reason": error.logName,
+                "ms": Self.milliseconds(since: started),
+            ])
+            phase = .failed(userMessage(for: error))
             return
         }
         awaitedRequest = number
@@ -158,11 +172,14 @@ public final class PronunciationSuggestions: Identifiable {
     /// otherwise.
     private func answer(_ result: Result<[PronunciationSuggestion], any Error>, toRequest number: Int, started: ContinuousClock.Instant) {
         guard number == awaitedRequest else {
-            Self.log.notice("pronunciation suggestions answer dropped", [
+            var fields: [String: CustomStringConvertible] = [
                 "request": number,
-                "latestRequest": requestCount,
                 "ms": Self.milliseconds(since: started),
-            ])
+            ]
+            if let latestRequest, latestRequest != number {
+                fields["latestRequest"] = latestRequest
+            }
+            Self.log.notice("pronunciation suggestions answer dropped", fields)
             return
         }
         awaitedRequest = nil

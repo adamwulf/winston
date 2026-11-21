@@ -85,7 +85,7 @@ public enum PronunciationSuggestionError: Error, Hashable, Sendable {
     case declined
     /// Too many requests: it is rate limited or busy with another.
     case busy
-    /// It didn't answer in time: the suggestion list gave up waiting.
+    /// It didn't answer in time: the model gave up, or the suggestion list gave up waiting.
     case timedOut
     /// Anything else.
     case failed

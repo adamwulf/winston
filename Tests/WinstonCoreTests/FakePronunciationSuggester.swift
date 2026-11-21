@@ -11,6 +11,7 @@ final class FakePronunciationSuggester: PronunciationSuggester {
         var availability = PronunciationSuggesterAvailability.available
         var answers: [Result<[PronunciationSuggestion], PronunciationSuggestionError>] = []
         var words: [String] = []
+        var requestNumbers: [Int] = []
         var holdsAnswers = false
         /// Held answers, by the number of their request.
         var heldAnswers: [Int: CheckedContinuation<Void, Never>] = [:]
@@ -34,6 +35,9 @@ final class FakePronunciationSuggester: PronunciationSuggester {
 
     /// The word of each request, oldest first.
     var words: [String] { state.withLock { $0.words } }
+
+    /// The number the list gave each request, for the logs, oldest first.
+    var requestNumbers: [Int] { state.withLock { $0.requestNumbers } }
 
     /// While true, each answer waits until `releaseAnswer(_:)` or `releaseAnswers()`.
     var holdsAnswers: Bool {
@@ -66,6 +70,7 @@ final class FakePronunciationSuggester: PronunciationSuggester {
         let (number, answer, holds) = state.withLock { state in
             let number = state.words.count
             state.words.append(word)
+            state.requestNumbers.append(request)
             let answer = number < state.answers.count ? state.answers[number] : .success([])
             return (number, answer, state.holdsAnswers)
         }

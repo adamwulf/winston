@@ -261,6 +261,22 @@ struct PronunciationSuggestionTests {
         #expect(candidates(of: suggestions) != nil)
     }
 
+    /// So the logs of a list closed while its request winds down and of the next list opened
+    /// can be told apart.
+    @Test func requestsAreNumberedAcrossLists() async {
+        let first = FakePronunciationSuggester()
+        let second = FakePronunciationSuggester()
+        let handled = HandledAnswers()
+        let firstList = suggestions(for: "Winston", from: first, handled: handled)
+        let secondList = suggestions(for: "Winston", from: second, handled: handled)
+
+        firstList.start()
+        secondList.start()
+
+        #expect(await eventually { first.requestNumbers.count == 1 && second.requestNumbers.count == 1 })
+        #expect(second.requestNumbers[0] > first.requestNumbers[0])
+    }
+
     @Test func aRequestNotAnsweredInTimeIsCancelledAndTheListSaysSo() async throws {
         let suggester = FakePronunciationSuggester()
         suggester.holdsAnswers = true
