@@ -189,7 +189,7 @@ can't see them.
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment`, and the `Recognizer` it makes: `start(inputs:)`, `results`, `finalize(through:)` and `cancel()` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard. Asked to finalize, it waits until it has read that far and reports its last volatile result again as final, as the analyzer does. It notes where the audio it is fed was loud (`soundHeard`) |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
 | The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words and phoneme symbols the test gives it |
-| Apple's on-device language model | `PronunciationSuggester`, as `pronunciationSuggester` in `AppModel`'s package init | `FakePronunciationSuggester`: available while the test says so, answers each request with the next answer the test gave it, can hold each answer back until the test lets it go, and notes which requests were cancelled |
+| Apple's on-device language model | `PronunciationSuggester`, as `pronunciationSuggester` in `AppModel`'s package init | `FakePronunciationSuggester`: available unless the test gives a reason it isn't, answers each request with the next answer the test gave it, can hold each answer back until the test lets it go, and notes which requests were cancelled |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -261,7 +261,7 @@ system:
   clock and the standard user defaults.
 - `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
   `KokoroRealModelTests` runs.
-- `OnDevicePronunciationSuggester.generatedPronunciations(for:)`: Apple's
+- `OnDevicePronunciationSuggester.generatedPronunciations(for:request:started:)`: Apple's
   on-device model. Covered only when
   `OnDevicePronunciationSuggesterRealModelTests` runs.
 - `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
@@ -521,10 +521,18 @@ does.
 `AppModel` saves the pronunciations in the standard user defaults, under
 `pronunciations`; one saved before IPA existed is Say As.
 
-An IPA row has a Suggest button (sparkles), shown only while the suggester can
-run (`AppModel.canSuggestPronunciations`). It lists a few ways to say the word,
+An IPA row has a Suggest button (sparkles). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
 fills the row's IPA; Regenerate asks again, even while a request is under way.
+The list asks as it shows (`PronunciationSuggestions.start()`), once though its
+content shows twice on the iPhone, where the popover becomes a sheet. Its
+request stops when the list is closed, replaced by Regenerate, or given up on,
+but not when its content disappears: on the iPhone the first content disappears
+as the sheet shows, and stopping the request then left the list loading for
+good. When the suggester can't run, the
+button still shows, and the list says why and what would let it: Apple
+Intelligence turned off, its model not ready, or a device without it. A request
+that hasn't answered after a minute is cancelled, and the list says so.
 The play buttons are on only while a Kokoro voice is ready
 (`AppModel.suggestionPlayback`): any other voice would say the same written word
 for every suggestion. Otherwise a note says what would turn them on: choosing a
@@ -554,8 +562,31 @@ made each time the list shows them, so it follows the model as it loads and is
 freed. A suggestion with a symbol Kokoro doesn't have says so and can't be
 used. The model's IPA isn't held to IPA's symbols with a pattern guide: on
 macOS 27 the guides take no character classes or anchors, and an alternation of
-the symbols made a request take 36 to 104 s rather than about 2. The logs hold
-counts, times and error codes, never the word or what the model wrote.
+the symbols made a request take 36 to 104 s rather than about 2.
+
+Each step is logged at notice level, and a failure or a timeout at warning, with
+counts, sizes, token counts and error codes, never the word or what the model
+wrote. `grep suggestions` on a log file shows a request through. Requests are
+numbered across lists (`request=`), in both labels, so a request replaced by
+Regenerate, or one still winding down after its list closed, can be told from
+the next.
+
+`label=app.suggestions` is the list. `opened` (as Suggest is tapped) has neither
+a number nor a time. `shown` comes as the list shows, with `asks`: on the
+iPhone a second time, right after `requested`, with `asks=false`, the list's
+`latestRequest` and its `ms`. `requested` has the request's number and the
+model's availability, and starts its clock. Then one of `listed`, `failed`
+(also at once, when the model can't run), `timed out` or `cancelled`, and
+`answer dropped` for an answer that came after the list stopped waiting, each
+with `request` and `ms`. Regenerate during a request logs no `cancelled`: the
+next `requested` names the request it replaced (`replacedRequest`), and that
+request's answer, if it comes, is `answer dropped`.
+
+`label=voice.suggestions` is the model, every line with `request` and `ms`
+since the request reached it: `model checked`, `session created` with the
+prompt's sizes, `request started`, `answer started` and `answer progress` as
+the answer streams in, and one of `generated` (then `IPA converted`), `failed`
+or `cancelled`.
 
 The suggestions are often wrong, above all for names from other languages, and
 change from one request to the next: play each before using it. About 1

@@ -1454,13 +1454,6 @@ public final class AppModel {
         voiceLoop.preview(word: word, phonemes: phonemes)
     }
 
-    /// Whether settings offers the Suggest button on an IPA pronunciation: the suggester can run
-    /// now. The on-device one can't without Apple Intelligence, while it is turned off, or while
-    /// its model downloads.
-    public var canSuggestPronunciations: Bool {
-        pronunciationSuggester.isAvailable
-    }
-
     /// Whether the suggestion list's play buttons can tell its suggestions apart: a Kokoro voice is
     /// chosen and its model is ready, so each plays its phonemes. Any other voice would say the
     /// same written word for every one.
@@ -1486,9 +1479,10 @@ public final class AppModel {
     }
 
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
-    /// asks nothing until its `generate()` is called. Its candidates are checked against the
-    /// phoneme symbols the Kokoro voices can say now (`VoiceLoop.kokoroPhonemeSymbols`), each time
-    /// they are read.
+    /// asks nothing until its `start()` or `generate()` is called, and then says why when the
+    /// suggester can't run now (without Apple Intelligence, while it is turned off, or while its
+    /// model downloads). Its candidates are checked against the phoneme symbols the Kokoro voices
+    /// can say now (`VoiceLoop.kokoroPhonemeSymbols`), each time they are read.
     public func pronunciationSuggestions(for word: String) -> PronunciationSuggestions {
         PronunciationSuggestions(word: word, suggester: pronunciationSuggester) { [voiceLoop] in
             voiceLoop.kokoroPhonemeSymbols
@@ -1609,10 +1603,25 @@ public func userMessage(for error: any Error) -> String {
         }
     }
     if let error = error as? PronunciationSuggestionError {
+        // Where Apple Intelligence's switch lives differs between OS versions (Apple Intelligence &
+        // Siri on iOS 26), so the messages name Settings and the setting, not the pane.
+        #if os(macOS)
+        let settings = "System Settings"
+        #else
+        let settings = "Settings"
+        #endif
         switch error {
-        case .unavailable: return "Suggestions aren't available right now. Check that Apple Intelligence is turned on and its model has downloaded."
+        case .unavailable(.deviceNotEligible):
+            return "Suggestions need Apple Intelligence, which this device doesn't support."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Suggestions need Apple Intelligence, which is turned off. Turn it on in \(settings) (search for Apple Intelligence), then try again."
+        case .unavailable(.modelNotReady):
+            return "Apple Intelligence isn't ready yet: its model may still be downloading, which can take a while on Wi-Fi. Try again later."
+        case .unavailable(.other):
+            return "Apple Intelligence isn't available right now. Check that it is turned on in \(settings), then try again."
         case .declined: return "The model declined to suggest pronunciations for this word."
         case .busy: return "The model is busy. Try again in a moment."
+        case .timedOut: return "Apple Intelligence didn't answer in time. Try again."
         case .failed: return "Couldn't get suggestions. Try again."
         }
     }

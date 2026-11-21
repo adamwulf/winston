@@ -13,9 +13,9 @@ import Testing
         guard #available(iOS 27.0, macOS 27.0, *) else { return }
         #expect(reason(LanguageModelError.guardrailViolation(.init(debugDescription: ""))) == .declined)
         #expect(reason(LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: ""))) == .busy)
-        #expect(reason(LanguageModelError.timeout(.init(debugDescription: ""))) == .busy)
+        #expect(reason(LanguageModelError.timeout(.init(debugDescription: ""))) == .timedOut)
         #expect(reason(LanguageModelSession.Error.concurrentRequests) == .busy)
-        #expect(reason(SystemLanguageModel.Error.assetsUnavailable(.init(debugDescription: ""))) == .unavailable)
+        #expect(reason(SystemLanguageModel.Error.assetsUnavailable(.init(debugDescription: ""))) == .unavailable(.modelNotReady))
         #expect(reason(LanguageModelError.unsupportedLanguageOrLocale(.init(languageCode: "xx", debugDescription: ""))) == .failed)
     }
 
@@ -24,12 +24,37 @@ import Testing
         #expect(reason(LanguageModelSession.GenerationError.guardrailViolation(context)) == .declined)
         #expect(reason(LanguageModelSession.GenerationError.rateLimited(context)) == .busy)
         #expect(reason(LanguageModelSession.GenerationError.concurrentRequests(context)) == .busy)
-        #expect(reason(LanguageModelSession.GenerationError.assetsUnavailable(context)) == .unavailable)
+        #expect(reason(LanguageModelSession.GenerationError.assetsUnavailable(context)) == .unavailable(.modelNotReady))
         #expect(reason(LanguageModelSession.GenerationError.decodingFailure(context)) == .failed)
     }
 
     @Test func anyOtherErrorIsAFailure() {
         #expect(reason(CocoaError(.fileReadUnknown)) == .failed)
+    }
+
+    @Test func oneOfOursIsKept() {
+        #expect(reason(PronunciationSuggestionError.unavailable(.modelNotReady)) == .unavailable(.modelNotReady))
+        #expect(reason(PronunciationSuggestionError.failed) == .failed)
+    }
+}
+
+/// Why the on-device suggester can't run, as settings is told: each of the system's reasons.
+@Suite struct OnDevicePronunciationSuggesterAvailabilityTests {
+    private func availability(_ availability: SystemLanguageModel.Availability) -> PronunciationSuggesterAvailability {
+        OnDevicePronunciationSuggester.availability(of: availability)
+    }
+
+    @Test func eachOfTheSystemsReasonsIsKept() {
+        #expect(availability(.available) == .available)
+        #expect(availability(.unavailable(.deviceNotEligible)) == .unavailable(.deviceNotEligible))
+        #expect(availability(.unavailable(.appleIntelligenceNotEnabled)) == .unavailable(.appleIntelligenceNotEnabled))
+        #expect(availability(.unavailable(.modelNotReady)) == .unavailable(.modelNotReady))
+    }
+
+    @Test func theLogsNameTheReason() {
+        #expect(PronunciationSuggesterAvailability.available.logName == "available")
+        #expect(PronunciationSuggesterAvailability.unavailable(.modelNotReady).logName == "modelNotReady")
+        #expect(PronunciationSuggestionError.unavailable(.appleIntelligenceNotEnabled).logName == "unavailable.appleIntelligenceNotEnabled")
     }
 }
 
@@ -111,7 +136,7 @@ private let realSuggesterRequested: Bool = {
 @Suite(
     .serialized,
     .enabled(if: realSuggesterRequested, "neither WINSTON_SUGGESTER_REAL_MODEL=1 nor .build/suggester-real-model asks for it"),
-    .enabled(if: OnDevicePronunciationSuggester().isAvailable, "the on-device language model isn't available"),
+    .enabled(if: OnDevicePronunciationSuggester().availability == .available, "the on-device language model isn't available"),
     .timeLimit(.minutes(5))
 )
 struct OnDevicePronunciationSuggesterRealModelTests {
@@ -133,11 +158,11 @@ struct OnDevicePronunciationSuggesterRealModelTests {
         let suggester = OnDevicePronunciationSuggester()
         var report = ["", "On-device pronunciation suggestions (IPA from the model → Kokoro phonemes):"]
         var failedWords: [String] = []
-        for word in Self.words {
+        for (index, word) in Self.words.enumerated() {
             let started = ContinuousClock.now
             let generated: [OnDevicePronunciationSuggester.GeneratedPronunciation]
             do {
-                generated = try await suggester.generatedPronunciations(for: word)
+                generated = try await suggester.generatedPronunciations(for: word, request: index + 1)
             } catch {
                 // The suggester's log line, above the report, has the model's error code.
                 report.append("\(word): failed, \(error)")

@@ -6,7 +6,7 @@ import VoiceLoopTestSupport
 // when an answer was handled.
 @testable import WinstonCore
 
-/// The Suggest button on an IPA pronunciation in settings, and the list it opens: when it shows,
+/// The Suggest button on an IPA pronunciation in settings, and the list it opens: when it asks,
 /// what the list shows, and using a suggestion.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -22,13 +22,33 @@ struct PronunciationSuggestionTests {
         return suggestions.candidates
     }
 
-    @Test func theSuggestButtonShowsOnlyWhileTheSuggesterCanRun() {
+    @Test func aSuggesterThatCantRunIsNotAskedAndTheListSaysWhyForEachReason() async throws {
         let harness = Harness()
+        let suggestions = harness.model.pronunciationSuggestions(for: "Winston")
+        let reasons = PronunciationSuggesterAvailability.UnavailableReason.allCases
+        var messages: [String] = []
 
-        harness.suggester.isAvailable = false
-        #expect(!harness.model.canSuggestPronunciations)
-        harness.suggester.isAvailable = true
-        #expect(harness.model.canSuggestPronunciations)
+        for reason in reasons {
+            harness.suggester.availability = .unavailable(reason)
+            suggestions.generate()
+            // At once: there is nothing to wait for.
+            #expect(suggestions.phase == .failed(userMessage(for: PronunciationSuggestionError.unavailable(reason))))
+            if case .failed(let message) = suggestions.phase {
+                messages.append(message)
+            }
+        }
+
+        #expect(harness.suggester.words.isEmpty)
+        // Each reason has a message of its own, and the one Adam can fix says where.
+        #expect(Set(messages).count == reasons.count)
+        #expect(userMessage(for: PronunciationSuggestionError.unavailable(.appleIntelligenceNotEnabled)).contains("Settings"))
+        // Once it can run, Regenerate asks.
+        harness.suggester.availability = .available
+        harness.suggester.answers = [.success([suggestion("wˈɪnstən")])]
+        suggestions.generate()
+        #expect(await eventually { suggestions.phase != .loading })
+        #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wˈɪnstən"])
+        #expect(harness.suggester.words == ["Winston"])
     }
 
     @Test func theListSaysWhereTheSuggestionsComeFromInTheSuggestersWords() {
@@ -202,17 +222,80 @@ struct PronunciationSuggestionTests {
     }
 
     /// A list of `word`'s suggestions from `suggester`, counting the answers it handles in
-    /// `handled`, so a test can tell when it has dropped one.
+    /// `handled`, so a test can tell when it has dropped one, and giving up on a request after
+    /// `timeout`.
     private func suggestions(
         for word: String,
         from suggester: FakePronunciationSuggester,
-        handled: HandledAnswers
+        handled: HandledAnswers,
+        timeout: Duration = PronunciationSuggestions.defaultTimeout
     ) -> PronunciationSuggestions {
-        PronunciationSuggestions(word: word, suggester: suggester) {
+        PronunciationSuggestions(word: word, suggester: suggester, timeout: timeout) {
             Set("wˈɪnstənɑ")
         } answerHandled: {
             handled.count += 1
         }
+    }
+
+    /// On the iPhone the list's content shows, disappears and shows again as its popover becomes
+    /// a sheet. Each showing starts the list, and the request the first started must carry on and
+    /// its answer show: once it was cancelled, and the list loaded for good.
+    @Test func aListShownAgainKeepsItsRequestAndShowsTheAnswer() async throws {
+        let suggester = FakePronunciationSuggester()
+        suggester.holdsAnswers = true
+        suggester.answers = [.success([suggestion("wˈɪnstən")])]
+        let handled = HandledAnswers()
+        let suggestions = suggestions(for: "Winston", from: suggester, handled: handled)
+        suggestions.start()
+        #expect(await eventually { suggester.heldAnswers == 1 })
+
+        suggestions.start()
+        suggester.releaseAnswers()
+
+        #expect(await eventually { suggestions.phase != .loading })
+        #expect(try #require(candidates(of: suggestions)).map(\.suggestion.phonemes) == ["wˈɪnstən"])
+        #expect(suggester.words == ["Winston"])
+        #expect(suggester.cancelledRequests.isEmpty)
+        // Shown again once answered, it keeps the answer rather than ask again.
+        suggestions.start()
+        #expect(candidates(of: suggestions) != nil)
+    }
+
+    /// So the logs of a list closed while its request winds down and of the next list opened
+    /// can be told apart.
+    @Test func requestsAreNumberedAcrossLists() async throws {
+        let first = FakePronunciationSuggester()
+        let second = FakePronunciationSuggester()
+        let handled = HandledAnswers()
+        let firstList = suggestions(for: "Winston", from: first, handled: handled)
+        let secondList = suggestions(for: "Winston", from: second, handled: handled)
+
+        firstList.start()
+        secondList.start()
+
+        #expect(await eventually { first.requestNumbers.count == 1 && second.requestNumbers.count == 1 })
+        let firstNumber = try #require(first.requestNumbers.first)
+        let secondNumber = try #require(second.requestNumbers.first)
+        #expect(secondNumber > firstNumber)
+    }
+
+    @Test func aRequestNotAnsweredInTimeIsCancelledAndTheListSaysSo() async throws {
+        let suggester = FakePronunciationSuggester()
+        suggester.holdsAnswers = true
+        suggester.answers = [.success([suggestion("wˈɪnstən")])]
+        let handled = HandledAnswers()
+        let suggestions = suggestions(for: "Winston", from: suggester, handled: handled, timeout: .milliseconds(50))
+
+        suggestions.start()
+
+        #expect(await eventually { suggestions.phase != .loading })
+        #expect(suggestions.phase == .failed(userMessage(for: PronunciationSuggestionError.timedOut)))
+        #expect(await eventually { suggester.cancelledRequests == [0] })
+        // Its answer, should it come after all, is dropped.
+        #expect(await eventually { suggester.heldAnswers == 1 })
+        suggester.releaseAnswers()
+        #expect(await eventually { handled.count == 1 })
+        #expect(suggestions.phase == .failed(userMessage(for: PronunciationSuggestionError.timedOut)))
     }
 
     @Test func regenerateReplacesTheRequestUnderWayWhicheverAnswersFirst() async throws {

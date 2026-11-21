@@ -2,14 +2,16 @@ import Foundation
 import Synchronization
 import VoiceLoop
 
-/// The pronunciation suggester for tests: no model. It is available while the test says so, and
-/// answers each request with the next answer the test gave it (or with none, once they run out),
-/// holding each answer back while `holdsAnswers` is on. It notes which requests were cancelled.
+/// The pronunciation suggester for tests: no model. It is available unless the test says
+/// otherwise, and answers each request with the next answer the test gave it (or with none, once
+/// they run out), holding each answer back while `holdsAnswers` is on. It notes which requests
+/// were cancelled.
 final class FakePronunciationSuggester: PronunciationSuggester {
     private struct State {
-        var isAvailable = true
+        var availability = PronunciationSuggesterAvailability.available
         var answers: [Result<[PronunciationSuggestion], PronunciationSuggestionError>] = []
         var words: [String] = []
+        var requestNumbers: [Int] = []
         var holdsAnswers = false
         /// Held answers, by the number of their request.
         var heldAnswers: [Int: CheckedContinuation<Void, Never>] = [:]
@@ -20,9 +22,9 @@ final class FakePronunciationSuggester: PronunciationSuggester {
 
     let attribution = "Suggested by the fake suggester."
 
-    var isAvailable: Bool {
-        get { state.withLock { $0.isAvailable } }
-        set { state.withLock { $0.isAvailable = newValue } }
+    var availability: PronunciationSuggesterAvailability {
+        get { state.withLock { $0.availability } }
+        set { state.withLock { $0.availability = newValue } }
     }
 
     /// What the requests get, in order: the first request the first answer, and on.
@@ -33,6 +35,9 @@ final class FakePronunciationSuggester: PronunciationSuggester {
 
     /// The word of each request, oldest first.
     var words: [String] { state.withLock { $0.words } }
+
+    /// The number the list gave each request, for the logs, oldest first.
+    var requestNumbers: [Int] { state.withLock { $0.requestNumbers } }
 
     /// While true, each answer waits until `releaseAnswer(_:)` or `releaseAnswers()`.
     var holdsAnswers: Bool {
@@ -61,10 +66,11 @@ final class FakePronunciationSuggester: PronunciationSuggester {
         for answer in held { answer.resume() }
     }
 
-    func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
+    func suggestions(for word: String, request: Int) async throws -> [PronunciationSuggestion] {
         let (number, answer, holds) = state.withLock { state in
             let number = state.words.count
             state.words.append(word)
+            state.requestNumbers.append(request)
             let answer = number < state.answers.count ? state.answers[number] : .success([])
             return (number, answer, state.holdsAnswers)
         }
