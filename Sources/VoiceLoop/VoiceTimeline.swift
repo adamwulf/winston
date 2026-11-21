@@ -241,9 +241,15 @@ final class VoiceTimeline {
     /// The reply being spoken.
     private var reply: Reply?
     /// Whether the latest voice line was "voice started".
-    private var isVoiceActive = false
+    private(set) var isVoiceActive = false
+    /// The "voice started" lines written while the latest reply was being spoken, for the
+    /// `voice.echo` log. Counted afresh from each "speech started".
+    private(set) var voiceStartsDuringReply = 0
     /// When the latest voice span started, in host time.
     private var lastVoiceStart: UInt64?
+
+    /// The number of the reply being spoken, as its lines give it; nil when none is.
+    var replyNumber: Int? { reply?.number }
 
     /// `log` and `now` are for tests: by default the `voice.timeline` logger and the host clock.
     init(
@@ -308,6 +314,9 @@ final class VoiceTimeline {
             case .started(let mark, let level, let noiseFloor):
                 isVoiceActive = true
                 lastVoiceStart = mark.hostTime
+                if reply != nil {
+                    voiceStartsDuringReply += 1
+                }
                 var extra: [String: CustomStringConvertible] = [
                     "levelDb": VoiceActivity.decibels(level),
                     "speaking": reply != nil,
@@ -380,6 +389,7 @@ final class VoiceTimeline {
         writeRecorded()
         replies += 1
         reply = Reply(number: replies, firstAudio: firstAudio, started: started)
+        voiceStartsDuringReply = 0
         logger.info("speech started", metadata(at: now(), [
             "reply": replies,
             "chars": chars,
