@@ -1885,11 +1885,8 @@ public final class VoiceLoop {
         if stops {
             stopForDeviceChange()
         }
-        // Last: a new configuration for the echo log, with the new route's latency. Not when
-        // voice mode stopped for it: the next session doesn't count from this change.
-        if !stops {
-            echo.routeChanged(pipeline)
-        }
+        // Last: a new configuration for the echo log, with the new route's latency.
+        echo.routeChanged(pipeline, endedVoiceMode: stops)
     }
 
     #if os(macOS)

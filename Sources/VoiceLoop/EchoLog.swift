@@ -359,10 +359,15 @@ final class EchoLog {
     }
 
     /// The iOS audio route changed, and the loop has dealt with it: a new configuration, whose
-    /// latency is taken from `pipeline` if voice mode carries on. "audio route changed" in
+    /// latency and route are taken from `pipeline` if voice mode carries on. With
+    /// `endedVoiceMode`, the change stopped voice mode, so it isn't noted as the last route
+    /// change, which the next session doesn't count from; the new configuration still keeps a
+    /// reply's line still waiting from naming the old route. "audio route changed" in
     /// `voice.loop` says how it changed.
-    func routeChanged(_ pipeline: Pipeline?) {
-        routeChangeTime = TimelineClock.now()
+    func routeChanged(_ pipeline: Pipeline?, endedVoiceMode: Bool) {
+        if !endedVoiceMode {
+            routeChangeTime = TimelineClock.now()
+        }
         beginConfiguration()
         if let pipeline {
             snapshotPlaybackOffset(pipeline)
@@ -692,14 +697,12 @@ final class EchoLog {
         #if os(iOS)
         // The route of the configuration it started on, as its snapshot took it; unknown if a
         // new configuration (a route change, say) began before the line was written.
-        let session = AVAudioSession.sharedInstance()
         if let snapshot, snapshot.configuration == start.configuration {
             fields.merge(snapshot.route) { $1 }
-            fields["outputVolume"] = Self.volume(session.outputVolume)
         } else {
             fields["route"] = "unknown"
         }
-        fields["otherAudioPlaying"] = session.isOtherAudioPlaying
+        fields["otherAudioPlaying"] = AVAudioSession.sharedInstance().isOtherAudioPlaying
         #endif
         logger.notice("reply started", context(pipeline, at: start.started, fields))
     }
@@ -845,9 +848,10 @@ final class EchoLog {
     /// The route replies play through and what the microphone hears them with, for a
     /// configuration's snapshot: `route` is `speaker`, `receiver`, `bluetooth`, `headphones`,
     /// `car`, `airPlay`, `usb`, `none` or `other`, from the first output. Also the ports, the
-    /// input data source's name, polar pattern and orientation, and the input gain and whether
-    /// it can be set. "reply started" adds the output volume and whether another app's audio
-    /// plays, which no echo canceller hears as a reference, as it is written.
+    /// output volume (which goes with the route), the input data source's name, polar pattern
+    /// and orientation, and the input gain and whether it can be set. "reply started" adds
+    /// whether another app's audio plays, which no echo canceller hears as a reference, as it
+    /// is written.
     private static func routeFields(_ session: AVAudioSession = .sharedInstance()) -> [String: CustomStringConvertible] {
         let route = session.currentRoute
         let source = session.inputDataSource
@@ -858,6 +862,7 @@ final class EchoLog {
             "route": routeKind(route.outputs.first?.portType),
             "inputs": portTypes(route.inputs),
             "outputs": portTypes(route.outputs),
+            "outputVolume": volume(session.outputVolume),
             "inputGain": volume(session.inputGain),
             "inputGainSettable": session.isInputGainSettable,
             "inputDataSource": source?.dataSourceName ?? "none",
