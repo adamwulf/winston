@@ -1603,6 +1603,8 @@ public func userMessage(for error: any Error) -> String {
         }
     }
     if let error = error as? PronunciationSuggestionError {
+        // Where Apple Intelligence's switch lives differs between OS versions (Apple Intelligence &
+        // Siri on iOS 26), so the messages name Settings and the setting, not the pane.
         #if os(macOS)
         let settings = "System Settings"
         #else
@@ -1612,11 +1614,11 @@ public func userMessage(for error: any Error) -> String {
         case .unavailable(.deviceNotEligible):
             return "Suggestions need Apple Intelligence, which this device doesn't support."
         case .unavailable(.appleIntelligenceNotEnabled):
-            return "Suggestions need Apple Intelligence. Turn it on in \(settings) > Apple Intelligence & Siri, then try again."
+            return "Suggestions need Apple Intelligence, which is turned off. Turn it on in \(settings) (search for Apple Intelligence), then try again."
         case .unavailable(.modelNotReady):
-            return "Apple Intelligence isn't ready yet: its model may still be downloading. Try again once it has finished. \(settings) > Apple Intelligence & Siri shows its progress."
+            return "Apple Intelligence isn't ready yet: its model may still be downloading, which can take a while on Wi-Fi. Try again later."
         case .unavailable(.other):
-            return "Apple Intelligence isn't available right now. Check \(settings) > Apple Intelligence & Siri, then try again."
+            return "Apple Intelligence isn't available right now. Check that it is turned on in \(settings), then try again."
         case .declined: return "The model declined to suggest pronunciations for this word."
         case .busy: return "The model is busy. Try again in a moment."
         case .timedOut: return "Apple Intelligence didn't answer in time. Try again."

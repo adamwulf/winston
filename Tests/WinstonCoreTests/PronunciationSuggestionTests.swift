@@ -41,7 +41,7 @@ struct PronunciationSuggestionTests {
         #expect(harness.suggester.words.isEmpty)
         // Each reason has a message of its own, and the one Adam can fix says where.
         #expect(Set(messages).count == reasons.count)
-        #expect(userMessage(for: PronunciationSuggestionError.unavailable(.appleIntelligenceNotEnabled)).contains("Apple Intelligence & Siri"))
+        #expect(userMessage(for: PronunciationSuggestionError.unavailable(.appleIntelligenceNotEnabled)).contains("Settings"))
         // Once it can run, Regenerate asks.
         harness.suggester.availability = .available
         harness.suggester.answers = [.success([suggestion("wˈɪnstən")])]

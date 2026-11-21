@@ -62,7 +62,7 @@ final class FakePronunciationSuggester: PronunciationSuggester {
         for answer in held { answer.resume() }
     }
 
-    func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
+    func suggestions(for word: String, request: Int) async throws -> [PronunciationSuggestion] {
         let (number, answer, holds) = state.withLock { state in
             let number = state.words.count
             state.words.append(word)

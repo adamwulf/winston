@@ -137,11 +137,18 @@ private struct PronunciationSuggestionsView: View {
             } header: {
                 Text("Suggestions for \(suggestions.word)")
             } footer: {
-                // Where they come from, in the suggester's own words.
-                Text(suggestions.attribution + " " + String(localized: "Suggestions are often wrong: play each before you use it."))
+                // Where they come from, in the suggester's own words. Not beside a failure, such
+                // as a device without Apple Intelligence, where there are none.
+                if !isFailed {
+                    Text(suggestions.attribution + " " + String(localized: "Suggestions are often wrong: play each before you use it."))
+                }
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var isFailed: Bool {
+        if case .failed = suggestions.phase { true } else { false }
     }
 
     private func row(for candidate: PronunciationCandidate) -> some View {

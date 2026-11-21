@@ -14,8 +14,9 @@ import VoiceLoop
 /// so a suggestion the fallback symbols lacked can be used once the Kokoro model is ready, with
 /// nothing asked again. Made by `AppModel.pronunciationSuggestions(for:)`.
 ///
-/// Each step is logged under `app.suggestions` at notice level, with the request's number and the
-/// time since it started (`ms`): counts and codes only, never the word or the suggestions.
+/// Each step is logged under `app.suggestions` at notice level, and a failure or a timeout at
+/// warning, with the request's number and the time since it started (`ms`): counts and codes
+/// only, never the word or the suggestions.
 @MainActor
 @Observable
 public final class PronunciationSuggestions: Identifiable {
@@ -128,7 +129,7 @@ public final class PronunciationSuggestions: Identifiable {
         request = Task { [word, suggester] in
             let result: Result<[PronunciationSuggestion], any Error>
             do {
-                result = .success(try await suggester.suggestions(for: word))
+                result = .success(try await suggester.suggestions(for: word, request: number))
             } catch {
                 result = .failure(error)
             }

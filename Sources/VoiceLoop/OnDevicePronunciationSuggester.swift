@@ -11,11 +11,12 @@ import LogSupport
 /// The model isn't there on a device without Apple Intelligence, while Apple Intelligence is
 /// turned off, or while its model downloads: `availability` says which.
 ///
-/// Each step of a request is logged under `voice.suggestions` at notice level, with the time since
-/// the request started (`ms`): the availability check, the session, the first part of the answer
-/// to stream in, each new pronunciation as it starts, then the answer, a failure or the cancel,
-/// and the conversion to Kokoro's notation. Counts, sizes and codes only: the word and what the
-/// model wrote are the user's.
+/// Each step of a request is logged under `voice.suggestions` at notice level, and a failure at
+/// warning, with the request's number and the time since it started (`ms`): the availability
+/// check, the session, the request sent, the first part of the answer to stream in, each new
+/// pronunciation as it starts, then the answer, a failure or the cancel, and the conversion to
+/// Kokoro's notation. Counts, sizes and codes only: the word and what the model wrote are the
+/// user's.
 public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     private static let log = Logger(label: "voice.suggestions")
 
@@ -29,11 +30,12 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         "Suggested by Apple Intelligence on this device."
     }
 
-    public func suggestions(for word: String) async throws -> [PronunciationSuggestion] {
+    public func suggestions(for word: String, request: Int) async throws -> [PronunciationSuggestion] {
         let started = ContinuousClock.now
-        let generated = try await generatedPronunciations(for: word, started: started)
+        let generated = try await generatedPronunciations(for: word, request: request, started: started)
         let suggestions = generated.flatMap { Self.suggestions(from: $0, for: word) }
         Self.log.notice("pronunciation IPA converted", [
+            "request": request,
             "generated": generated.count,
             "suggestions": suggestions.count,
             "ms": Self.milliseconds(since: started),
@@ -70,12 +72,18 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     }
 
     /// The model's pronunciations of `word`, as it writes them. The answer is streamed, though
-    /// only the whole of it is used, so the logs show how far a slow request got. `started` is
-    /// when the request began, for the logs' times.
-    func generatedPronunciations(for word: String, started: ContinuousClock.Instant = .now) async throws -> [GeneratedPronunciation] {
+    /// only the whole of it is used, so the logs show how far a slow request got. `request`
+    /// numbers the request in the logs, as the suggestion list does, and `started` is when it
+    /// began, for the logs' times.
+    func generatedPronunciations(
+        for word: String,
+        request: Int,
+        started: ContinuousClock.Instant = .now
+    ) async throws -> [GeneratedPronunciation] {
         let model = SystemLanguageModel.default
         let availability = Self.availability(of: model.availability)
         Self.log.notice("pronunciation model checked", [
+            "request": request,
             "availability": availability.logName,
             "supportsLocale": model.supportsLocale(),
             "ms": Self.milliseconds(since: started),
@@ -89,12 +97,13 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         let prompt = "Suggest pronunciations for: \(word)"
         // Sizes only: the prompt holds the word.
         Self.log.notice("pronunciation session created", [
+            "request": request,
             "instructionsChars": Self.instructions.count,
             "promptChars": prompt.count,
             "maximumResponseTokens": Self.maximumResponseTokens,
             "ms": Self.milliseconds(since: started),
         ])
-        var progress = StreamProgress(started: started)
+        var progress = StreamProgress(request: request, started: started)
         let pronunciations: [GeneratedPronunciation]
         do {
             let stream = session.streamResponse(
@@ -102,21 +111,26 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
                 generating: GeneratedPronunciations.self,
                 options: GenerationOptions(maximumResponseTokens: Self.maximumResponseTokens)
             )
-            var answer: GeneratedContent?
+            // Sent: from here, the model has it until its first snapshot.
+            Self.log.notice("pronunciation request started", progress.logFields)
             for try await snapshot in stream {
                 progress.note(snapshot)
-                answer = snapshot.rawContent
             }
-            // The last snapshot is the whole answer.
-            guard let answer else { throw PronunciationSuggestionError.failed }
-            pronunciations = try GeneratedPronunciations(answer).pronunciations
+            // A request cancelled as its answer finished is still cancelled.
+            try Task.checkCancellation()
+            pronunciations = try await stream.collect().content.pronunciations
         } catch {
             // The model may throw an error of its own once the request is cancelled.
             if error is CancellationError || Task.isCancelled {
                 Self.log.notice("pronunciation suggestions cancelled", progress.logFields)
                 throw CancellationError()
             }
-            let reason = Self.reason(for: error)
+            var reason = Self.reason(for: error)
+            // Its model's assets go missing when Apple Intelligence is turned off, too: what the
+            // model says of itself now tells which.
+            if case .unavailable = reason, case .unavailable(let now) = Self.availability(of: model.availability) {
+                reason = .unavailable(now)
+            }
             // Codes only: the model's messages can quote the word.
             Self.log.warning("pronunciation suggestions failed", error.logCodes(
                 progress.logFields.mapValues(\.description).merging(["reason": reason.logName]) { $1 }
@@ -133,6 +147,7 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
     /// How far a request's streamed answer has come, for the logs: it logs the first snapshot and
     /// each new pronunciation as the model starts it.
     private struct StreamProgress {
+        let request: Int
         let started: ContinuousClock.Instant
         /// The snapshots streamed so far.
         private(set) var snapshots = 0
@@ -143,7 +158,8 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
         private var promptTokens: Int?
         private var answerTokens: Int?
 
-        init(started: ContinuousClock.Instant) {
+        init(request: Int, started: ContinuousClock.Instant) {
+            self.request = request
             self.started = started
         }
 
@@ -165,6 +181,7 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
 
         var logFields: [String: CustomStringConvertible] {
             var fields: [String: CustomStringConvertible] = [
+                "request": request,
                 "snapshots": snapshots,
                 "pronunciations": pronunciations,
                 "ms": OnDevicePronunciationSuggester.milliseconds(since: started),
@@ -238,7 +255,8 @@ public struct OnDevicePronunciationSuggester: PronunciationSuggester {
             if let error = error as? LanguageModelError {
                 switch error {
                 case .guardrailViolation, .refusal: return .declined
-                case .rateLimited, .timeout: return .busy
+                case .rateLimited: return .busy
+                case .timeout: return .timedOut
                 default: return .failed
                 }
             }

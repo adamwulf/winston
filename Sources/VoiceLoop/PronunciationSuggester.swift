@@ -13,8 +13,9 @@ public protocol PronunciationSuggester: Sendable {
     /// A few ways to say `word`, the most likely first, with their phonemes in Kokoro's notation
     /// (see `Pronunciation.Mode.phonetic`). They may repeat each other or hold symbols Kokoro
     /// doesn't have: `PronunciationCandidate.candidates(from:symbols:)` sorts that out. Throws a
-    /// `PronunciationSuggestionError`.
-    func suggestions(for word: String) async throws -> [PronunciationSuggestion]
+    /// `PronunciationSuggestionError`. `request` numbers the request, for its logs to match the
+    /// suggestion list's.
+    func suggestions(for word: String, request: Int) async throws -> [PronunciationSuggestion]
 }
 
 /// One way to say a word, as a `PronunciationSuggester` suggests it.

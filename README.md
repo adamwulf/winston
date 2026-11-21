@@ -562,14 +562,19 @@ used. The model's IPA isn't held to IPA's symbols with a pattern guide: on
 macOS 27 the guides take no character classes or anchors, and an alternation of
 the symbols made a request take 36 to 104 s rather than about 2.
 
-Each step is logged at notice level with the time since the request started
-(`ms`), and counts, sizes, token counts and error codes, never the word or what
-the model wrote. `grep suggestions` on a log file shows a request through:
-`label=app.suggestions` for the list (`opened`, `shown`, `requested` with the
-model's availability, `listed`, `failed`, `timed out`, `cancelled`, `answer
-dropped`) and `label=voice.suggestions` for the model (`model checked`,
-`session created`, `answer started` and `answer progress` as it streams in,
-`generated`, `failed`, `cancelled`, `IPA converted`).
+Each step is logged at notice level, and a failure or a timeout at warning, with
+counts, sizes, token counts and error codes, never the word or what the model
+wrote. `grep suggestions` on a log file shows a request through.
+`label=app.suggestions` is the list: `opened` as Suggest is tapped and `shown`
+as the list shows (twice on the iPhone, the second with `asks=false`), then
+`requested` with the model's availability, and one of `listed`, `failed`,
+`timed out` or `cancelled`, then `answer dropped` for an answer that came after
+the list stopped waiting. `label=voice.suggestions` is the model: `model
+checked`, `session created` with the prompt's sizes, `request started`, `answer
+started` and `answer progress` as it streams in, and one of `generated`,
+`failed` or `cancelled`, then `IPA converted`. Each line after `requested` has
+the time since the request started (`ms`), and both labels number the request
+(`request=`), so a request replaced by Regenerate can be told from the next.
 
 The suggestions are often wrong, above all for names from other languages, and
 change from one request to the next: play each before using it. About 1

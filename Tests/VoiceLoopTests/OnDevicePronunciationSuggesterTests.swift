@@ -13,7 +13,7 @@ import Testing
         guard #available(iOS 27.0, macOS 27.0, *) else { return }
         #expect(reason(LanguageModelError.guardrailViolation(.init(debugDescription: ""))) == .declined)
         #expect(reason(LanguageModelError.rateLimited(.init(resetDate: nil, debugDescription: ""))) == .busy)
-        #expect(reason(LanguageModelError.timeout(.init(debugDescription: ""))) == .busy)
+        #expect(reason(LanguageModelError.timeout(.init(debugDescription: ""))) == .timedOut)
         #expect(reason(LanguageModelSession.Error.concurrentRequests) == .busy)
         #expect(reason(SystemLanguageModel.Error.assetsUnavailable(.init(debugDescription: ""))) == .unavailable(.modelNotReady))
         #expect(reason(LanguageModelError.unsupportedLanguageOrLocale(.init(languageCode: "xx", debugDescription: ""))) == .failed)
@@ -158,11 +158,11 @@ struct OnDevicePronunciationSuggesterRealModelTests {
         let suggester = OnDevicePronunciationSuggester()
         var report = ["", "On-device pronunciation suggestions (IPA from the model → Kokoro phonemes):"]
         var failedWords: [String] = []
-        for word in Self.words {
+        for (index, word) in Self.words.enumerated() {
             let started = ContinuousClock.now
             let generated: [OnDevicePronunciationSuggester.GeneratedPronunciation]
             do {
-                generated = try await suggester.generatedPronunciations(for: word)
+                generated = try await suggester.generatedPronunciations(for: word, request: index + 1)
             } catch {
                 // The suggester's log line, above the report, has the model's error code.
                 report.append("\(word): failed, \(error)")
