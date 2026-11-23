@@ -50,7 +50,7 @@ public struct ShareOutbox: Sendable {
     /// Cancel. A batch whose files have all gone is removed here.
     @concurrent
     public func files() async -> [URL] {
-        let batches = contents(of: outboxFolder, keys: [.creationDateKey], skippingHidden: true)
+        let batches = (contents(of: outboxFolder, keys: [.creationDateKey], skippingHidden: true) ?? [])
             .map { batch in (batch, (try? batch.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) }
             .sorted { $0.1 < $1.1 }
             .map(\.0)
@@ -58,19 +58,22 @@ public struct ShareOutbox: Sendable {
         for listed in batches {
             // Under `outboxFolder` as given: the listing resolves /var to /private/var.
             let batch = outboxFolder.appending(path: listed.lastPathComponent, directoryHint: .isDirectory)
+            // A batch that can't be read now is left for the next look.
+            guard let listedItems = contents(of: batch, keys: [], skippingHidden: true) else { continue }
             // Named by their place in the batch.
-            let items = contents(of: batch, keys: [], skippingHidden: true)
-                .map(\.lastPathComponent)
-                .sorted()
+            let items = listedItems.map(\.lastPathComponent).sorted()
             guard !items.isEmpty else {
-                Self.removeItem(at: batch)
+                // Only an empty folder: rmdir turns down one with anything in it.
+                if rmdir(batch.path(percentEncoded: false)) != 0 {
+                    Self.log.warning("removing an emptied share batch failed", ["errno": errno])
+                }
                 continue
             }
             for item in items {
                 let folder = batch.appending(path: item, directoryHint: .isDirectory)
                 // The one file in it, hidden or not, as a name such as ".env" is. An empty item
                 // folder, which nothing leaves, is skipped.
-                guard let name = contents(of: folder, keys: [], skippingHidden: false).first?.lastPathComponent else { continue }
+                guard let name = contents(of: folder, keys: [], skippingHidden: false)?.first?.lastPathComponent else { continue }
                 files.append(folder.appending(path: name))
             }
         }
@@ -78,13 +81,14 @@ public struct ShareOutbox: Sendable {
     }
 
     /// Removes what saves left in `Staging` from before `cutoff`, as when iOS ended the extension
-    /// mid-copy, or after Cancel. Returns how many it removed, which it logs. A save under way is
-    /// newer.
+    /// mid-copy, or after Cancel. Returns how many it removed, which it logs. A share waiting for
+    /// Done is in `Staging` too, so the cutoff is well before any sheet would still be open: if
+    /// one is, its Done says to share again.
     @concurrent
     @discardableResult
     public func removeLeftovers(before cutoff: Date) async -> Int {
         var removed = 0
-        for batch in contents(of: stagingFolder, keys: [.creationDateKey], skippingHidden: true) {
+        for batch in contents(of: stagingFolder, keys: [.creationDateKey], skippingHidden: true) ?? [] {
             guard let created = try? batch.resourceValues(forKeys: [.creationDateKey]).creationDate,
                   created < cutoff else { continue }
             if Self.removeItem(at: batch) {
@@ -103,8 +107,9 @@ public struct ShareOutbox: Sendable {
         return cleaned.isEmpty || cleaned == "." || cleaned == ".." ? "file" : cleaned
     }
 
-    /// What's in `folder`. None if it doesn't exist yet.
-    func contents(of folder: URL, keys: [URLResourceKey], skippingHidden: Bool) -> [URL] {
+    /// What's in `folder`: none if it doesn't exist yet, and nil if it can't be read, which the
+    /// caller must not take for empty.
+    func contents(of folder: URL, keys: [URLResourceKey], skippingHidden: Bool) -> [URL]? {
         do {
             return try FileManager.default.contentsOfDirectory(
                 at: folder,
@@ -116,7 +121,7 @@ public struct ShareOutbox: Sendable {
         } catch {
             // Codes only: a file error's description holds the container's path.
             Self.log.error("reading the share folder failed", error.logCodes())
-            return []
+            return nil
         }
     }
 

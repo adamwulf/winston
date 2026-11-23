@@ -1046,7 +1046,7 @@ public final class AppModel {
     /// agent sheet, which asks which agent it goes to. Each activation does, the one at launch
     /// included: the extension can't open Winston. A file already opened, still being copied or
     /// waiting for Try Again, isn't opened again. Once Winston's copy is made, or on Cancel, the
-    /// extension's goes. Also removes what an interrupted or cancelled save left, an hour old or
+    /// extension's goes. Also removes what an interrupted or cancelled save left, a day old or
     /// more. The outbox is read off the main actor, one scan after another, so two activations
     /// close together don't both open a file. Package for the tests, which call it as an
     /// activation does (see `waitForSharedFiles()`).
@@ -1066,7 +1066,9 @@ public final class AppModel {
             for file in waiting {
                 openFile(at: file, sharedFolder: file.deletingLastPathComponent())
             }
-            await shareOutbox.removeLeftovers(before: Date(timeIntervalSinceNow: -60 * 60))
+            // A day, as for opened files' leftovers: a share sheet left open, its files waiting for
+            // Done, is in Staging too.
+            await shareOutbox.removeLeftovers(before: Date(timeIntervalSinceNow: -24 * 60 * 60))
         }
     }
 

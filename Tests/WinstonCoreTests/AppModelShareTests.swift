@@ -286,27 +286,32 @@ struct AppModelShareTests {
         #expect(await outbox.files().isEmpty)
     }
 
-    @Test func whatAnInterruptedShareLeftAnHourAgoIsRemoved() async throws {
+    @Test func whatAnInterruptedShareLeftADayAgoIsRemovedButAShareWaitingSinceLunchStays() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         let staging = outbox.folder.appending(path: "Staging", directoryHint: .isDirectory)
         let old = staging.appending(path: "old/000", directoryHint: .isDirectory)
-        let recent = staging.appending(path: "recent/000", directoryHint: .isDirectory)
-        for batch in [old, recent] {
+        // A share sheet left open over lunch, its files waiting for Done.
+        let waiting = staging.appending(path: "waiting/000", directoryHint: .isDirectory)
+        for batch in [old, waiting] {
             try FileManager.default.createDirectory(at: batch, withIntermediateDirectories: true)
             try Data("half".utf8).write(to: batch.appending(path: "big.zip"))
         }
         try FileManager.default.setAttributes(
-            [.creationDate: Date(timeIntervalSinceNow: -2 * 60 * 60)],
+            [.creationDate: Date(timeIntervalSinceNow: -2 * 24 * 60 * 60)],
             ofItemAtPath: staging.appending(path: "old").path(percentEncoded: false)
+        )
+        try FileManager.default.setAttributes(
+            [.creationDate: Date(timeIntervalSinceNow: -2 * 60 * 60)],
+            ofItemAtPath: staging.appending(path: "waiting").path(percentEncoded: false)
         )
 
         await comeBack(to: model)
 
         #expect(!exists(staging.appending(path: "old")))
-        #expect(exists(recent))
+        #expect(exists(waiting))
         // Nothing half copied is opened.
         #expect(model.openedFiles.isEmpty)
     }

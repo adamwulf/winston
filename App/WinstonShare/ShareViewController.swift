@@ -93,7 +93,9 @@ final class ShareViewController: UIViewController {
         log.error("\(step, privacy: .public) shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
     }
 
-    /// Hands the copied files to Winston, then closes.
+    /// Hands the copied files to Winston, then closes. If they're gone, as when the sheet was
+    /// left open for a day and Winston removed them as leftovers, it says to share again: the
+    /// originals are still where they were shared from.
     private func done() {
         guard let outbox, let staged else { return }
         do {
@@ -112,7 +114,7 @@ final class ShareViewController: UIViewController {
 
     /// Removes the copied files, or the copy under way once it ends, and closes. Winston never
     /// sees them: only Done hands them over. If iOS ends the extension first, what it copied stays
-    /// in `Staging` until Winston removes it, an hour later.
+    /// in `Staging` until Winston removes it, a day later.
     private func cancel() {
         Self.log.notice("share cancelled")
         isCancelled = true

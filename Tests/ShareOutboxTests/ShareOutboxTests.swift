@@ -178,6 +178,19 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         #expect(folder.contents(of: "Outbox").isEmpty)
     }
 
+    @Test func aBatchThatCannotBeReadNowIsKeptForTheNextLook() async throws {
+        let folder = TestFolder()
+        let saved = try await folder.share([try folder.fileProvider("notes.txt", "hello")])
+        let batch = try #require(saved.first).deletingLastPathComponent().deletingLastPathComponent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: batch.path(percentEncoded: false))
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: batch.path(percentEncoded: false)) }
+
+        #expect(await folder.outbox.files().isEmpty)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: batch.path(percentEncoded: false))
+        #expect(await folder.outbox.files() == saved)
+    }
+
     @Test func aWebLinkIsNotAFileAndNothingIsStaged() async throws {
         let folder = TestFolder()
         let link = try #require(URL(string: "https://example.com/report.txt"))

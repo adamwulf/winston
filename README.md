@@ -406,7 +406,8 @@ file from Open in:
    Winston's copy is made, or on Cancel, the extension's goes, so nothing opens
    twice. A file whose copy fails stays for Try Again.
 4. Each activation also removes what an interrupted or cancelled share left in
-   `Share/Staging`, an hour old or more.
+   `Share/Staging`, a day old or more. A share sheet left open that long, its
+   files waiting for Done, loses them too; its Done then says to share again.
 
 No agent is chosen at share time, so a file saved before a logout goes only to
 an agent Adam picks after logging in. As with Open in, a file Winston has copied
