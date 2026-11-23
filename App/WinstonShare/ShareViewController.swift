@@ -4,81 +4,101 @@ import SwiftUI
 import UIKit
 
 /// The share extension's principal class (`NSExtensionPrincipalClass` in
-/// `Config/WinstonShare-Info.plist`): the agent picker, over the app Adam shared from.
+/// `Config/WinstonShare-Info.plist`), over the app Adam shared from: Photos, the screenshot
+/// editor, Files, Mail.
 ///
-/// The extension can't run TDLib, so picking an agent copies the shared file into the App
-/// Group's outbox and closes. Winston sends it the next time it's opened (see
-/// `AppModel.sendSharedFiles()`). An extension has no supported way to open its app, so it
-/// doesn't try.
+/// The extension can't run TDLib, nor open Winston, so it saves the shared files in the App
+/// Group (`ShareOutbox`) and says to open Winston. Winston opens each the next time it's active,
+/// as a file from Open in (`AppModel.openSharedFiles()`), and its Send to Agent sheet asks which
+/// agent it goes to.
 final class ShareViewController: UIViewController {
     private static let log = Logger(subsystem: "com.milestonemade.winston.share", category: "share")
 
     private let outbox = ShareOutbox.appGroup()
+    private let state = ShareState(phase: .saving(count: 0))
+    private var saveTask: Task<Void, Never>?
+    /// What was saved, for Cancel to remove.
+    private var saved: [URL] = []
+    private var isCancelled = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let picker = UIHostingController(rootView: AgentPicker(
-            content: content(),
-            send: { [weak self] agent in
-                try await self?.save(to: agent)
+        let panel = UIHostingController(rootView: SharePanel(
+            state: state,
+            done: { [weak self] in
+                self?.done()
             },
             cancel: { [weak self] in
                 self?.cancel()
             }
         ))
-        addChild(picker)
-        picker.view.frame = view.bounds
-        picker.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        view.addSubview(picker.view)
-        picker.didMove(toParent: self)
+        addChild(panel)
+        panel.view.frame = view.bounds
+        panel.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(panel.view)
+        panel.didMove(toParent: self)
+        save()
     }
 
-    /// Everything the share sheet handed over. The activation rule allows one image or one file.
+    /// Everything the share sheet handed over. The activation rule allows up to 10 images and
+    /// 10 files.
     private var attachments: [NSItemProvider] {
         let items = extensionContext?.inputItems.compactMap { $0 as? NSExtensionItem } ?? []
         return items.flatMap { $0.attachments ?? [] }
     }
 
-    /// The agents to pick from, or why there are none.
-    private func content() -> AgentPicker.Content {
+    /// Saves what can be sent at once, so the sheet says what's next as soon as it can. Anything
+    /// else that came with it, such as a web link, is left out.
+    private func save() {
         guard let outbox else {
-            return .unavailable("Sharing isn't set up in this build of Winston.")
+            state.phase = .unavailable("Sharing isn't set up in this build of Winston.")
+            return
         }
-        let count = attachments.count
-        guard count == 1 else {
-            Self.log.notice("share sheet handed over \(count, privacy: .public) items; one is needed")
-            return .unavailable(count == 0 ? "There's no file here to send." : "Winston sends one file at a time.")
+        let all = attachments
+        let providers = all.filter(ShareOutbox.canAdd)
+        Self.log.notice("share sheet handed over \(all.count, privacy: .public) items, \(providers.count, privacy: .public) files")
+        guard !providers.isEmpty else {
+            state.phase = .unavailable("There's no file here Winston can send.")
+            return
         }
-        let agents: [ShareAgent]
-        do {
-            agents = try outbox.agents()
-        } catch {
-            // Opening Winston saves the list again. Codes only: a file error's description holds
-            // the container's path.
-            let nsError = error as NSError
-            Self.log.error("agent list unreadable: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
-            agents = []
+        state.phase = .saving(count: providers.count)
+        saveTask = Task {
+            do {
+                let files = try await outbox.add(providers)
+                guard !isCancelled else {
+                    outbox.remove(files)
+                    return
+                }
+                saved = files
+                state.phase = .saved(count: files.count)
+            } catch {
+                let nsError = error as NSError
+                Self.log.error("saving shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
+                state.phase = .failed(Self.message(for: error, count: providers.count))
+            }
         }
-        Self.log.notice("agent picker shown with \(agents.count, privacy: .public) agents")
-        return agents.isEmpty ? .unavailable("No agents yet. Open Winston first.") : .agents(agents)
     }
 
-    /// Copies the shared file into the outbox for `agent`, then closes the share sheet.
-    private func save(to agent: ShareAgent) async throws {
-        guard let outbox, let attachment = attachments.first else { return }
-        do {
-            let item = try await outbox.add(attachment, for: agent.id)
-            Self.log.notice("shared file saved to the outbox, type \(item.typeIdentifier, privacy: .public)")
-        } catch {
-            let types = attachment.registeredTypeIdentifiers.joined(separator: ",")
-            Self.log.error("saving the shared file failed, types \(types, privacy: .public)")
-            throw error
+    private static func message(for error: any Error, count: Int) -> String {
+        switch error as? ShareOutbox.AddFailure {
+        case .folder: "Winston can send files, but not folders."
+        case .noFile: "There's no file here Winston can send."
+        case nil: "Winston couldn't read \(count == 1 ? "that file" : "those files"). Try sharing again."
         }
+    }
+
+    private func done() {
+        Self.log.notice("share done")
         extensionContext?.completeRequest(returningItems: nil)
     }
 
+    /// Removes what was saved, or will be once the save under way ends.
     private func cancel() {
         Self.log.notice("share cancelled")
+        isCancelled = true
+        saveTask?.cancel()
+        outbox?.remove(saved)
+        saved = []
         extensionContext?.cancelRequest(withError: CocoaError(.userCancelled))
     }
 }

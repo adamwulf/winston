@@ -6,12 +6,15 @@
 	<dict>
 		<key>NSExtensionAttributes</key>
 		<dict>
+			<!-- Photos and screenshots from Photos and the screenshot editor, and files from
+			     Files, Mail and the like, mixed, up to 10 of each: Winston's Send to Agent sheet
+			     takes several at once. Not a web page or text alone. -->
 			<key>NSExtensionActivationRule</key>
 			<dict>
 				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
-				<integer>1</integer>
+				<integer>10</integer>
 				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
-				<integer>1</integer>
+				<integer>10</integer>
 			</dict>
 		</dict>
 		<key>NSExtensionPointIdentifier</key>
