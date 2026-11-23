@@ -805,6 +805,203 @@ struct KokoroPreviewTests {
     }
 }
 
+// MARK: - Speak IPA
+
+/// Speak IPA's message, said a chunk at a time as a preview while voice mode is off.
+@MainActor
+@Suite(.serialized, .oneVoiceLoopAtATime, .timeLimit(.minutes(1)))
+struct KokoroIPASpeechTests {
+    /// What an `IPASpeech` told its callbacks.
+    @MainActor
+    private final class Ends {
+        var firstSounds = 0
+        var ended: [Bool] = []
+    }
+
+    private func offLoopWithKokoro(on bed: VoiceTestBed) async -> VoiceLoop {
+        let loop = bed.makeLoop()
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { loop.kokoroModelState == .ready })
+        return loop
+    }
+
+    private func start(on loop: VoiceLoop, noting ends: Ends) throws -> IPASpeech {
+        try loop.startIPASpeech(request: 1) {
+            ends.firstSounds += 1
+        } onEnded: { finished in
+            ends.ended.append(finished)
+        }
+    }
+
+    @Test func eachChunkPlaysWithItsWordsPhonemesInOrderThenTheSpeechEnds() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        #expect(speech.say([
+            .phonemes(word: "Hello", phonemes: "həlˈO"), .text(" "),
+            .phonemes(word: "there", phonemes: "ðˈɛɹ"), .text("."),
+        ]))
+        #expect(speech.sayAsWritten("Second one."))
+        speech.finish()
+
+        #expect(await eventually { ends.ended == [true] })
+        #expect(ends.firstSounds == 1)
+        #expect(loop.state == .off)
+        #expect(bed.kokoro.requests == [
+            FakeKokoro.Request(
+                text: "\(placeholder(0, capital: true)) \(placeholder(1)).",
+                voice: "af_heart",
+                speed: 1,
+                pronunciations: [placeholder(0): "həlˈO", placeholder(1): "ðˈɛɹ"]
+            ),
+            FakeKokoro.Request(text: "Second one.", voice: "af_heart", speed: 1),
+        ])
+        let expected = 2 * fakeSentenceFrames
+        #expect(abs(bed.audio.playedFrames - expected) <= expected / 20)
+        // Ended: nothing more is taken.
+        #expect(!speech.sayAsWritten("Too late."))
+    }
+
+    @Test func itWaitsForTheChunksStillComingUntilFinished() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.sayAsWritten("First.")
+        #expect(await eventually { ends.firstSounds == 1 })
+        let engine = try #require(bed.audio.engines.last)
+        try await settle()
+        #expect(engine.isRunning)
+        #expect(ends.ended.isEmpty)
+
+        speech.sayAsWritten("Second.")
+        speech.finish()
+        #expect(await eventually { ends.ended == [true] })
+        #expect(!engine.isRunning)
+        #expect(bed.kokoro.requests.map(\.text) == ["First.", "Second."])
+    }
+
+    @Test func aWrittenChunkHasThePronunciations() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.pronunciations = [Pronunciation(word: "Heart", replacement: "Hart")]
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.say([.text("The "), .phonemes(word: "Heart", phonemes: "hˈɑɹt"), .text(" voice is Heart.")])
+        speech.finish()
+
+        #expect(await eventually { ends.ended == [true] })
+        #expect(bed.kokoro.requests.map(\.text) == ["The \(placeholder(0, capital: true)) voice is Hart."])
+    }
+
+    @Test func stoppingItEndsItAndDropsWhatIsStillRendering() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        bed.kokoro.holdsSynthesis = true
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+        speech.sayAsWritten("First.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+
+        speech.stop()
+
+        #expect(ends.ended == [false])
+        #expect(!speech.sayAsWritten("Second."))
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
+        try await settle()
+        #expect(bed.audio.playedFrames == 0)
+        #expect(bed.kokoro.requests.count == 1)
+    }
+
+    @Test func aPreviewCutsItOff() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        loop.preview("Something else.")
+
+        #expect(ends.ended == [false])
+        #expect(!speech.sayAsWritten("First."))
+        loop.stopPreview()
+    }
+
+    @Test func anotherIPASpeechCutsOffTheOneBefore() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let firstEnds = Ends()
+        let first = try start(on: loop, noting: firstEnds)
+        let secondEnds = Ends()
+        let second = try start(on: loop, noting: secondEnds)
+
+        #expect(firstEnds.ended == [false])
+        #expect(!first.sayAsWritten("First."))
+        #expect(second.sayAsWritten("Second."))
+        // The old handle can't stop the new speech.
+        first.stop()
+        second.finish()
+        #expect(await eventually { secondEnds.ended == [true] })
+        #expect(bed.kokoro.requests.map(\.text) == ["Second."])
+    }
+
+    @Test func voiceModeStartingEndsIt() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let ends = Ends()
+        _ = try start(on: loop, noting: ends)
+
+        try await loop.start()
+        defer { loop.stop() }
+
+        #expect(ends.ended == [false])
+    }
+
+    @Test func itDoesntStartWhileVoiceModeIsOn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        #expect(throws: IPASpeechError.voiceModeOn) {
+            try loop.startIPASpeech(request: 1, onFirstSound: {}, onEnded: { _ in })
+        }
+    }
+
+    @Test func itDoesntStartWithoutAKokoroVoiceReady() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.loadBehavior = .waits
+        let loop = bed.makeLoop()
+
+        #expect(throws: IPASpeechError.kokoroNotReady) {
+            try loop.startIPASpeech(request: 1, onFirstSound: {}, onEnded: { _ in })
+        }
+        loop.voiceIdentifier = "kokoro.af_heart"
+        #expect(throws: IPASpeechError.kokoroNotReady) {
+            try loop.startIPASpeech(request: 1, onFirstSound: {}, onEnded: { _ in })
+        }
+        #expect(bed.audio.engines.isEmpty)
+        bed.kokoro.finishLoading(succeeding: true)
+    }
+
+    @Test func ifKokoroFailsTheSystemVoiceSaysTheRestOfTheChunkAndTheSpeechEndsThere() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        bed.kokoro.failingRequest = 0
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.sayAsWritten("First.")
+        #expect(await eventually { bed.systemVoiceTexts == ["First."] })
+        #expect(!speech.sayAsWritten("Second."))
+        #expect(await eventually { ends.ended == [true] })
+        #expect(bed.kokoro.requests.map(\.text) == ["First."])
+    }
+}
+
 // MARK: - Freeing the model
 
 /// The model is freed from memory while no Kokoro voice is chosen. It stays downloaded, so
