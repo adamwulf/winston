@@ -325,16 +325,16 @@ Winston declares document types (`CFBundleDocumentTypes` in
 any other file) at `LSHandlerRank` Alternate, a secondary handler. Launch
 Services prefers an app that owns a type or ranks it Default, so Winston
 becomes a type's default only if no such app is installed or Adam picks it.
-There is no share extension and no App Group: nothing to set up in the
-developer portal.
+Open in needs nothing set up in the developer portal; the iOS share extension
+does (see [Share extension](#share-extension-ios)).
 
 - iOS: Winston shows in the share sheet for a file (Files, Mail and Messages
   attachments), in the app row or under More. iOS hands over a copy
   (`LSSupportsOpeningDocumentsInPlace` is NO on iOS) in `Documents/Inbox`, or
   `tmp/<bundle ID>-Inbox` for some imports from Files. Winston removes that
   file, and only that one, once it is sent or cancelled. The Photos app's
-  share sheet lists only share extensions, so it won't show Winston: Save to
-  Files, then share from Files.
+  share sheet lists only share extensions, so photos and screenshots reach
+  Winston through its share extension instead.
 - Mac: Open With in Finder, or a file dropped on the Dock icon, which brings
   the chat window forward, even from behind Settings. Files dropped on the
   window still go straight to the chat shown, as before.
@@ -377,33 +377,55 @@ file name is logged.
 
 ## Share extension (iOS)
 
-From the Share sheet in any app, Winston takes one image or one file: a
-screenshot, a photo, a zip, a document. Its sheet lists the agents (the bot
-chats), one row each, with Cancel. With one agent it still asks, so a stray tap
-sends nothing. With none yet it says to open Winston first.
+Winston shows in the share sheet's app row for photos and screenshots (Photos,
+the screenshot editor), whose share sheets list only share extensions, and for
+files (Files, Mail): up to 10 images and 10 files at once. The extension
+(`App/WinstonShare/`, bundle ID `com.milestonemade.winston.share`) can't run
+TDLib, nor open Winston, so it only saves them for Winston, and their agent is
+picked in Winston's [Send to Agent sheet](#opening-files-in-winston), as for a
+file from Open in:
 
-The extension (`App/WinstonShare/`, bundle ID `com.milestonemade.winston.share`)
-can't run TDLib, so it hands off through the App Group
-`group.com.milestonemade.winston`, with `ShareOutbox`:
+1. The extension's sheet saves what can be sent at once ("Preparing…"), then
+   says to open Winston to choose the agent. Done closes it; Cancel, at any
+   point, removes what it saved. A folder, nothing sendable (a web link alone)
+   or a file it couldn't read says so, with Cancel. VoiceOver reads each change.
+2. It saves through the App Group `group.com.milestonemade.winston`, with
+   `ShareOutbox`: each file is copied into `Share/Staging` (a file by its URL,
+   security scoped and coordinated, so an iCloud Drive file downloads first,
+   or else its content), then all are moved, each alone in a folder of its own,
+   into `Share/Outbox`, so Winston never sees one half copied. If one can't be
+   saved, none is.
+3. Each time Winston becomes active, the launch included, `openSharedFiles()`
+   opens each waiting file with `openFile`, the path a file from Open in takes:
+   copied into `tmp/OpenedFiles`, shown in the Send to Agent sheet once logged
+   in with the bot chats, sent to the agent picked (a still image as a photo,
+   anything else, an animated GIF included, as a document), with its upload
+   followed. Once Winston's copy is made, or on Cancel, the extension's goes, so
+   nothing opens twice. A file whose copy fails stays for Try Again.
+4. Each activation also removes what an interrupted save left in
+   `Share/Staging`, an hour old or more.
 
-- Each load of the bot chats saves them as the agent list. Logging out saves
-  none.
-- Picking an agent copies the file into the outbox with a small manifest (agent,
-  name, type), then closes.
-- Each time Winston becomes active, and each time its bot chats load, it sends
-  the outbox the way the + button sends: an image as a photo, any other file as
-  a document under its own name. Each item then leaves the outbox, sent or not;
-  a failure shows its error.
+No agent is chosen at share time, so a file saved before a logout goes only to
+an agent Adam picks after logging in. As with Open in, a file Winston has copied
+but not sent is gone if Winston is ended before the pick.
 
-So the file goes out the next time Winston is opened: an extension has no
-supported way to open its app. The Mac app has no share extension; files
-dropped on its chat window already go to the chat shown.
+The logs: the extension's go to the system log (subsystem
+`com.milestonemade.winston.share`), with counts only. Winston's say `shared
+files found` with a count, then `file opened` with `shared=true` and the rest
+as for Open in, and `share staging leftovers removed` with a count. No file
+name is logged.
+
+The Mac app has no share extension: Open With, the Dock icon and drops on the
+chat window cover it.
 
 ### Signing setup
 
 Like push, an entitlement the App ID doesn't have fails signing and Xcode
-Cloud's App Store export, and both iOS targets now sign in the App Group. Do
-this before a signed build:
+Cloud's App Store export. Both iOS targets sign in the App Group, the app
+included (`App/Config/iOS.entitlements`), so until these steps are done every
+signed iOS build fails, the app's too, not only the extension's. The Mac
+build, a Simulator build and a build without signing aren't affected. Do this
+before a signed iOS build:
 
 1. In the Apple Developer account, go to Certificates, IDs & Profiles →
    Identifiers → App Groups, and register `group.com.milestonemade.winston`.
