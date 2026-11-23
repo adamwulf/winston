@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import UniformTypeIdentifiers
 
 extension ShareOutbox {
@@ -42,6 +43,10 @@ extension ShareOutbox {
     /// provider's own queue. Throws `AddFailure.folder` for a folder, `AddFailure.noFile` for an
     /// item with neither, and what failed otherwise, leaving nothing behind.
     ///
+    /// Cancelling the task, as Cancel in the sheet does, stops it before the next item and cancels
+    /// the item provider's load under way; it then throws `CancellationError` or the provider's
+    /// cancellation, leaving nothing behind.
+    ///
     /// Runs on the caller's actor, the share extension's main actor, since `NSItemProvider` isn't
     /// Sendable.
     public nonisolated(nonsending) func stage(_ providers: [NSItemProvider]) async throws -> Staged {
@@ -49,6 +54,7 @@ extension ShareOutbox {
         var paths: [String] = []
         do {
             for (index, provider) in providers.enumerated() {
+                try Task.checkCancellation()
                 // Named by its place, which `files()` lists them in.
                 let item = String(format: "%03d", index)
                 let itemFolder = batch.appending(path: item, directoryHint: .isDirectory)
@@ -173,22 +179,27 @@ extension ShareOutbox {
         into folder: URL
     ) async throws -> String {
         let suggestedName = provider.suggestedName
-        return try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, error in
-                guard let url else {
-                    continuation.resume(throwing: error ?? AddFailure.noFile)
-                    return
-                }
-                continuation.resume(with: Result {
-                    // A document kept as a folder, such as a package, can come this way too.
-                    if try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
-                        throw AddFailure.folder
+        let load = LoadCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                load.started(provider.loadFileRepresentation(for: type, openInPlace: false) { url, _, error in
+                    guard let url else {
+                        continuation.resume(throwing: error ?? AddFailure.noFile)
+                        return
                     }
-                    let name = fileName(suggested: suggestedName, loaded: url, type: type)
-                    try FileManager.default.copyItem(at: url, to: folder.appending(path: name))
-                    return name
+                    continuation.resume(with: Result {
+                        // A document kept as a folder, such as a package, can come this way too.
+                        if try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                            throw AddFailure.folder
+                        }
+                        let name = fileName(suggested: suggestedName, loaded: url, type: type)
+                        try FileManager.default.copyItem(at: url, to: folder.appending(path: name))
+                        return name
+                    })
                 })
             }
+        } onCancel: {
+            load.cancel()
         }
     }
 
@@ -208,5 +219,29 @@ extension ShareOutbox {
     private static func removeIfPresent(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return }
         removeItem(at: url)
+    }
+}
+
+/// An item provider's load, for the task's cancellation to cancel, whether it comes before the
+/// load has started or after.
+private final class LoadCancellation: Sendable {
+    private let state = Mutex<(progress: Progress?, isCancelled: Bool)>((nil, false))
+
+    func started(_ progress: Progress) {
+        let isCancelled = state.withLock { state in
+            state.progress = progress
+            return state.isCancelled
+        }
+        if isCancelled {
+            progress.cancel()
+        }
+    }
+
+    func cancel() {
+        let progress = state.withLock { state in
+            state.isCancelled = true
+            return state.progress
+        }
+        progress?.cancel()
     }
 }

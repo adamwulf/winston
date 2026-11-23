@@ -178,6 +178,52 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         #expect(folder.contents(of: "Outbox").isEmpty)
     }
 
+    @Test func cancellingBeforeTheCopyStartsCopiesNothing() async throws {
+        let folder = TestFolder()
+        let outbox = folder.outbox
+        let source = try folder.sourceFile("notes.txt", "hello")
+
+        let stage = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            let provider = try #require(NSItemProvider(contentsOf: source))
+            return try await outbox.stage([provider])
+        }
+
+        await #expect(throws: CancellationError.self) {
+            try await stage.value
+        }
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
+    @Test func cancellingStopsAContentLoadUnderWay() async throws {
+        let folder = TestFolder()
+        let outbox = folder.outbox
+        let loadStarted = AsyncStream<Void>.makeStream()
+        let started = loadStarted.continuation
+
+        let stage = Task {
+            // As a large file still loading from another app: it finishes only once cancelled.
+            let provider = NSItemProvider()
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.zip.identifier, visibility: .all) { completion in
+                let progress = Progress(totalUnitCount: 1)
+                progress.cancellationHandler = {
+                    completion(nil, CocoaError(.userCancelled))
+                }
+                started.yield()
+                return progress
+            }
+            provider.suggestedName = "big.zip"
+            return try await outbox.stage([provider])
+        }
+        for await _ in loadStarted.stream { break }
+        stage.cancel()
+
+        await #expect(throws: (any Error).self) {
+            try await stage.value
+        }
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
     @Test func aBatchThatCannotBeReadNowIsKeptForTheNextLook() async throws {
         let folder = TestFolder()
         let saved = try await folder.share([try folder.fileProvider("notes.txt", "hello")])

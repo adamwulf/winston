@@ -16,9 +16,11 @@ final class ShareViewController: UIViewController {
 
     private let outbox = ShareOutbox.appGroup()
     private let state = ShareState(phase: .saving(count: 0))
+    /// The copy under way, which Cancel stops.
+    private var stageTask: Task<Void, Never>?
     /// The files copied for Winston, which Done hands over and Cancel removes.
     private var staged: ShareOutbox.Staged?
-    /// Set by Cancel, so a copy still under way is removed once it ends rather than kept.
+    /// Set by Cancel, so a copy that ends anyway is removed rather than kept.
     private var isCancelled = false
 
     override func viewDidLoad() {
@@ -63,7 +65,7 @@ final class ShareViewController: UIViewController {
             return
         }
         state.phase = .saving(count: providers.count)
-        Task {
+        stageTask = Task {
             do {
                 let staged = try await outbox.stage(providers)
                 guard !isCancelled else {
@@ -73,6 +75,8 @@ final class ShareViewController: UIViewController {
                 self.staged = staged
                 state.phase = .saved(count: staged.count)
             } catch {
+                // Cancel stopped it, and it left nothing behind.
+                guard !isCancelled else { return }
                 Self.logFailure("staging", error)
                 state.phase = .failed(Self.message(for: error, count: providers.count))
             }
@@ -112,12 +116,13 @@ final class ShareViewController: UIViewController {
         extensionContext?.completeRequest(returningItems: nil)
     }
 
-    /// Removes the copied files, or the copy under way once it ends, and closes. Winston never
-    /// sees them: only Done hands them over. If iOS ends the extension first, what it copied stays
-    /// in `Staging` until Winston removes it, a day later.
+    /// Removes the copied files, or stops the copy under way, which removes what it copied, and
+    /// closes. Winston never sees them: only Done hands them over. If iOS ends the extension
+    /// first, what it copied stays in `Staging` until Winston removes it, a day later.
     private func cancel() {
         Self.log.notice("share cancelled")
         isCancelled = true
+        stageTask?.cancel()
         if let outbox, let staged {
             outbox.discard(staged)
             self.staged = nil

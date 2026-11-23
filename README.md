@@ -413,11 +413,14 @@ No agent is chosen at share time, so a file saved before a logout goes only to
 an agent Adam picks after logging in. As with Open in, a file Winston has copied
 but not sent is gone if Winston is ended before the pick.
 
-The logs: the extension's go to the system log (subsystem
-`com.milestonemade.winston.share`), with counts only. Winston's say `shared
-files found` with a count, then `file opened` with `shared=true` and the rest
-as for Open in, and `share staging leftovers removed` with a count. No file
-name is logged.
+The logs: the extension's sheet logs to the system log (subsystem
+`com.milestonemade.winston.share`, in Console): what the share sheet handed
+over, failures, Done and Cancel, with counts only. `ShareOutbox`'s own lines
+(staged, published, a file URL it fell back from) go through swift-log, which
+the extension doesn't set up, so they show only in Xcode's console while
+debugging it. Winston's say `shared files found` with a count, then `file
+opened` with `shared=true` and the rest as for Open in, and `share staging
+leftovers removed` with a count. No file name is logged.
 
 The Mac app has no share extension: Open With, the Dock icon and drops on the
 chat window cover it.
