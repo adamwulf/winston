@@ -92,6 +92,28 @@ import Testing
         }
     }
 
+    /// Within a minute of the device starting, a timestamp of 0 is close to its receipt, but the
+    /// time from it would be the uptime.
+    @Test func aTimestampOfZeroIsLeftOutEvenSoonAfterTheDeviceStarted() {
+        let clock = MediaLogClock(start: 40)
+        let event = RemoteCommandEvent(name: "play", command: .play, timestamp: 0, receivedUptime: 45)
+
+        #expect(!MediaDiagnostics.isOnUptimeClock(event))
+        let fields = MediaDiagnostics.remoteCommandTimes(
+            event,
+            handled: 45.003,
+            applied: (setMutedReturned: 45.008, muteChanged: 45.0105),
+            clock: clock
+        )
+        #expect(fields.mapValues(\.description) == [
+            "sinceVoiceModeStartMs": "5003.0",
+            "receiptToMainMs": "3.0",
+            "eventTimestampOnUptime": "false",
+            "receiptToSetMutedMs": "8.0",
+            "receiptToAppliedMs": "10.5",
+        ])
+    }
+
     @Test func aTimestampWithinTheToleranceOfItsReceiptIsMeasured() {
         let receipt = 301_245.0
         let early = RemoteCommandEvent(name: "play", command: .play, timestamp: receipt - MediaDiagnostics.eventTimestampTolerance, receivedUptime: receipt)

@@ -628,15 +628,21 @@ Section 5 of
 [the barge-in latency research](docs/research/voice-barge-in-latency.md)
 lists the lines and how to read them.
 
-The AirPods mute and media remote command lines under `voice.loop` ("input
-mute changed", "input mute handler called", "remote command received",
-"remote command handled" and the rest) carry `sinceVoiceModeStartMs`,
-milliseconds since voice mode started, and how long each step took from the
-command's receipt (`receiptToMainMs`, `receiptToSetMutedMs`,
-`receiptToAppliedMs`) and from its own timestamp (`eventToReceiptMs`,
-`eventToSetMutedMs`, `eventToAppliedMs`). The times from the timestamp are left
-out, with `eventTimestampOnUptime=false`, when it is more than a minute from
-the receipt: it isn't on the uptime clock then.
+The AirPods mute and media remote command lines under `voice.loop` carry
+`sinceVoiceModeStartMs`, milliseconds since voice mode started. On "input mute
+changed", "input mute handler called" and "input mute notification without a
+mute state", that is when the line was written, and it is their only time. On
+the "remote command …" lines, it is when the main actor took the command, the
+same on each of that command's lines, so an "input mute changed" between them
+can show a later time. They also carry how long the command took to reach the
+main actor from its receipt (`receiptToMainMs`) and from its own timestamp
+(`eventToReceiptMs`). Once a press has toggled the mute, "remote command
+handled" adds the times from each to `setInputMuted` returning and to the
+change being applied: `receiptToSetMutedMs`, `receiptToAppliedMs`,
+`eventToSetMutedMs` and `eventToAppliedMs`. The times from the timestamp are
+left out, with `eventTimestampOnUptime=false`, when the timestamp is 0 or less
+or more than a minute from the receipt: it can't be taken as on the uptime
+clock then, and a time from it could give the uptime away.
 
 ### Getting them out
 

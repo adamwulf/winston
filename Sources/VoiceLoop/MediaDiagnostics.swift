@@ -27,11 +27,12 @@ enum MediaDiagnostics {
     /// be taken as on the uptime clock.
     static let eventTimestampTolerance: TimeInterval = 60
 
-    /// Whether `event`'s timestamp is on the uptime clock, judged by how close it is to the
-    /// event's receipt. Apple doesn't say what clock it's on. If it were another (or 0), the time
-    /// from it to an uptime would give the uptime away, so the logs leave those times out.
+    /// Whether `event`'s timestamp can be taken as on the uptime clock: it is positive, and within
+    /// `eventTimestampTolerance` of the event's receipt. Apple doesn't say what clock it's on. A
+    /// timestamp of 0 (even within a minute of the device starting) or on another clock would
+    /// give the uptime away in the time from it to an uptime, so the logs leave those times out.
     static func isOnUptimeClock(_ event: RemoteCommandEvent) -> Bool {
-        abs(event.receivedUptime - event.timestamp) <= eventTimestampTolerance
+        event.timestamp > 0 && abs(event.receivedUptime - event.timestamp) <= eventTimestampTolerance
     }
 
     /// The times of a remote command's log lines, all elapsed: since voice mode started
