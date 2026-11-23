@@ -381,15 +381,20 @@ Winston shows in the share sheet's app row for photos and screenshots (Photos,
 the screenshot editor), whose share sheets list only share extensions, and for
 files (Files, Mail): up to 10 images and 10 files at once. The extension
 (`App/WinstonShare/`, bundle ID `com.milestonemade.winston.share`) can't run
-TDLib, nor open Winston, so it only saves them for Winston, and their agent is
+TDLib, so it only saves them for Winston and opens it, and their agent is
 picked in Winston's [Send to Agent sheet](#opening-files-in-winston), as for a
 file from Open in:
 
 1. The extension's sheet copies what can be sent at once ("Preparing…"), then
-   says to tap Done and open Winston to choose the agent. Done hands the files
-   to Winston and closes; Cancel, at any point, removes them, and Winston never
-   sees them. A folder, nothing sendable (a web link alone) or a file it
-   couldn't read says so, with Cancel. VoiceOver reads each change.
+   says to tap Done to open Winston and choose the agent. Done hands the files
+   to Winston, opens it with `com.milestonemade.winston://share` (the URL
+   scheme `App/Config/Info.plist` registers), and closes; Cancel, at any point,
+   removes them, and Winston never sees them. A folder, nothing sendable (a web
+   link alone) or a file it couldn't read says so, with Cancel. VoiceOver reads
+   each change. A share extension can't open its app through
+   `NSExtensionContext` (only Today and iMessage extensions can), so the
+   extension calls `open(_:options:completionHandler:)` on the `UIApplication`
+   it finds up its responder chain.
 2. It goes through the App Group `group.com.milestonemade.winston`, with
    `ShareOutbox`: each file is copied, alone in a folder of its own, into a
    batch folder in `Share/Staging` (a file by its URL, security scoped and
@@ -397,8 +402,9 @@ file from Open in:
    If one can't be copied, none is. Done moves the batch into `Share/Outbox` in
    one rename, so Winston sees all of a share or none of it, never one half
    copied or not yet confirmed.
-3. Each time Winston becomes active, the launch included, `openSharedFiles()`
-   reads the outbox off the main actor and opens each waiting file with
+3. Each time Winston becomes active, the launch included, and each time it's
+   handed the extension's URL, `openSharedFiles()` reads the outbox off the
+   main actor and opens each waiting file with
    `openFile`, the path a file from Open in takes: copied into
    `tmp/OpenedFiles`, shown in the Send to Agent sheet once logged in with the
    bot chats, sent to the agent picked (a still image as a photo, anything else,
@@ -415,10 +421,12 @@ but not sent is gone if Winston is ended before the pick.
 
 The logs: the extension's sheet logs to the system log (subsystem
 `com.milestonemade.winston.share`, in Console): what the share sheet handed
-over, failures, Done and Cancel, with counts only. `ShareOutbox`'s own lines
+over, failures, Done and Cancel, with counts only, and `opening Winston`,
+`opened` or `failed`. `ShareOutbox`'s own lines
 (staged, published, a file URL it fell back from) go through swift-log, which
 the extension doesn't set up, so they show only in Xcode's console while
-debugging it. Winston's say `shared files found` with a count, then `file
+debugging it. Winston's say `opened by the share extension` when handed its
+URL, `shared files found` with a count, then `file
 opened` with `shared=true` and the rest as for Open in, and `share staging
 leftovers removed` with a count. No file name is logged.
 

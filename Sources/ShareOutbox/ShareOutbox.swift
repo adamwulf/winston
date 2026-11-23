@@ -3,9 +3,9 @@ import Logging
 import LogSupport
 
 /// The hand-off from Winston's iOS share extension to the app, in the App Group container they
-/// share. The extension can't run TDLib, nor open Winston, so it saves what the share sheet hands
-/// it, and Winston opens each file the next time it's active, as it opens a file from Open in:
-/// its Send to Agent sheet asks which agent it goes to (`AppModel.openSharedFiles()`).
+/// share. The extension can't run TDLib, so it saves what the share sheet hands it and opens
+/// Winston with `openURL`. Winston opens each file the next time it's active, as it opens a file
+/// from Open in: its Send to Agent sheet asks which agent it goes to (`AppModel.openSharedFiles()`).
 ///
 /// The extension copies the files it is handed into a batch folder in `Staging` as soon as it
 /// opens (`stage(_:)`), each in a folder of its own under its own name. Done moves the whole batch
@@ -17,6 +17,19 @@ import LogSupport
 public struct ShareOutbox: Sendable {
     /// The App Group the app and the extension share. Both entitlements files name it.
     public static let appGroupIdentifier = "group.com.milestonemade.winston"
+
+    /// The URL scheme Winston registers in `App/Config/Info.plist`. Its bundle ID, so no other
+    /// app claims it.
+    public static let urlScheme = "com.milestonemade.winston"
+
+    /// What the extension opens Winston with, once Done has saved the files.
+    /// `AppModel.open(_:)` scans the outbox when it's handed this.
+    public static let openURL = URL(string: "\(urlScheme)://share")
+
+    /// Whether `url` is in Winston's scheme, as `openURL` is.
+    public static func isWinstonURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == urlScheme
+    }
 
     static let log = Logger(label: "share.outbox")
 

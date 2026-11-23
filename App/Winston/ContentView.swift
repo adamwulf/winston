@@ -27,10 +27,10 @@ struct ContentView: View {
         .environment(presentations)
         .onAppear { model.start() }
         // A file another app opened in Winston, as Info.plist's document types offer it: from the
-        // iOS share sheet, or with Open With or a drop on the Dock icon on the Mac. The only URLs
-        // Winston is handed: it has no URL scheme.
+        // iOS share sheet, or with Open With or a drop on the Dock icon on the Mac. Or the URL
+        // the iOS share extension opens Winston with, in the scheme Info.plist registers.
         .onOpenURL { url in
-            model.openFile(at: url)
+            model.open(url)
             #if os(macOS)
             // In front of Settings, its own window on the Mac, say, so the agent sheet is seen.
             window.window?.makeKeyAndOrderFront(nil)
