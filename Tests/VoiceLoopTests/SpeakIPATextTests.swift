@@ -273,6 +273,12 @@ import Testing
             ("Read this", "/rid/ /ðɪs/"), ("now", "naʊ"),
         ]), symbols: symbols)
         #expect(slashed.parts.prefix(3) == [.phonemes(word: "Read", phonemes: "ɹid"), .text(" "), .phonemes(word: "this", phonemes: "ðɪs")])
+        // Readings of them all: the first, then its words.
+        #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/ or /rɛd/ /ðɪs/") == ["rid", "ðɪs"])
+        #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/,") == ["rid", "ðɪs,"])
+        // Fewer words of IPA than words: all of it, said together.
+        let city = SpeakIPAText.speech(of: "New York City.", transcribed: words([("New York City", "/nuˈjɔɹk/ /ˈsɪti/")]), symbols: symbols)
+        #expect(city.parts.first == .phonemes(word: "New York City", phonemes: "nujˈɔɹksˈɪti"))
         // Of two readings, the first, before it is split word by word.
         let readings = SpeakIPAText.speech(of: "A data base.", transcribed: words([
             ("A", "ə"), ("database", "ˈdeɪtəbeɪs, ˈdætəbeɪs"),
@@ -408,6 +414,9 @@ import Testing
         #expect(SpeakIPAText.firstReading(of: "“/həˈloʊ/,”") == "“həˈloʊ,”")
         // No reading at all: its punctuation, to be recorded as left out.
         #expect(SpeakIPAText.firstReading(of: "—") == "—")
+        // A bar beside the only reading is no reading of its own.
+        #expect(SpeakIPAText.firstReading(of: "/həˈloʊ/ |") == "həˈloʊ |")
+        #expect(SpeakIPAText.firstReading(of: "| /həˈloʊ/") == "| həˈloʊ")
         #expect(SpeakIPAText.firstReading(of: "/ˈiːðər/, /ˈaɪðər/") == "ˈiːðər")
         // A space between syllables of one reading stays.
         #expect(SpeakIPAText.firstReading(of: "ˈwɪn stən") == "ˈwɪn stən")

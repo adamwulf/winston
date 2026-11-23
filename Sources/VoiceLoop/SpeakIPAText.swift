@@ -326,23 +326,46 @@ public enum SpeakIPAText {
     /// readings: one after the only reading stays, inside its slashes or not ("həˈloʊ," or
     /// "/həˈloʊ/,"), as do quotes around it, for `ClosestPhonemes` to leave out, and record.
     static func firstReading(of ipa: String) -> String {
-        // Whether `piece` has more than punctuation and spaces: a reading.
-        func isReading(_ piece: Substring) -> Bool {
-            !piece.allSatisfy { $0.isPunctuation || $0.isWhitespace }
-        }
         let pieces = ipa.split { "/[]".contains($0) }
         let readings = pieces.filter(isReading)
         // Of one reading, or none, the punctuation around it ("“/həˈloʊ/”") stays, to be recorded.
-        var reading = readings.count <= 1 ? Substring(pieces.joined()) : readings[0]
-        let listed = reading.split { ",;|".contains($0) }.filter(isReading)
-        if listed.count > 1 {
-            reading = listed[0]
+        let reading = readings.count <= 1 ? Substring(pieces.joined()) : readings[0]
+        return firstListed(reading).split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
+    /// The IPA the model wrote for words it joined into one entry, a word of it for each: its
+    /// first listed reading (`firstListed(_:)`, so "ˈdeɪtəbeɪs, ˈdætəbeɪs" is one), parted at
+    /// spaces, slashes and brackets ("/rid/ /ðɪs/" is rid and ðɪs). Punctuation stays with the
+    /// word of IPA beside it, to be recorded.
+    static func joinedReadingWords(of ipa: String) -> [String] {
+        var words: [String] = []
+        for piece in firstListed(Substring(ipa)).split(whereSeparator: { $0.isWhitespace || "/[]".contains($0) }) {
+            if let last = words.last, !isReading(piece) || !isReading(Substring(last)) {
+                words[words.count - 1] += piece
+            } else {
+                words.append(String(piece))
+            }
         }
+        return words
+    }
+
+    /// The first of the readings `ipa` lists, parted by a comma, semicolon, bar or "or" with a
+    /// reading on both sides; all of it if it lists one, so "həˈloʊ," keeps its comma.
+    private static func firstListed(_ ipa: Substring) -> Substring {
+        let listed = ipa.split { ",;|".contains($0) }.filter(isReading)
+        let reading = listed.count > 1 ? listed[0] : ipa
         let words = reading.split(whereSeparator: \.isWhitespace)
-        if let or = words.firstIndex(of: "or"), or > 0, or < words.count - 1 {
-            return words[..<or].joined(separator: " ")
+        if let or = words.firstIndex(of: "or"), words[..<or].contains(where: isReading),
+           words[(or + 1)...].contains(where: isReading) {
+            return Substring(words[..<or].joined(separator: " "))
         }
-        return words.joined(separator: " ")
+        return reading
+    }
+
+    /// Whether `piece` holds a reading: a letter, as every IPA symbol for a sound is, not only
+    /// punctuation, bars or spaces.
+    private static func isReading(_ piece: Substring) -> Bool {
+        piece.contains(where: \.isLetter)
     }
 
     /// Where each of `chunk`'s sentences ends, without the spaces after it, as a UTF-16 offset:
@@ -422,20 +445,16 @@ public enum SpeakIPAText {
                 continue
             }
             // The model joined words, as many as it takes ("state-of-the-art" for "state of the
-            // art"): each gets a word of its IPA, if it has as many; otherwise its IPA is for the
-            // words together. Spaces part its words ("/rid/ /ðɪs/"); a comma, semicolon, bar or
-            // "or" parts readings of them all, of which the first is taken.
+            // art"): each gets a word of its IPA, if it has as many; otherwise all of its first
+            // reading is for the words together (`joinedReadingWords(of:)`).
             if let count = joinedCount(i, j) {
-                let entry = transcribed[j].ipa
-                let listsReadings = entry.contains { ",;|".contains($0) }
-                    || entry.split(whereSeparator: \.isWhitespace).contains("or")
-                let ipaWords = (listsReadings ? firstReading(of: entry) : entry).split(whereSeparator: \.isWhitespace)
+                let ipaWords = joinedReadingWords(of: transcribed[j].ipa)
                 if ipaWords.count == count {
                     for (offset, word) in ipaWords.enumerated() {
-                        ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: String(word))]
+                        ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: word)]
                     }
                 } else {
-                    ipa[i] = [transcribed[j]]
+                    ipa[i] = [TranscribedWord(word: transcribed[j].word, ipa: ipaWords.joined(separator: " "))]
                     spans[i] = count
                 }
                 i += count
