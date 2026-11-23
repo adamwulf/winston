@@ -24,8 +24,8 @@ struct MessageList: View {
     @Environment(\.calendar) private var calendar
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
-    /// What "today" is for the times under the bubbles. Moves on as the day changes, and when the
-    /// window becomes active again.
+    /// What "today" is for the times under the bubbles. Moves on as the day or the time zone
+    /// changes, and when the window becomes active again.
     @State private var now = Date.now
 
     var body: some View {
@@ -87,6 +87,12 @@ struct MessageList: View {
         .task {
             // At midnight today's times become yesterday's.
             for await _ in NotificationCenter.default.notifications(named: .NSCalendarDayChanged) {
+                now = .now
+            }
+        }
+        .task {
+            // A new time zone can put `now`, set hours ago, on another day than today.
+            for await _ in NotificationCenter.default.notifications(named: .NSSystemTimeZoneDidChange) {
                 now = .now
             }
         }
@@ -258,7 +264,8 @@ struct PhotoView: View {
     var body: some View {
         Group {
             if let image {
-                Image(decorative: image, scale: 1)
+                // Labelled, so VoiceOver says what a photo without a caption is before its time.
+                Image(image, scale: 1, label: Text("Photo"))
                     .resizable()
             } else if failed {
                 Button {

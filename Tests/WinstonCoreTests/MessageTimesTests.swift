@@ -6,10 +6,17 @@ import WinstonCore
 /// The times under the chat's bubbles: how they read, and which bubbles show one.
 @Suite(.timeLimit(.minutes(1)))
 struct MessageTimesTests {
+    // The spaces, punctuation and joining words ("at") between a time's parts come with the OS's
+    // locale data, which can change, so these check which parts a time shows, comparing with the
+    // format style meant for it where a part's spelling isn't plain.
     private static let chicago = TimeZone(identifier: "America/Chicago")!
     private static let usEnglish = Locale(identifier: "en_US")
-    /// Before AM or PM, ICU puts a narrow no-break space.
-    private static let space = "\u{202F}"
+    private static let british = Locale(identifier: "en_GB")
+    private static let german = Locale(identifier: "de_DE")
+
+    private static func style(_ locale: Locale = usEnglish, _ timeZone: TimeZone = chicago) -> Date.FormatStyle {
+        Date.FormatStyle(locale: locale, calendar: Calendar(identifier: .gregorian), timeZone: timeZone)
+    }
 
     /// A moment in Chicago.
     private static func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int, _ minute: Int, _ second: Int = 0,
@@ -36,11 +43,14 @@ struct MessageTimesTests {
 
     @Test func todayShowsTheTimeOnlyInTheLocalesHourCycle() {
         let afternoon = Self.date(2026, 11, 22, 15, 42)
-        #expect(Self.times().text(for: afternoon) == "3:42\(Self.space)PM")
-        #expect(Self.times(locale: Locale(identifier: "en_GB")).text(for: afternoon) == "15:42")
+        let text = Self.times().text(for: afternoon)
+        #expect(text == afternoon.formatted(Self.style().hour().minute()))
+        #expect(text.hasPrefix("3:42") && text.hasSuffix("PM"))
+        #expect(Self.times(locale: Self.british).text(for: afternoon) == "15:42")
         // The 24-hour setting, as it reaches Locale.current.
         #expect(Self.times(locale: Locale(identifier: "en_US@hours=h23")).text(for: afternoon) == "15:42")
-        #expect(Self.times().text(for: Self.date(2026, 11, 22, 0, 5)) == "12:05\(Self.space)AM")
+        let justAfterMidnight = Self.times().text(for: Self.date(2026, 11, 22, 0, 5))
+        #expect(justAfterMidnight.hasPrefix("12:05") && justAfterMidnight.hasSuffix("AM"))
     }
 
     @Test func yesterdayShowsTheWordAndTheTime() throws {
@@ -50,21 +60,31 @@ struct MessageTimesTests {
         let now = Date.now
         let yesterday = try #require(calendar.date(byAdding: .day, value: -1, to: now))
         let afternoon = try #require(calendar.date(bySettingHour: 15, minute: 42, second: 0, of: yesterday))
-        #expect(Self.times(now: now).text(for: afternoon) == "Yesterday at 3:42\(Self.space)PM")
-        #expect(Self.times(now: now, locale: Locale(identifier: "en_GB")).text(for: afternoon) == "Yesterday at 15:42")
-        #expect(Self.times(now: now, locale: Locale(identifier: "de_DE")).text(for: afternoon) == "Gestern, 15:42")
+        let text = Self.times(now: now).text(for: afternoon)
+        #expect(text.hasPrefix("Yesterday") && text.contains("3:42") && text.hasSuffix("PM"))
+        let british = Self.times(now: now, locale: Self.british).text(for: afternoon)
+        #expect(british.hasPrefix("Yesterday") && british.hasSuffix("15:42"))
+        let german = Self.times(now: now, locale: Self.german).text(for: afternoon)
+        #expect(german.hasPrefix("Gestern") && german.hasSuffix("15:42"))
     }
 
     @Test func earlierThisYearShowsTheDayAndTime() {
-        #expect(Self.times().text(for: Self.date(2026, 11, 19, 15, 42)) == "Nov 19 at 3:42\(Self.space)PM")
-        #expect(Self.times().text(for: Self.date(2026, 1, 1, 9, 5)) == "Jan 1 at 9:05\(Self.space)AM")
-        #expect(Self.times(locale: Locale(identifier: "de_DE")).text(for: Self.date(2026, 11, 19, 15, 42))
-            == "19. Nov., 15:42")
+        let nov19 = Self.date(2026, 11, 19, 15, 42)
+        let text = Self.times().text(for: nov19)
+        #expect(text == nov19.formatted(Self.style().month(.abbreviated).day().hour().minute()))
+        #expect(text.hasPrefix("Nov 19") && text.contains("3:42") && text.hasSuffix("PM") && !text.contains("2026"))
+        #expect(Self.times().text(for: Self.date(2026, 1, 1, 9, 5)).hasPrefix("Jan 1"))
+        let german = Self.times(locale: Self.german).text(for: nov19)
+        #expect(german == nov19.formatted(Self.style(Self.german).month(.abbreviated).day().hour().minute()))
+        #expect(german.hasPrefix("19.") && german.hasSuffix("15:42"))
     }
 
     @Test func anEarlierYearShowsTheYearToo() {
-        #expect(Self.times().text(for: Self.date(2025, 11, 19, 15, 42)) == "Nov 19, 2025 at 3:42\(Self.space)PM")
-        #expect(Self.times().text(for: Self.date(2025, 12, 31, 23, 59)) == "Dec 31, 2025 at 11:59\(Self.space)PM")
+        let lastYear = Self.date(2025, 11, 19, 15, 42)
+        let text = Self.times().text(for: lastYear)
+        #expect(text == lastYear.formatted(Self.style().year().month(.abbreviated).day().hour().minute()))
+        #expect(text.hasPrefix("Nov 19") && text.contains("2025") && text.contains("3:42"))
+        #expect(Self.times().text(for: Self.date(2025, 12, 31, 23, 59)).contains("2025"))
     }
 
     @Test func theTimeAndTheDayAreTheTimeZones() {
@@ -73,12 +93,12 @@ struct MessageTimesTests {
         // 11:53 UTC: 20:53 in Tokyo, both on Nov 22.
         let now = Self.date(2026, 11, 22, 11, 53, in: utc)
         let sent = Self.date(2026, 11, 22, 5, 30, in: utc)
-        #expect(Self.times(now: now, timeZone: utc).text(for: sent) == "5:30\(Self.space)AM")
-        #expect(Self.times(now: now, timeZone: tokyo).text(for: sent) == "2:30\(Self.space)PM")
+        #expect(Self.times(now: now, timeZone: utc, locale: Self.british).text(for: sent) == "05:30")
+        #expect(Self.times(now: now, timeZone: tokyo, locale: Self.british).text(for: sent) == "14:30")
         // 8 AM on Nov 21 in Chicago is 11 PM in Tokyo, two days before Tokyo's Nov 23.
         let tokyoTomorrow = Self.date(2026, 11, 23, 0, 30, in: tokyo)
-        #expect(Self.times(now: tokyoTomorrow, timeZone: tokyo).text(for: Self.date(2026, 11, 21, 8, 0))
-            == "Nov 21 at 11:00\(Self.space)PM")
+        let older = Self.times(now: tokyoTomorrow, timeZone: tokyo).text(for: Self.date(2026, 11, 21, 8, 0))
+        #expect(older.hasPrefix("Nov 21") && older.contains("11:00") && older.hasSuffix("PM"))
     }
 
     // MARK: - Which bubbles show a time
@@ -130,11 +150,14 @@ struct MessageTimesTests {
     // MARK: - VoiceOver
 
     @Test func voiceOverHearsWhoSentItAndWhen() {
-        let sent = Self.times().caption(for: Self.message(1, outgoing: true, at: Self.date(2026, 11, 22, 15, 42)))
-        #expect(sent.text == "3:42\(Self.space)PM")
-        #expect(sent.accessibilityLabel == "Sent 3:42\(Self.space)PM")
-        let received = Self.times().caption(for: Self.message(2, outgoing: false, at: Self.date(2026, 11, 19, 15, 42)))
-        #expect(received.text == "Nov 19 at 3:42\(Self.space)PM")
-        #expect(received.accessibilityLabel == "Received Nov 19 at 3:42\(Self.space)PM")
+        let today = Self.date(2026, 11, 22, 15, 42)
+        let sent = Self.times().caption(for: Self.message(1, outgoing: true, at: today))
+        #expect(sent.text == Self.times().text(for: today))
+        #expect(sent.accessibilityLabel == "Sent \(sent.text)")
+        let nov19 = Self.date(2026, 11, 19, 15, 42)
+        let received = Self.times().caption(for: Self.message(2, outgoing: false, at: nov19))
+        #expect(received.text == Self.times().text(for: nov19))
+        #expect(received.accessibilityLabel == "Received \(received.text)")
+        #expect(received.accessibilityLabel.hasPrefix("Received Nov 19"))
     }
 }
