@@ -22,7 +22,7 @@ public protocol IPATranscriber: Sendable {
     var availability: PronunciationSuggesterAvailability { get }
     /// Each word of `chunk`, in order, with its IPA, as the model wrote them: it can leave a word
     /// out, add one, or write symbols Kokoro doesn't have, which
-    /// `SpeakIPAText.parts(of:transcribed:symbols:)` sorts out. Throws a
+    /// `SpeakIPAText.speech(of:transcribed:symbols:)` sorts out. Throws a
     /// `PronunciationSuggestionError`, or `CancellationError` once cancelled. `request` and
     /// `chunkIndex` number it in the logs, as Speak IPA does.
     func transcribe(_ chunk: String, request: Int, chunkIndex: Int) async throws -> [TranscribedWord]
@@ -38,8 +38,9 @@ public protocol IPATranscriber: Sendable {
 /// whole-sentence answer as unsafe, while the word list passed every time, and it lets each word's
 /// IPA be matched to the word it is for. Its symbols aren't held to Kokoro's by a guide: the
 /// guides take no character class, and an alternation of the symbols made a 17-word sentence take
-/// 69 s rather than about 4.5. A symbol Kokoro doesn't have puts that word back to Kokoro's own
-/// reading instead.
+/// 69 s rather than about 4.5. A symbol Kokoro doesn't have is put as the closest one it has
+/// afterwards (`ClosestPhonemes`); only a word whose IPA has no sound left is read as Kokoro
+/// reads it.
 ///
 /// Each step is logged under `voice.speakipa` at notice level, and a failure at warning, with the
 /// request's and chunk's numbers and the time since it started (`ms`): the availability check,

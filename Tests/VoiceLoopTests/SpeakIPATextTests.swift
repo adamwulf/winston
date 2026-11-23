@@ -66,6 +66,10 @@ import Testing
         #expect(SpeakIPAText.chunks(in: comma) == ["I fixed the parser, including its tests."])
         #expect(SpeakIPAText.chunks(in: dash) == ["Two things — this and that."])
         #expect(KokoroText.sentences(in: SpeakIPAText.chunks(in: comma)[0]).count == 1)
+        // The comma can be inside a closing quote.
+        let quoted = SpeakIPAText.normalized("“Wait,”\nshe said")
+        #expect(quoted == "“Wait,”\nshe said.")
+        #expect(SpeakIPAText.chunks(in: quoted) == ["“Wait,” she said."])
     }
 
     @Test func aLineWithoutEndingPunctuationEndsWithAFullStop() {
@@ -240,16 +244,31 @@ import Testing
             .phonemes(word: "this", phonemes: "ðɪs"), .text(" "),
             .phonemes(word: "now", phonemes: "nW"), .text("."),
         ])
-        // Two words, one word of IPA: neither can be told apart, so the model wrote no IPA for
-        // either that can be said.
+        // Two words, one word of IPA: they can't be told apart, so they are said together.
         let unsplit = SpeakIPAText.speech(
             of: "Read this now.",
             transcribed: words([("Read this", "ridðɪs"), ("now", "naʊ")]),
             symbols: symbols
         )
-        #expect(unsplit.parts.prefix(3) == [.text("Read"), .text(" "), .text("this")])
-        #expect(unsplit.wordsWithIPA == 1)
-        #expect(unsplit.wordsWithoutIPA == ["Read", "this"])
+        #expect(unsplit.parts == [
+            .phonemes(word: "Read this", phonemes: "ɹidðɪs"), .text(" "),
+            .phonemes(word: "now", phonemes: "nW"), .text("."),
+        ])
+        #expect(unsplit.wordsWithIPA == 3)
+        #expect(unsplit.wordsWithoutIPA.isEmpty)
+        // As for a word the normalizing split: "well-known" is "well known".
+        let compound = SpeakIPAText.speech(of: "A well known tool.", transcribed: words([
+            ("A", "ə"), ("well-known", "ˌwɛlˈnoʊn"), ("tool", "tul"),
+        ]), symbols: symbols)
+        #expect(compound.parts[2] == .phonemes(word: "well known", phonemes: "wˌɛlnˈOn"))
+        // With punctuation between, which said together would go, there is no IPA for them.
+        let punctuated = SpeakIPAText.speech(
+            of: "Read, this now.",
+            transcribed: words([("Read this", "ridðɪs"), ("now", "naʊ")]),
+            symbols: symbols
+        )
+        #expect(punctuated.parts.prefix(3) == [.text("Read"), .text(", "), .text("this")])
+        #expect(punctuated.wordsWithoutIPA == ["Read", "this"])
     }
 
     @Test func aWordTheModelAddedIsSkippedAndOneItLeftOutIsSaidAsKokoroReadsIt() {
@@ -335,6 +354,8 @@ import Testing
         #expect(SpeakIPAText.firstReading(of: "ˈiːðər or ˈaɪðər") == "ˈiːðər")
         // A comma after the only reading isn't a list: it stays, to be left out and recorded.
         #expect(SpeakIPAText.firstReading(of: "həˈloʊ,") == "həˈloʊ,")
+        #expect(SpeakIPAText.firstReading(of: "/həˈloʊ/,") == "həˈloʊ,")
+        #expect(SpeakIPAText.firstReading(of: "/ˈiːðər/, /ˈaɪðər/") == "ˈiːðər")
         // A space between syllables of one reading stays.
         #expect(SpeakIPAText.firstReading(of: "ˈwɪn stən") == "ˈwɪn stən")
         let speech = SpeakIPAText.speech(of: "either", transcribed: words([("either", "/ˈiːðər/ /ˈaɪðər/")]), symbols: symbols)
@@ -394,6 +415,12 @@ import Testing
         #expect(speech.changes == [.init(word: "Bach", from: "x", to: "k"), .init(word: "uh", from: "ʔ", to: "")])
         #expect(speech.wordsWithNothingToSay == ["oh"])
         #expect(speech.wordsWithIPA == 4)
+    }
+
+    @Test func theStressGoesBeforeAVowelKokoroLacksBeforeItIsPutAsTheClosest() {
+        let speech = SpeakIPAText.speech(of: "Müller", transcribed: words([("Müller", "ˈmʏlɐ")]), symbols: symbols)
+        #expect(speech.parts == [.phonemes(word: "Müller", phonemes: "mˈʊlə")])
+        #expect(speech.changes == [.init(word: "Müller", from: "ʏ", to: "ʊ")])
     }
 
     @Test func theSymbolsCheckedAreTheOnesKokoroHasNow() {

@@ -146,7 +146,7 @@ enum MisakiPhonemes {
     /// The vowels a stress mark goes before: all but ᵊ, which is never stressed, and the IPA
     /// vowels misaki doesn't use, which come through unconverted (Kokoro's vocabulary has some,
     /// such as y).
-    private static let stressedVowels: Set<Character> = Set(vowels.filter { $0 != "ᵊ" } + "yøœɯɤɘɵɞɶ")
+    private static let stressedVowels: Set<Character> = Set(vowels.filter { $0 != "ᵊ" } + "yʏøœɯɤɘɵɞɶ")
 
     /// The combining marks kept through `withoutDiacritics(_:)`: the cedilla of ç, a letter of
     /// its own in IPA, and the syllabic marks, which `symbols(in:)` reads.

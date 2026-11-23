@@ -18,7 +18,7 @@ import Testing
             // Fricatives: the stop or fricative made nearest.
             "x": "k", "χ": "k", "ɣ": "ɡ", "ç": "ʃ", "ɕ": "ʃ", "ʂ": "ʃ", "β": "v", "ɸ": "f", "ħ": "h", "ɬ": "l",
             // Rhotics, laterals and nasals.
-            "r": "ɹ", "ʁ": "ɹ", "ʀ": "ɹ", "ʎ": "j", "ɲ": "nj", "ɴ": "ŋ", "ɱ": "m",
+            "r": "ɹ", "ʁ": "ɹ", "ʀ": "ɹ", "ɭ": "l", "ʎ": "j", "ɲ": "nj", "ɴ": "ŋ", "ɱ": "m",
             // Stops, implosives and clicks.
             "c": "k", "ɟ": "ɡ", "q": "k", "ʈ": "t", "ɖ": "d", "g": "ɡ", "ɓ": "b", "ǃ": "k",
             // Affricates as their two sounds, when Kokoro has no single symbol.
@@ -72,5 +72,13 @@ import Testing
         let loaded = ClosestPhonemes.closest("bɑx", symbols: symbols.union(["x"]))
         #expect(loaded.phonemes == "bɑx")
         #expect(loaded.changes.isEmpty)
+    }
+
+    @Test func aMarkTheLoadedKokoroHasIsKeptAsTheModelWroteIt() {
+        // The loaded model's vocabulary has ʔ and ʲ, which misaki's US set lacks.
+        let loaded = ClosestPhonemes.closest("ˈʌʔO", symbols: symbols.union(["ʔ", "ʲ"]))
+        #expect(loaded.phonemes == "ˈʌʔO")
+        #expect(loaded.changes.isEmpty)
+        #expect(ClosestPhonemes.closest("ˈʌʔO", symbols: symbols).phonemes == "ˈʌO")
     }
 }

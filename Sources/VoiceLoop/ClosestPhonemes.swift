@@ -6,12 +6,15 @@ import Foundation
 /// vowels, length, nasal and other diacritics, tie bars, syllabic consonants); what is left that
 /// Kokoro lacks is a sound English doesn't have, or a symbol for none.
 ///
-/// Each symbol in `table` lists what to say in its place, closest first by how it is made (the
-/// same place and manner, the vowel's height, backness and rounding), the way an English speaker
-/// would say it: the first whose every symbol Kokoro has is used. A symbol not in the table is
-/// put as its base letter without diacritics, or in lowercase, if Kokoro has that. Only what has
-/// no sound close to it is left out: tone letters, secondary articulation, prosodic breaks, and
-/// punctuation, which Kokoro has, but which in a word would be a pause.
+/// A symbol Kokoro has is kept as the model wrote it, whatever it is: the loaded model's
+/// vocabulary has some that misaki's US set lacks, such as ʔ and ʲ. For each symbol Kokoro lacks,
+/// `table` lists what to say in its place, closest first by how it is made (the same place and
+/// manner, the vowel's height, backness and rounding), the way an English speaker would say it:
+/// the first whose every symbol Kokoro has is used. A symbol not in the table is put as its base
+/// letter without diacritics, or in lowercase, as that letter is. Only what has no sound close to
+/// it is left out: the glottal stop, tone letters, secondary articulation, length and prosodic
+/// breaks, when Kokoro lacks them, and punctuation always, which Kokoro has, but which in a word
+/// would be a pause.
 enum ClosestPhonemes {
     /// What to say for each symbol Kokoro may not have, closest first. An empty list: nothing is
     /// close, and it is left out.
@@ -87,6 +90,7 @@ enum ClosestPhonemes {
         "ʎ": ["j", "l"],
         "ʟ": ["l"],
         "ɫ": ["l"],
+        "ɭ": ["l"],
         // Nasals.
         "ɲ": ["nj", "n"],
         "ɳ": ["n"],
@@ -128,10 +132,10 @@ enum ClosestPhonemes {
         // The glottal stop: English mostly says nothing there.
         "ʔ": [],
         "ʡ": [],
-        // Marks with no sound of their own: secondary articulation, aspiration, length, stress,
-        // tone, and prosodic breaks.
+        // Marks with no sound of their own: secondary articulation, aspiration, length, tone, and
+        // prosodic breaks.
         "ʰ": [], "ʲ": [], "ʷ": [], "ˠ": [], "ˤ": [], "ⁿ": [], "ˡ": [],
-        "ː": [], "ˑ": [], "ˈ": [], "ˌ": [],
+        "ː": [], "ˑ": [],
         "˥": [], "˦": [], "˧": [], "˨": [], "˩": [],
         "↓": [], "↑": [], "↗": [], "↘": [], "|": [], "‖": [],
     ]

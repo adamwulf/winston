@@ -26,10 +26,11 @@ private let realTranscriberRequested: Bool = {
 /// Kokoro phonemes and how long each chunk took, for a person to judge. The phonemes are checked
 /// against misaki's US symbols, as they are while the Kokoro model isn't loaded.
 ///
-/// It fails if more than one chunk fails, or if fewer than half the words of the chunks answered
-/// got IPA from the model: a mistake of ours, such as a schema the model doesn't take, fails every
-/// chunk. One failure is allowed: the guardrails now and then decline a harmless chunk (the one
-/// with Siobhan and Joaquin, once), which Speak IPA says as written.
+/// It fails if a chunk fails other than by the guardrails declining it, if more than one is
+/// declined, or if fewer than half the words of the chunks answered got IPA from the model: a
+/// mistake of ours, such as a schema the model doesn't take, fails every chunk. One decline is
+/// allowed: the guardrails now and then decline a harmless chunk (the one with Siobhan and
+/// Joaquin, once), which Speak IPA says as written.
 @Suite(
     .serialized,
     .enabled(if: realTranscriberRequested, "neither WINSTON_SPEAKIPA_REAL_MODEL=1 nor .build/speakipa-real-model asks for it"),
@@ -61,11 +62,16 @@ struct OnDeviceIPATranscriberRealModelTests {
             let transcribed: [TranscribedWord]
             do {
                 transcribed = try await transcriber.transcribe(chunk, request: 1, chunkIndex: index)
-            } catch {
-                // The transcriber's log line, above the report, has the model's error code.
-                report.append("chunk \(index): failed, \(error): \(chunk)")
+            } catch PronunciationSuggestionError.declined {
+                report.append("chunk \(index): declined: \(chunk)")
                 failedChunks += 1
                 continue
+            } catch {
+                // Not the guardrails: a mistake of ours, such as too few tokens for the answer.
+                // The transcriber's log line, above the report, has the model's error code.
+                report.append("chunk \(index): failed, \(error): \(chunk)")
+                print(report.joined(separator: "\n"))
+                throw error
             }
             let seconds = Double(started.duration(to: .now) / .milliseconds(1)) / 1000
             let speech = SpeakIPAText.speech(of: chunk, transcribed: transcribed, symbols: MisakiPhonemes.usSymbols)
@@ -84,7 +90,7 @@ struct OnDeviceIPATranscriberRealModelTests {
             }.joined())
         }
         print(report.joined(separator: "\n"))
-        #expect(failedChunks <= 1, "\(failedChunks) of \(chunks.count) chunks failed")
+        #expect(failedChunks <= 1, "\(failedChunks) of \(chunks.count) chunks were declined")
         #expect(wordsWithIPA * 2 >= words, "only \(wordsWithIPA) of \(words) words got IPA from the model")
     }
 }

@@ -69,9 +69,14 @@ public enum SpeakIPAText {
         // line, which stays a line break in its chunk: a lowercase list item after a full stop
         // is still a sentence of its own to the sentence splitters.
         var words: [(text: Substring, breakStrength: Int, endsLine: Bool)] = []
+        // The last character of `text` before any closing quotes or brackets: the comma of
+        // "“Wait,”".
+        func lastBeforeClosers(_ text: Substring) -> Character? {
+            text.last { !"\"'”’»)]".contains($0) }
+        }
         for line in normalized.split(whereSeparator: \.isNewline) {
             // A line ending with a comma or dash goes on into the next, on the same line.
-            let continues = line.last.map { ",-–—".contains($0) } ?? false
+            let continues = lastBeforeClosers(line).map { ",-–—".contains($0) } ?? false
             let sentences = KokoroText.sentences(in: String(line))
             for (sentenceIndex, sentence) in sentences.enumerated() {
                 let sentenceWords = sentence.split(separator: " ")
@@ -80,7 +85,7 @@ public enum SpeakIPAText {
                     let endsLine = endsSentence && sentenceIndex == sentences.count - 1
                     let strength = if endsSentence && !(endsLine && continues) {
                         3
-                    } else if let last = word.last, ",;:—–-".contains(last) {
+                    } else if let last = lastBeforeClosers(word), ",;:—–-".contains(last) {
                         2
                     } else {
                         1
@@ -203,7 +208,9 @@ public enum SpeakIPAText {
     /// `chunk` with the model's IPA in place of its words. Each of the model's words is matched to
     /// the chunk's in order, whatever their case, accents or apostrophes; a word the model split
     /// in two or three ("itsy bitsy" for "itsybitsy") gets their IPA as one word, and words it
-    /// joined into one get its IPA's words, if it has as many. A word the model added is skipped,
+    /// joined into one get its IPA's words, if it has as many; otherwise ("well-known" as
+    /// ˌwɛlˈnoʊn for "well known") they are said together from its IPA, as one word, if only
+    /// spaces lie between them. A word the model added is skipped,
     /// and one it left out has no IPA, as long as the two get back in step within three
     /// words, and stay in step for the word after: in "Tell us how US rates changed" with "us"
     /// left out, "US" isn't taken for "us". Past that, each word is matched to the model's word in
@@ -221,32 +228,61 @@ public enum SpeakIPAText {
     /// in "Mr. Smith", goes with the word: Kokoro would otherwise take it for the end of one. An
     /// ellipsis stays.
     public static func speech(of chunk: String, transcribed: [TranscribedWord], symbols: Set<Character>) -> ChunkSpeech {
+        let segments = segments(of: chunk)
         let words = words(of: chunk)
-        let ipa = matchedIPA(words: words, transcribed: transcribed)
+        var (ipa, spans) = matchedIPA(words: words, transcribed: transcribed)
+        // What comes after each word, by its index.
+        var after: [Int: String] = [:]
+        var wordCount = 0
+        for segment in segments {
+            switch segment {
+            case .word: wordCount += 1
+            case .other(let text) where wordCount > 0: after[wordCount - 1] = text
+            case .other: break
+            }
+        }
+        // Words said together are only ever words with spaces between: punctuation between, which
+        // could end a sentence, would go. Otherwise the model wrote no IPA for them.
+        for (start, count) in spans where !(start..<(start + count - 1)).allSatisfy({ after[$0]?.allSatisfy(\.isWhitespace) ?? false }) {
+            ipa[start] = nil
+            spans[start] = nil
+        }
+        /// The words said from the entry at `index`: one, or all those it is for together.
+        func wordsOf(_ index: Int) -> ArraySlice<String> {
+            words[index..<(index + (spans[index] ?? 1))]
+        }
         var phonemes: [Int: String] = [:]
         var changes: [ChunkSpeech.Change] = []
         var wordsWithNothingToSay: [String] = []
         for (index, parts) in ipa.sorted(by: { $0.key < $1.key }) {
+            let word = wordsOf(index).joined(separator: " ")
             let ipaText = parts
                 .map { firstReading(of: $0.ipa).filter { $0 != "(" && $0 != ")" } }
                 .joined(separator: " ")
             let converted = MisakiPhonemes.fromIPA(ipaText, asOneWord: true)
             let closest = ClosestPhonemes.closest(converted, symbols: symbols)
-            changes += closest.changes.map { ChunkSpeech.Change(word: words[index], from: $0.from, to: $0.to) }
+            changes += closest.changes.map { ChunkSpeech.Change(word: word, from: $0.from, to: $0.to) }
             // A sound, not only stress marks.
             if closest.phonemes.contains(where: { $0 != "ˈ" && $0 != "ˌ" }) {
                 phonemes[index] = closest.phonemes
             } else {
-                wordsWithNothingToSay.append(words[index])
+                wordsWithNothingToSay.append(word)
             }
         }
+        let covered = Set(spans.flatMap { ($0.key + 1)..<($0.key + $0.value) })
         let sentenceEnds = Self.sentenceEnds(in: chunk)
         var parts: [IPASpeechPart] = []
         var wordIndex = 0
         // Where the segment being read starts, in UTF-16 offsets, as `sentenceEnds` are.
         var offset = 0
-        for segment in segments(of: chunk) {
+        // Words said together, being gathered: the last one's index, their text so far, and their
+        // phonemes.
+        var together: (last: Int, text: String, phonemes: String)?
+        for segment in segments {
             switch segment {
+            case .other(let original) where together != nil:
+                together?.text += original
+                offset += original.utf16.count
             case .other(let original):
                 var text = original
                 let length = original.utf16.count
@@ -261,7 +297,19 @@ public enum SpeakIPAText {
                 parts.append(.text(text))
                 offset += length
             case .word(let word):
-                parts.append(phonemes[wordIndex].map { .phonemes(word: word, phonemes: $0) } ?? .text(word))
+                if var gathering = together {
+                    gathering.text += word
+                    if wordIndex == gathering.last {
+                        parts.append(.phonemes(word: gathering.text, phonemes: gathering.phonemes))
+                        together = nil
+                    } else {
+                        together = gathering
+                    }
+                } else if let count = spans[wordIndex], let wordPhonemes = phonemes[wordIndex] {
+                    together = (wordIndex + count - 1, word, wordPhonemes)
+                } else {
+                    parts.append(phonemes[wordIndex].map { .phonemes(word: word, phonemes: $0) } ?? .text(word))
+                }
                 wordIndex += 1
                 offset += word.utf16.count
             }
@@ -270,9 +318,9 @@ public enum SpeakIPAText {
             parts: parts,
             words: words.count,
             generated: transcribed.count,
-            wordsWithIPA: phonemes.count,
+            wordsWithIPA: phonemes.keys.reduce(0) { $0 + (spans[$1] ?? 1) },
             changes: changes,
-            wordsWithoutIPA: words.indices.filter { ipa[$0] == nil }.map { words[$0] },
+            wordsWithoutIPA: words.indices.filter { ipa[$0] == nil && !covered.contains($0) }.map { words[$0] },
             wordsWithNothingToSay: wordsWithNothingToSay
         )
     }
@@ -280,12 +328,17 @@ public enum SpeakIPAText {
     /// The first reading of `ipa`, the IPA the model wrote for one word, when it wrote several:
     /// "/ˈiːðər/ /ˈaɪðər/", "ˈiːðər, ˈaɪðər" or "ˈiːðər or ˈaɪðər" are all ˈiːðər. Slashes and
     /// brackets around a transcription go. A comma, semicolon, bar or "or" counts only between two
-    /// readings: one after the only reading stays, for `ClosestPhonemes` to leave out, and record.
+    /// readings: one after the only reading stays, inside its slashes or not ("həˈloʊ," or
+    /// "/həˈloʊ/,"), for `ClosestPhonemes` to leave out, and record.
     static func firstReading(of ipa: String) -> String {
         func nonBlank(_ pieces: [Substring]) -> [Substring] {
             pieces.filter { !$0.allSatisfy(\.isWhitespace) }
         }
-        var reading = nonBlank(ipa.split { "/[]".contains($0) }).first ?? ""
+        let pieces = nonBlank(ipa.split { "/[]".contains($0) })
+        var reading = pieces.first ?? ""
+        if pieces.count > 1, pieces.dropFirst().allSatisfy({ $0.allSatisfy { $0.isPunctuation || $0.isWhitespace } }) {
+            reading = Substring(pieces.joined())
+        }
         let listed = nonBlank(reading.split { ",;|".contains($0) })
         if listed.count > 1 {
             reading = listed[0]
@@ -312,11 +365,17 @@ public enum SpeakIPAText {
     }
 
     /// What the model wrote for each of `words` it matches, by the word's index: its word and
-    /// IPA, or for a word the model split, each part's. See `speech(of:transcribed:symbols:)`.
-    private static func matchedIPA(words: [String], transcribed: [TranscribedWord]) -> [Int: [TranscribedWord]] {
+    /// IPA, or for a word the model split, each part's. `spans` has, by its first word's index,
+    /// how many words one entry is for together: words the model joined, with IPA that can't be
+    /// told apart word by word. See `speech(of:transcribed:symbols:)`.
+    private static func matchedIPA(
+        words: [String],
+        transcribed: [TranscribedWord]
+    ) -> (ipa: [Int: [TranscribedWord]], spans: [Int: Int]) {
         let wordKeys = words.map(key)
         let generatedKeys = transcribed.map { key($0.word) }
         var ipa: [Int: [TranscribedWord]] = [:]
+        var spans: [Int: Int] = [:]
         var i = 0
         var j = 0
         // How far ahead to look for the two to get back in step.
@@ -354,7 +413,8 @@ public enum SpeakIPAText {
                 j += count
                 continue
             }
-            // The model joined words: each gets a word of its IPA, if it has as many.
+            // The model joined words: each gets a word of its IPA, if it has as many; otherwise
+            // its IPA is for the words together.
             if let count = (2...lookahead).first(where: {
                 i + $0 <= words.count && wordKeys[i..<(i + $0)].joined() == generatedKeys[j]
             }) {
@@ -363,6 +423,9 @@ public enum SpeakIPAText {
                     for (offset, word) in ipaWords.enumerated() {
                         ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: String(word))]
                     }
+                } else {
+                    ipa[i] = [transcribed[j]]
+                    spans[i] = count
                 }
                 i += count
                 j += 1
@@ -392,7 +455,7 @@ public enum SpeakIPAText {
             i += 1
             j += 1
         }
-        return ipa
+        return (ipa, spans)
     }
 
     /// What two spellings of a word are matched on: its letters and digits, without case or

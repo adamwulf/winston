@@ -639,14 +639,18 @@ it:
   English (`@Generable`). Each chunk plays as soon as it is ready and the one
   before has played (`VoiceLoop.startIPASpeech`).
 - The model's words are matched back to the chunk's in order, whatever their
-  case, accents or apostrophes; a word it split or joined is matched too, and
-  one it added or left out is skipped, preferring the way back in step that
+  case, accents or apostrophes; a word it split or joined is matched too (words
+  it joined with IPA that can't be split word by word, such as "well-known"
+  for "well known", are said together from it, if only spaces lie between),
+  and one it added or left out is skipped, preferring the way back in step that
   the next words bear out (so "US" isn't taken for an "us" the model left
   out). Each word is always said from the model's IPA, whatever it holds: it is
   converted to Kokoro's notation (`MisakiPhonemes.fromIPA`), and each symbol
   Kokoro can't say now (`VoiceLoop.kokoroPhonemeSymbols`: the loaded model's
   vocabulary, else misaki's US symbols) is put as the closest one it can
-  (`ClosestPhonemes`, below), or left out if nothing is close. Only a word the
+  (`ClosestPhonemes`, below), or left out if nothing is close; a symbol it can
+  say is kept as written, including ones misaki's US set lacks that the loaded
+  model has, such as ʔ and ʲ. Only a word the
   model wrote no IPA for (left out, or another word in its place), or whose IPA
   has no sound left, is said as Kokoro reads it; each such word and change is
   recorded (`SpeakIPAText.speech`). The chunk's own punctuation stays, so it is
@@ -666,9 +670,10 @@ it:
   ɑ); misaki's own symbols, should a Kokoro lack one, to the next nearest
   (diphthongs to their two vowels). A symbol not in the table is put as its
   letter without diacritics or in lowercase ("ã" as ɑ). The glottal stop,
-  aspiration and other secondary marks, length, tone letters, prosodic breaks
-  and punctuation (which Kokoro has, but which in a word would be a pause) are
-  left out.
+  aspiration and other secondary marks, length, tone letters and prosodic
+  breaks are left out when Kokoro lacks them, and punctuation always (Kokoro
+  has it, but in a word it would be a pause). Stress is placed before
+  conversion, on the vowel the model stressed, whatever it is put as.
 - A chunk is said as written only when there is no IPA for it: the model
   failed on it (declined, busy, failed, its own timeout, or cancelled by the
   system) or answered with no words; the next chunk is still asked. A chunk
@@ -764,8 +769,10 @@ settings, codes, single symbols changed and times only, never the text, a
 word's IPA, or the words the note names.
 
 The model's IPA is often wrong ("they" as θeɪ, "Done" as ðən), and now and
-then it writes another word in a word's place or leaves JSON in an answer;
-those words are said as Kokoro reads them. `OnDeviceIPATranscriberRealModelTests`
+then it writes another word in a word's place, which is no IPA for the word
+(said as Kokoro reads it), or leaves JSON in a word's IPA, whose punctuation is
+left out and whose letters, if any, are said as IPA; with none, the word is
+said as Kokoro reads it. `OnDeviceIPATranscriberRealModelTests`
 prints what it writes for a sample reply, when asked for.
 
 ## Logging
