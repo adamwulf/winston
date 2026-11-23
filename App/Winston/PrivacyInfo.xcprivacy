@@ -10,8 +10,7 @@
 	     - User defaults (CA92.1): its settings, read and written by the app alone.
 	     - System boot time (35F9.1): the voice loop's timeline and media logs measure the time
 	       between events in the app. Only those intervals may leave the device under this
-	       reason; the media logs also write raw uptime, which Export Debug Logs would share. -->
-
+	       reason, as in the logs Export Debug Logs shares. -->
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>

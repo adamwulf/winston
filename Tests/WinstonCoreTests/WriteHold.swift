@@ -17,7 +17,12 @@ final class WriteHold: Sendable {
                 released.wait()
             }
         }
-        try #require(started.wait(timeout: .now() + 10) == .success)
+        guard started.wait(timeout: .now() + 10) == .success else {
+            // A writer that starts late lets go at once, rather than holding the file for good.
+            released.signal()
+            Issue.record("the coordinated write didn't start")
+            throw CancellationError()
+        }
     }
 
     func release() {

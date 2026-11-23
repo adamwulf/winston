@@ -1055,10 +1055,13 @@ public final class AppModel {
         let previous = sharedFilesScan
         sharedFilesScan = Task {
             await previous?.value
+            // Taken before the outbox is read: one cancelled meanwhile, its folder gone, isn't
+            // opened again from what the read found.
+            let alreadyOpened = Set(openedFiles.map(\.source))
             let found = await shareOutbox.files()
             // Checked here, on the main actor, where files are opened.
             let waiting = found.filter { file in
-                !openedFiles.contains { $0.source == file }
+                !alreadyOpened.contains(file) && !openedFiles.contains { $0.source == file }
             }
             if !waiting.isEmpty {
                 Self.log.notice("shared files found", ["count": waiting.count])

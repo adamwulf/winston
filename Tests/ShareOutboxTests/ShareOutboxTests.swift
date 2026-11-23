@@ -49,25 +49,49 @@ private func exists(_ url: URL) -> Bool {
     FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
 }
 
-/// A file presenter that holds each coordinated read of its file until `release()`, as an iCloud
-/// Drive file still downloading holds one, and says when one is waiting. It lets them go by
-/// itself after `deadline`, so a read that nothing else stops can't hang the tests; whether that
-/// happened is `wasReleasedByDeadline`.
+/// Whether `stream` yields within `timeout`. Records an issue if not, so a wait for an event
+/// that a regression stops can't hang the run.
+private func event(_ stream: AsyncStream<Void>, within timeout: Duration = .seconds(10), _ what: String) async -> Bool {
+    let happened = await withTaskGroup(of: Bool.self) { group in
+        group.addTask {
+            for await _ in stream { return true }
+            return false
+        }
+        group.addTask {
+            try? await Task.sleep(for: timeout)
+            return false
+        }
+        let first = await group.next() ?? false
+        group.cancelAll()
+        return first
+    }
+    if !happened {
+        Issue.record("\(what) didn't happen within \(timeout)")
+    }
+    return happened
+}
+
+/// A file presenter on a file, which counts the coordinated reads of it, and holds each one until
+/// `release()` if `holdsReads`, as an iCloud Drive file still downloading holds one. Once armed,
+/// a deadline lets the held reads go by itself, so a read that nothing else stops can't hang the
+/// run; whether that happened is `wasReleasedByDeadline`.
 private final class ReadHold: NSObject, NSFilePresenter, @unchecked Sendable {
     let presentedItemURL: URL?
     let presentedItemOperationQueue = OperationQueue()
-    /// Yields once a coordinated read is waiting on this presenter.
+    /// Yields as each coordinated read reaches this presenter, and ends once it lets them go.
     let readWaiting = AsyncStream<Void>.makeStream()
-    private let state = Mutex<(readers: [@Sendable ((@Sendable () -> Void)?) -> Void], isReleased: Bool, byDeadline: Bool)>(([], false, false))
+    private let holdsReads: Bool
+    private let state = Mutex<(readers: [@Sendable ((@Sendable () -> Void)?) -> Void], reads: Int, isReleased: Bool, byDeadline: Bool)>(([], 0, false, false))
 
-    init(on url: URL, deadline: Duration = .seconds(10)) {
+    init(on url: URL, holdsReads: Bool = true) {
         presentedItemURL = url
+        self.holdsReads = holdsReads
         super.init()
         NSFileCoordinator.addFilePresenter(self)
-        let seconds = Double(deadline.components.seconds)
-        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in
-            self?.release(byDeadline: true)
-        }
+    }
+
+    var reads: Int {
+        state.withLock { $0.reads }
     }
 
     var wasReleasedByDeadline: Bool {
@@ -75,18 +99,26 @@ private final class ReadHold: NSObject, NSFilePresenter, @unchecked Sendable {
     }
 
     func relinquishPresentedItem(toReader reader: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
-        let isReleased = state.withLock { state in
-            if !state.isReleased { state.readers.append(reader) }
-            return state.isReleased
+        let isHeld = state.withLock { state in
+            state.reads += 1
+            let isHeld = holdsReads && !state.isReleased
+            if isHeld { state.readers.append(reader) }
+            return isHeld
         }
-        if isReleased {
+        readWaiting.continuation.yield()
+        if !isHeld {
             reader(nil)
-        } else {
-            readWaiting.continuation.yield()
         }
     }
 
-    /// Lets the reads go, once.
+    /// Lets the held reads go by itself after `deadline`, unless `release()` comes first.
+    func armDeadline(_ deadline: Duration = .seconds(10)) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + Double(deadline.components.seconds)) { [weak self] in
+            self?.release(byDeadline: true)
+        }
+    }
+
+    /// Lets the reads go, and stops presenting the file, once.
     func release() {
         release(byDeadline: false)
     }
@@ -101,14 +133,15 @@ private final class ReadHold: NSObject, NSFilePresenter, @unchecked Sendable {
         }
         guard let readers else { return }
         NSFileCoordinator.removeFilePresenter(self)
+        readWaiting.continuation.finish()
         for reader in readers {
             reader(nil)
         }
     }
 }
 
-/// Holds an item provider's load until the test hands it its result, and says when it starts and
-/// when its progress is cancelled.
+/// Holds an item provider's load until the test hands it its result, once, and says when it
+/// starts and when its progress is cancelled.
 private final class HeldLoad: @unchecked Sendable {
     private let completion = Mutex<(@Sendable (Data?, (any Error)?) -> Void)?>(nil)
     let started = AsyncStream<Void>.makeStream()
@@ -126,8 +159,22 @@ private final class HeldLoad: @unchecked Sendable {
         return progress
     }
 
+    /// Ends the load with `data`, as an app that hands it over anyway.
     func deliver(_ data: Data) {
-        completion.withLock { $0 }?(data, nil)
+        complete(data, nil)
+    }
+
+    /// Ends the load with an error, as an app does on cancellation.
+    func fail() {
+        complete(nil, CocoaError(.userCancelled))
+    }
+
+    private func complete(_ data: Data?, _ error: (any Error)?) {
+        let completion = completion.withLock { completion in
+            defer { completion = nil }
+            return completion
+        }
+        completion?(data, error)
     }
 }
 
@@ -281,25 +328,25 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
     @Test func cancellingStopsAContentLoadUnderWay() async throws {
         let folder = TestFolder()
         let outbox = folder.outbox
-        let loadStarted = AsyncStream<Void>.makeStream()
-        let started = loadStarted.continuation
+        let load = HeldLoad()
 
         let stage = Task {
-            // As a large file still loading from another app: it finishes only once cancelled.
+            // As a large file still loading from another app.
             let provider = NSItemProvider()
             provider.registerDataRepresentation(forTypeIdentifier: UTType.zip.identifier, visibility: .all) { completion in
-                let progress = Progress(totalUnitCount: 1)
-                progress.cancellationHandler = {
-                    completion(nil, CocoaError(.userCancelled))
-                }
-                started.yield()
-                return progress
+                load.hold(completion)
             }
             provider.suggestedName = "big.zip"
             return try await outbox.stage([provider])
         }
-        for await _ in loadStarted.stream { break }
+        guard await event(load.started.stream, "the content's load") else {
+            load.fail()
+            return
+        }
         stage.cancel()
+        // Cancel reaches the provider's load, which an app then ends.
+        _ = await event(load.cancelled.stream, "cancelling the content's load")
+        load.fail()
 
         await #expect(throws: (any Error).self) {
             try await stage.value
@@ -311,6 +358,9 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         let folder = TestFolder()
         let outbox = folder.outbox
         let source = try folder.sourceFile("big.zip", "zip bytes")
+        // Counts the coordinated reads of the file, as a copy of it makes.
+        let reads = ReadHold(on: source, holdsReads: false)
+        defer { reads.release() }
         let load = HeldLoad()
         let contentLoads = AsyncStream<Void>.makeStream()
         let contentLoaded = contentLoads.continuation
@@ -330,10 +380,13 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
             provider.suggestedName = source.lastPathComponent
             return try await outbox.stage([provider])
         }
-        for await _ in load.started.stream { break }
+        guard await event(load.started.stream, "the file URL's load") else {
+            load.fail()
+            return
+        }
         stage.cancel()
         // Cancel reaches the provider's load.
-        for await _ in load.cancelled.stream { break }
+        _ = await event(load.cancelled.stream, "cancelling the file URL's load")
         // An app that hands its URL over anyway.
         load.deliver(source.dataRepresentation)
 
@@ -341,7 +394,8 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
             try await stage.value
         }
         #expect(folder.contents(of: "Staging").isEmpty)
-        // It didn't fall back to the content.
+        // The file wasn't read, nor its content loaded instead.
+        #expect(reads.reads == 0)
         contentLoaded.finish()
         var contentLoadCount = 0
         for await _ in contentLoads.stream { contentLoadCount += 1 }
@@ -356,18 +410,29 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         let hold = ReadHold(on: source)
         defer { hold.release() }
 
-        let stage = Task {
-            let provider = try #require(NSItemProvider(contentsOf: source))
-            return try await outbox.stage([provider])
+        // Whether staging failed, and whether the hold had let the read go by itself by then.
+        let stage = Task { () -> (failed: Bool, releasedByDeadline: Bool) in
+            guard let provider = NSItemProvider(contentsOf: source) else { return (false, false) }
+            do {
+                _ = try await outbox.stage([provider])
+                return (false, hold.wasReleasedByDeadline)
+            } catch {
+                return (true, hold.wasReleasedByDeadline)
+            }
         }
-        for await _ in hold.readWaiting.stream { break }
+        guard await event(hold.readWaiting.stream, "a coordinated read of the shared file") else {
+            hold.release()
+            _ = await stage.value
+            return
+        }
         stage.cancel()
+        // If Cancel doesn't stop the read, the hold does, and the test fails rather than hangs.
+        hold.armDeadline()
 
-        await #expect(throws: (any Error).self) {
-            try await stage.value
-        }
+        let outcome = await stage.value
+        #expect(outcome.failed)
         // Cancel stopped the read, not the hold's own deadline.
-        #expect(!hold.wasReleasedByDeadline)
+        #expect(!outcome.releasedByDeadline)
         #expect(folder.contents(of: "Staging").isEmpty)
     }
 
