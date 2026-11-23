@@ -16,14 +16,23 @@ final class FakeIPATranscriber: IPATranscriber {
         /// Held answers, by the number of their request.
         var heldAnswers: [Int: CheckedContinuation<Void, Never>] = [:]
         var cancelledRequests: [Int] = []
+        var availabilityReads = 0
     }
 
     private let state = Mutex(State())
 
     var availability: PronunciationSuggesterAvailability {
-        get { state.withLock { $0.availability } }
+        get {
+            state.withLock { state in
+                state.availabilityReads += 1
+                return state.availability
+            }
+        }
         set { state.withLock { $0.availability = newValue } }
     }
+
+    /// How many times `availability` has been read.
+    var availabilityReads: Int { state.withLock { $0.availabilityReads } }
 
     /// What the requests get, in order: the first request the first answer, and on.
     var answers: [Result<[TranscribedWord], any Error>] {

@@ -19,8 +19,9 @@ public enum IPASpeechEnd: Hashable, Sendable {
     /// the audio hardware changing, or a call.
     case stopped
     /// Kokoro failed partway, or its model was freed: the system voice said the rest of the
-    /// chunk it was on, and no later chunk was said.
-    case kokoroFailed
+    /// chunk it was on, and no later chunk was said. `skippedLaterChunks` says whether there were
+    /// any: none if it failed on the last chunk, after `IPASpeech.finish()`.
+    case kokoroFailed(skippedLaterChunks: Bool)
 
     /// As the logs name it.
     public var logName: String {

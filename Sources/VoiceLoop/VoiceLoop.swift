@@ -890,8 +890,11 @@ public final class VoiceLoop {
         var queued = 0
         /// Whether its first sound has been told.
         var toldFirstSound = false
-        /// Whether Kokoro failed partway and the system voice took over the chunk it was on.
-        var handedToSystemVoice = false
+        /// Whether `IPASpeech.finish()` has said no more chunks are coming.
+        var finishRequested = false
+        /// Set once Kokoro failed partway and the system voice took over the chunk it was on:
+        /// whether later chunks were then left unsaid. Nil while Kokoro says it all.
+        var skippedLaterChunksAfterHandoff: Bool?
     }
 
     /// What Speak IPA's placeholders start with: three letters no word starts with, and not the
@@ -969,7 +972,8 @@ public final class VoiceLoop {
                     var written = rest
                     if var speech = ipaSpeech, speech.id == id {
                         written = speech.placeholders.written(rest)
-                        speech.handedToSystemVoice = true
+                        // Later chunks are left unsaid unless this one was the last.
+                        speech.skippedLaterChunksAfterHandoff = !speech.finishRequested || chunk < speech.queued - 1
                         ipaSpeech = speech
                     }
                     previewWithSystemVoice(written, into: playback)
@@ -1014,7 +1018,9 @@ public final class VoiceLoop {
 
     /// No more chunks for IPA speech `id`: it ends once those queued have played.
     func finishIPASpeech(_ id: Int) {
-        guard let speech = ipaSpeech, speech.id == id else { return }
+        guard var speech = ipaSpeech, speech.id == id else { return }
+        speech.finishRequested = true
+        ipaSpeech = speech
         speech.chunks.finish()
     }
 
@@ -1035,8 +1041,8 @@ public final class VoiceLoop {
         previewKokoroSynthesis = nil
         let end: IPASpeechEnd = if !finished {
             .stopped
-        } else if speech.handedToSystemVoice {
-            .kokoroFailed
+        } else if let skipped = speech.skippedLaterChunksAfterHandoff {
+            .kokoroFailed(skippedLaterChunks: skipped)
         } else {
             .finished
         }
@@ -1049,29 +1055,24 @@ public final class VoiceLoop {
         speech.onEnded(end)
     }
 
-    /// `parts` as text ready to say: a word with phonemes as its placeholders in `placeholders`,
-    /// and the text between, each run of it whole, with the pronunciations in settings applied,
-    /// as a reply has them, so a pronunciation of several words said as written still matches.
-    /// Placeholders never touch a letter or digit: a space goes between them and one that would,
-    /// as `PronunciationReplacer` keeps them apart.
+    /// `parts` as text ready to say: each word with phonemes as its placeholders in
+    /// `placeholders`, which never touch a letter or digit (a space goes between them and one
+    /// that would), then the pronunciations in settings applied to the whole chunk, as a reply
+    /// has them: a pronunciation of several words said as written still matches, and whether a
+    /// word's punctuation ends a sentence is read from the whole chunk. A placeholder matches no
+    /// pronunciation's word.
     private func ipaSpeechText(_ parts: [IPASpeechPart], placeholders: inout PhoneticPlaceholders) -> String {
-        var result = ""
-        // Whether `result` ends with a placeholder.
+        var text = ""
+        // Whether `text` ends with a placeholder.
         var endsWithPlaceholder = false
-        // The text since the last word with phonemes.
-        var run = ""
         func append(_ piece: String, isPlaceholders: Bool) {
             guard let first = piece.first else { return }
-            if isPlaceholders || endsWithPlaceholder, let last = result.last,
+            if isPlaceholders || endsWithPlaceholder, let last = text.last,
                last.isLetter || last.isNumber, first.isLetter || first.isNumber {
-                result.append(" ")
+                text.append(" ")
             }
-            result += piece
+            text += piece
             endsWithPlaceholder = isPlaceholders
-        }
-        func appendRun() {
-            append(pronunciationReplacer.replaced(in: run), isPlaceholders: false)
-            run = ""
         }
         for part in parts {
             switch part {
@@ -1079,17 +1080,15 @@ public final class VoiceLoop {
                 let trimmedWord = word.trimmingCharacters(in: .whitespacesAndNewlines)
                 let trimmedPhonemes = phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmedWord.isEmpty, !trimmedPhonemes.isEmpty else {
-                    run += word
+                    append(word, isPlaceholders: false)
                     continue
                 }
-                appendRun()
                 append(placeholders.add(word: trimmedWord, phonemes: trimmedPhonemes), isPlaceholders: true)
-            case .text(let text):
-                run += text
+            case .text(let written):
+                append(written, isPlaceholders: false)
             }
         }
-        appendRun()
-        return result
+        return pronunciationReplacer.replaced(in: text)
     }
 
     /// The `voice.speakipa` log: Speak IPA's message as the loop renders and plays it. Counts and

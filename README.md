@@ -637,24 +637,27 @@ it:
   before has played (`VoiceLoop.startIPASpeech`).
 - The model's words are matched back to the chunk's in order, whatever their
   case, accents or apostrophes; a word it split or joined is matched too, and
-  one it added or left out is skipped, as long as the words after match too
-  (so "US" isn't taken for an "us" the model left out). Each word's IPA is
-  converted to Kokoro's notation (`MisakiPhonemes.fromIPA`) and checked
-  against the symbols Kokoro can say now (`VoiceLoop.kokoroPhonemeSymbols`).
-  The chunk's own punctuation stays, so it is said with the message's pauses,
-  except a full stop after a word with IPA that doesn't end a sentence ("Mr.
-  Smith"), which Kokoro would take for one. A word whose IPA is empty (or any
-  part of a word the model split), has a symbol Kokoro doesn't have, or is
-  just the word as written is said as written, as Kokoro reads it; so is a
-  word the model left out (`SpeakIPAText.speech`).
+  one it added or left out is skipped, preferring the way back in step that
+  the next words bear out (so "US" isn't taken for an "us" the model left
+  out). Each word's IPA is converted to Kokoro's notation
+  (`MisakiPhonemes.fromIPA`) and checked against the symbols Kokoro can say
+  now (`VoiceLoop.kokoroPhonemeSymbols`). The chunk's own punctuation stays, so
+  it is said with the message's pauses, except a full stop and a space after a
+  word with IPA that doesn't end a sentence ("Mr. Smith"), which Kokoro would
+  take for one; an ellipsis and a dot inside a word ("README.md") stay. A word
+  whose IPA is empty, has punctuation or a symbol Kokoro doesn't have, or is
+  just the word as written is said as written, as Kokoro reads it (for a word
+  the model split, if any part's is); so is a word the model left out
+  (`SpeakIPAText.speech`).
 - A chunk with fewer than half its words said from IPA is said as written,
   as is one the model fails on (declined, busy, failed, or cancelled by the
   system): the next chunk is still asked. A chunk not answered in a minute is
   given up on and cancelled, and the rest of the message is said as written,
   as it is once the model stops being available.
-- Text said as written has the pronunciations in settings, each run of it
-  between two words with IPA whole, so a pronunciation of several words still
-  matches; a placeholder is never let touch a letter. A pronunciation whose
+- Text said as written has the pronunciations in settings, applied to the
+  whole chunk once its words with IPA are placeholders, so a pronunciation of
+  several words still matches and its punctuation is read in the chunk's
+  sentences; a placeholder is never let touch a letter. A pronunciation whose
   word the normalizing changed (one with a digit, a hyphen or an abbreviation,
   such as "GPT-4") doesn't match: the message is normalized before it is cut
   into chunks.
@@ -679,15 +682,17 @@ cancellation to look after, so Speak IPA plays only while voice mode is off
 (the app's, too, which can show Resume Listening while the loop is off), and
 says so otherwise. "Speaking IPA" shows once the first sound is scheduled,
 whichever voice made it. If Kokoro fails partway, or its model is freed, the
-system voice says the rest of the chunk it was on and the message ends there.
+system voice says the rest of the chunk it was on and the message ends there;
+a chunk the model answers after that is neither counted nor kept.
 
 A note under the bubble says why Speak IPA couldn't start (voice mode on, no
 Kokoro voice ready and what would fix it, Apple Intelligence off, not ready
 or not supported, or nothing to say, such as a message of only code) or, once
 a message has played, how many of its words were said from the model's IPA,
 and why a chunk was said as written if the model failed on it, or that Kokoro
-stopped partway and the rest wasn't said. It stays until dismissed or Speak
-IPA says another message.
+stopped partway and either the rest wasn't said or, on the last chunk, the
+system voice said it. It stays until dismissed or Speak IPA says another
+message.
 
 The model's IPA isn't held to Kokoro's symbols by guided generation. Measured
 on macOS 27 with sentences of 14 to 17 words: a pattern guide takes no

@@ -197,13 +197,15 @@ public final class SpeakIPA {
         let number = requestCount
         let key = MessageKey(message)
         let chunks = SpeakIPAText.chunks(in: SpeakIPAText.normalized(message.spokenText))
-        let availability = transcriber.availability
+        // A message whose every chunk is kept needs no model, nor asks after it.
+        let needsModel = chunks.contains { cache[key]?[$0] == nil }
+        let availability = needsModel ? transcriber.availability : nil
         var fields: [String: CustomStringConvertible] = [
             "request": number,
             "messageChars": message.spokenText.count,
             "chunks": chunks.count,
             "words": chunks.reduce(0) { $0 + SpeakIPAText.words(of: $1).count },
-            "availability": availability.logName,
+            "availability": availability?.logName ?? "notNeeded",
             "cached": cache[key] != nil,
         ]
         if let replaced {
@@ -211,9 +213,7 @@ public final class SpeakIPA {
         }
         Self.log.notice("speak ipa requested", fields)
 
-        // A message whose every chunk is kept needs no model.
-        let needsModel = chunks.contains { cache[key]?[$0] == nil }
-        if let reason = reasonCantSpeak(availability: needsModel ? availability : .available, chunks: chunks) {
+        if let reason = reasonCantSpeak(availability: availability ?? .available, chunks: chunks) {
             Self.log.warning("speak ipa can't start", ["request": number, "reason": reason.logName])
             currentNote = (key, reason.message)
             return
@@ -383,6 +383,8 @@ public final class SpeakIPA {
         guard speech.usesIPA else {
             return sayAsWritten(chunk: index, failure: nil)
         }
+        // Counted and kept only once the speech has taken it.
+        guard queue({ run.speech.say(speech.parts) }) else { return false }
         run.words += speech.words
         run.wordsWithIPA += speech.wordsWithIPA
         run.next = index + 1
@@ -390,7 +392,7 @@ public final class SpeakIPA {
         if !cached {
             keep(transcribed, for: chunk, of: run.key)
         }
-        return queue { run.speech.say(speech.parts) }
+        return true
     }
 
     /// Says chunk `index` as written, because of `failure`, or because the model's IPA didn't
@@ -398,6 +400,8 @@ public final class SpeakIPA {
     private func sayAsWritten(chunk index: Int, failure: PronunciationSuggestionError?) -> Bool {
         guard var run else { return false }
         let chunk = run.chunks[index]
+        // Counted only once the speech has taken it.
+        guard queue({ run.speech.sayAsWritten(chunk) }) else { return false }
         run.words += SpeakIPAText.words(of: chunk).count
         run.writtenChunks += 1
         if run.failure == nil {
@@ -405,7 +409,7 @@ public final class SpeakIPA {
         }
         run.next = index + 1
         self.run = run
-        return queue { run.speech.sayAsWritten(chunk) }
+        return true
     }
 
     /// Says every chunk still to come as written.
@@ -417,7 +421,7 @@ public final class SpeakIPA {
     }
 
     /// Queues a chunk with `say`, which returns whether the speech took it. Returns whether the
-    /// speech is still going; once it isn't, `ended(request:finished:)` has been or will be told.
+    /// speech is still going; once it isn't, `ended(request:end:)` has been or will be told.
     private func queue(_ say: () -> Bool) -> Bool {
         guard say() else {
             if let run {
@@ -479,9 +483,9 @@ public final class SpeakIPA {
         switch end {
         case .finished where run.wordsWithIPA < run.words:
             currentNote = (run.key, Self.note(wordsWithIPA: run.wordsWithIPA, words: run.words, failure: run.failure))
-        case .kokoroFailed:
-            // The counts are of what was queued, not of what was heard.
-            currentNote = (run.key, Self.kokoroFailedNote)
+        case .kokoroFailed(let skippedLaterChunks):
+            // Not the counts: they are of what was queued, and the system voice said some of it.
+            currentNote = (run.key, skippedLaterChunks ? Self.kokoroFailedNote : Self.kokoroFailedOnLastChunkNote)
         case .finished, .stopped:
             break
         }
@@ -514,8 +518,11 @@ public final class SpeakIPA {
         return note
     }
 
-    /// What Adam is told when Kokoro failed partway (`IPASpeechEnd.kokoroFailed`).
+    /// What Adam is told when Kokoro failed partway (`IPASpeechEnd.kokoroFailed`), with later
+    /// parts left unsaid.
     static let kokoroFailedNote = "The Kokoro voice stopped partway: the system voice finished the part it was on, and the rest wasn't said."
+    /// The same, when Kokoro failed on the last part, which the system voice finished.
+    static let kokoroFailedOnLastChunkNote = "The Kokoro voice stopped partway: the system voice said the rest of the message."
 
     /// Why Speak IPA can't start.
     private enum CantSpeak {

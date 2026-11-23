@@ -876,18 +876,26 @@ struct KokoroIPASpeechTests {
         let ends = Ends()
         let speech = try start(on: loop, noting: ends)
 
-        speech.sayAsWritten("First.")
+        // Told as the first sentence plays, while Kokoro still renders the chunk's second.
+        bed.kokoro.holdsSynthesis = true
+        speech.sayAsWritten("First one. Then more.")
+        #expect(await eventually { bed.kokoro.heldSyntheses == 1 })
+        bed.kokoro.releaseSyntheses()
+        #expect(await eventually { bed.kokoro.requests.count == 2 && bed.kokoro.heldSyntheses == 1 })
         #expect(await eventually { ends.firstSounds == 1 })
+        bed.kokoro.holdsSynthesis = false
+        bed.kokoro.releaseSyntheses()
         let engine = try #require(bed.audio.engines.last)
         try await settle()
         #expect(engine.isRunning)
         #expect(ends.ended.isEmpty)
+        #expect(ends.firstSounds == 1)
 
         speech.sayAsWritten("Second.")
         speech.finish()
         #expect(await eventually { ends.ended == [.finished] })
         #expect(!engine.isRunning)
-        #expect(bed.kokoro.requests.map(\.text) == ["First.", "Second."])
+        #expect(bed.kokoro.requests.map(\.text) == ["First one.", "Then more.", "Second."])
     }
 
     @Test func aWrittenChunkHasThePronunciations() async throws {
@@ -921,18 +929,32 @@ struct KokoroIPASpeechTests {
         #expect(bed.kokoro.requests.map(\.text) == ["\(ipaPlaceholder(0, capital: true)) Noo Yawk, \(ipaPlaceholder(1, capital: true))."])
     }
 
-    @Test func aPronunciationSaidBetweenTwoWordsWithIPANeverTouchesTheirPlaceholders() async throws {
+    @Test func pronunciationsMatchAsInTheWholeChunkAndKeepClearOfThePlaceholders() async throws {
         let bed = VoiceTestBed()
         let loop = await offLoopWithKokoro(on: bed)
-        loop.pronunciations = [Pronunciation(word: "&", replacement: "and")]
+        loop.pronunciations = [
+            Pronunciation(word: "&", replacement: "and"),
+            Pronunciation(word: "Dr.", replacement: "dˈɑktəɹ", mode: .phonetic),
+        ]
         let ends = Ends()
         let speech = try start(on: loop, noting: ends)
 
-        speech.say([.phonemes(word: "R", phonemes: "ˈɑɹ"), .text("&"), .phonemes(word: "D", phonemes: "dˈi")])
+        // "R & D" between two words with IPA: replaced, apart from them.
+        speech.say([.phonemes(word: "R", phonemes: "ˈɑɹ"), .text(" & "), .phonemes(word: "D", phonemes: "dˈi"), .text(".")])
+        // "R&D": inside a word, as in a reply, not replaced, and nothing glued on.
+        speech.say([.phonemes(word: "R", phonemes: "ˈɑɹ"), .text("&"), .phonemes(word: "D", phonemes: "dˈi"), .text(".")])
+        // "Dr." said as written, its pronunciation's: the full stop ends no sentence of the chunk.
+        speech.say([.text("Dr"), .text(". "), .phonemes(word: "Smith", phonemes: "smˈɪθ"), .text(" called.")])
         speech.finish()
 
         #expect(await eventually { ends.ended == [.finished] })
-        #expect(bed.kokoro.requests.map(\.text) == ["\(ipaPlaceholder(0, capital: true)) and \(ipaPlaceholder(1, capital: true))"])
+        let r = ipaPlaceholder(0, capital: true)
+        let d = ipaPlaceholder(1, capital: true)
+        #expect(bed.kokoro.requests.map(\.text) == [
+            "\(r) and \(d).",
+            "\(r)&\(d).",
+            "\(placeholder(0, capital: true)) \(ipaPlaceholder(2, capital: true)) called.",
+        ])
     }
 
     @Test func eachMessageGivesItsPlaceholdersOutAgainAndKokoroTakesTheirNewPhonemes() async throws {
@@ -1055,10 +1077,26 @@ struct KokoroIPASpeechTests {
         speech.say([.phonemes(word: "First", phonemes: "fˈɜɹst"), .text(" one.")])
         #expect(await eventually { bed.systemVoiceTexts == ["First one."] })
         #expect(!speech.sayAsWritten("Second."))
-        // Not told it finished: the rest wasn't said. Its first sound was the system voice's.
-        #expect(await eventually { ends.ended == [.kokoroFailed] })
+        // Not told it finished: more was coming, and wasn't said. Its first sound was the
+        // system voice's.
+        #expect(await eventually { ends.ended == [.kokoroFailed(skippedLaterChunks: true)] })
         #expect(ends.firstSounds == 1)
         #expect(bed.kokoro.requests.count == 1)
+    }
+
+    @Test func ifKokoroFailsOnTheLastChunkNothingIsLeftUnsaid() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        bed.kokoro.failingRequest = 1
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.sayAsWritten("First.")
+        speech.sayAsWritten("Last.")
+        speech.finish()
+
+        #expect(await eventually { ends.ended == [.kokoroFailed(skippedLaterChunks: false)] })
+        #expect(bed.systemVoiceTexts == ["Last."])
     }
 }
 

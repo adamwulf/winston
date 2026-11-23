@@ -259,14 +259,49 @@ import Testing
         #expect(speech.wordsWithIPA == 5)
     }
 
-    @Test func aWordTheModelSplitIsSaidAsWrittenIfAnyPartHasNoIPA() {
-        let speech = SpeakIPAText.speech(
+    @Test func aMatchTheWordsAfterBearOutWinsOverOneAtTheEnd() {
+        // "record" left out: the last "record" matches it, with nothing after to check; "this
+        // record" matches two in a row.
+        let record = SpeakIPAText.speech(
+            of: "Please record this record.",
+            transcribed: words([("Please", "pliz"), ("this", "ðɪs"), ("record", "ˈrɛkɚd")]),
+            symbols: symbols
+        )
+        #expect(record.parts[2] == .text("record"))
+        #expect(record.parts[4] == .phonemes(word: "this", phonemes: "ðɪs"))
+        #expect(record.parts[6] == .phonemes(word: "record", phonemes: "ɹˈɛkəɹd"))
+        // The same with the model's last word as the look-alike.
+        let us = SpeakIPAText.speech(
+            of: "Show us the US.",
+            transcribed: words([("Show", "ʃoʊ"), ("the", "ðə"), ("US", "ˌjuˈɛs")]),
+            symbols: symbols
+        )
+        #expect(us.parts[2] == .text("us"))
+        #expect(us.parts[6] == .phonemes(word: "US", phonemes: "jˌuˈɛs"))
+    }
+
+    @Test func aWordTheModelSplitIsSaidAsWrittenIfAnyPartHasNoIPAOrIsJustItsSpelling() {
+        let empty = SpeakIPAText.speech(
             of: "A worktree.",
             transcribed: words([("A", "ə"), ("work", "wɜrk"), ("tree", "")]),
             symbols: symbols
         )
-        #expect(speech.parts[2] == .text("worktree"))
-        #expect(speech.emptyWords == 1)
+        #expect(empty.parts[2] == .text("worktree"))
+        #expect(empty.emptyWords == 1)
+        let echoed = SpeakIPAText.speech(
+            of: "A notebook.",
+            transcribed: words([("A", "ə"), ("note", "note"), ("book", "bʊk")]),
+            symbols: symbols
+        )
+        #expect(echoed.parts[2] == .text("notebook"))
+        #expect(echoed.echoedWords == 1)
+    }
+
+    @Test func ipaWithPunctuationIsSaidAsWrittenThoughKokoroHasTheSymbol() {
+        // A loaded model's vocabulary has punctuation; in a word's phonemes it would be a pause.
+        let speech = SpeakIPAText.speech(of: "Hello", transcribed: words([("Hello", "həˈloʊ,")]), symbols: symbols.union([","]))
+        #expect(speech.parts == [.text("Hello")])
+        #expect(speech.unknownSymbolWords == 1)
     }
 
     @Test func aFullStopThatDoesntEndASentenceGoesWithItsWord() {
@@ -284,6 +319,16 @@ import Testing
         // Said as written, a word's full stop stays: Kokoro reads "Mr." itself.
         let written = SpeakIPAText.speech(of: "Mr. Smith.", transcribed: [], symbols: symbols)
         #expect(written.parts.prefix(2) == [.text("Mr"), .text(". ")])
+    }
+
+    @Test func anEllipsisAndADotInsideAWordStay() {
+        let speech = SpeakIPAText.speech(
+            of: "Well... see README.md now.",
+            transcribed: words([("Well", "wɛl"), ("see", "si"), ("README", "ˈrɛdmi"), ("md", "ɛmˈdi"), ("now", "naʊ")]),
+            symbols: symbols
+        )
+        #expect(speech.parts[1] == .text("... "))
+        #expect(speech.parts[5] == .text("."))
     }
 
     @Test func anotherWordInAWordsPlaceIsSaidAsWritten() {

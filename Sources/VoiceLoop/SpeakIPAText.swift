@@ -6,12 +6,13 @@ import NaturalLanguage
 /// (`chunks(in:)`), each cut into words and what lies between them (`segments(of:)`), so the
 /// model's IPA for each word can take that word's place and the punctuation stays the message's.
 public enum SpeakIPAText {
-    /// The most characters the first chunk has: it is all the model transcribes before the first
-    /// sound, about 3 s on a Mac for 13 words.
+    /// The first chunk's limit, in characters: it is all the model transcribes before the first
+    /// sound, about 3 s on a Mac for 13 words. A limit, not a hard bound: see `chunks(in:)`.
     public static let firstChunkLimit = 80
-    /// The most characters any chunk has. The model writes about 15 tokens a word (the word, its
-    /// IPA, and the structure around them), so even on a 4,096-token context this leaves plenty
-    /// of room.
+    /// The largest any chunk's limit grows to. A chunk can be longer: up to a quarter more when
+    /// it takes the rest of the message, and a single word longer than a chunk is a chunk of its
+    /// own. The model writes about 15 tokens a word (the word, its IPA, and the structure around
+    /// them), so even on a 4,096-token context this leaves plenty of room.
     public static let chunkLimit = 200
     /// How much each chunk's limit grows over the one before's, up to `chunkLimit`. On a Mac the
     /// model writes about 0.24 s a word after about 0.75 s to start, and Kokoro says about 0.33 s
@@ -189,12 +190,14 @@ public enum SpeakIPAText {
     ///
     /// Each matched word's IPA, without any parentheses, is converted to Kokoro's notation as one
     /// word (`MisakiPhonemes.fromIPA(_:asOneWord:)`). It is said as written instead if that is
-    /// empty (or, for a word the model split, any part of it is), if it has a symbol not in
-    /// `symbols` (the ones Kokoro has, `VoiceLoop.kokoroPhonemeSymbols`), or if the "IPA" is just
-    /// the word, which the conversion would otherwise read letter by letter.
+    /// empty, if it has punctuation or a symbol not in `symbols` (the ones Kokoro has,
+    /// `VoiceLoop.kokoroPhonemeSymbols`), or if the "IPA" is just the word, which the conversion
+    /// would otherwise read letter by letter; for a word the model split, if any part's is empty
+    /// or just that part.
     ///
     /// A full stop right after a word said with IPA that doesn't end a sentence of the chunk, as
-    /// in "Mr. Smith", goes with the word: Kokoro would otherwise take it for the end of one.
+    /// in "Mr. Smith", goes with the word: Kokoro would otherwise take it for the end of one. An
+    /// ellipsis stays.
     public static func speech(of chunk: String, transcribed: [TranscribedWord], symbols: Set<Character>) -> ChunkSpeech {
         let words = words(of: chunk)
         let ipa = matchedIPA(words: words, transcribed: transcribed)
@@ -203,14 +206,16 @@ public enum SpeakIPAText {
         var emptyWords = 0
         var echoedWords = 0
         for (index, parts) in ipa {
-            let cleanedParts = parts.map { $0.filter { $0 != "(" && $0 != ")" } }
-            let cleaned = cleanedParts.joined(separator: " ")
-            let converted = MisakiPhonemes.fromIPA(cleaned, asOneWord: true)
-            if converted.isEmpty || cleanedParts.contains(where: { MisakiPhonemes.fromIPA($0).isEmpty }) {
+            let cleanedParts = parts.map { TranscribedWord(word: $0.word, ipa: $0.ipa.filter { $0 != "(" && $0 != ")" }) }
+            let converted = MisakiPhonemes.fromIPA(cleanedParts.map(\.ipa).joined(separator: " "), asOneWord: true)
+            if converted.isEmpty || cleanedParts.contains(where: { MisakiPhonemes.fromIPA($0.ipa).isEmpty }) {
                 emptyWords += 1
-            } else if key(cleaned) == key(words[index]) {
+            } else if cleanedParts.contains(where: { key($0.ipa) == key($0.word) }) {
                 echoedWords += 1
-            } else if !MisakiPhonemes.unknownSymbols(in: converted, symbols: symbols).isEmpty {
+            } else if !MisakiPhonemes.unknownSymbols(in: converted, symbols: symbols).isEmpty
+                        || converted.contains(where: { $0.isPunctuation || $0.isSymbol }) {
+                // Kokoro has punctuation among its symbols, but in a word's phonemes it would be
+                // a pause.
                 unknownSymbolWords += 1
             } else {
                 phonemes[index] = converted
@@ -227,13 +232,11 @@ public enum SpeakIPAText {
                 var text = original
                 let length = original.utf16.count
                 let endsASentence = sentenceEnds.contains { $0 > offset && $0 <= offset + length }
-                if case .phonemes = parts.last, text.first == ".", !endsASentence {
-                    // Not a sentence's end: the abbreviation's full stop goes with its word, and
-                    // a space keeps the next word apart.
+                // A full stop then a space: not an ellipsis, nor the dot inside "README.md".
+                let isFullStop = text.first == "." && text.dropFirst().first?.isWhitespace == true
+                if case .phonemes = parts.last, isFullStop, !endsASentence {
+                    // Not a sentence's end: the abbreviation's full stop goes with its word.
                     text.removeFirst()
-                    if text.isEmpty {
-                        text = " "
-                    }
                 }
                 parts.append(.text(text))
                 offset += length
@@ -269,21 +272,23 @@ public enum SpeakIPAText {
         return ends
     }
 
-    /// The IPA the model wrote for each of `words` it matches, by the word's index: one string,
-    /// or for a word the model split, one for each part. See `speech(of:transcribed:symbols:)`.
-    private static func matchedIPA(words: [String], transcribed: [TranscribedWord]) -> [Int: [String]] {
+    /// What the model wrote for each of `words` it matches, by the word's index: its word and
+    /// IPA, or for a word the model split, each part's. See `speech(of:transcribed:symbols:)`.
+    private static func matchedIPA(words: [String], transcribed: [TranscribedWord]) -> [Int: [TranscribedWord]] {
         let wordKeys = words.map(key)
         let generatedKeys = transcribed.map { key($0.word) }
-        var ipa: [Int: [String]] = [:]
+        var ipa: [Int: [TranscribedWord]] = [:]
         var i = 0
         var j = 0
         // How far ahead to look for the two to get back in step.
         let lookahead = 3
-        // Whether word `i` and the model's word `j` match, and so do the words after them, if
-        // both have one: two in a row, so a word that only looks the same isn't taken.
-        func inStep(_ i: Int, _ j: Int) -> Bool {
-            guard wordKeys[i] == generatedKeys[j] else { return false }
-            return i + 1 >= words.count || j + 1 >= transcribed.count || wordKeys[i + 1] == generatedKeys[j + 1]
+        // How sure it is that word `i` and the model's word `j` are the same word: 0 if they
+        // differ; 2 if the words after them are the same too, so a word that only looks the same
+        // isn't taken; 1 if either has no word after, with nothing to check.
+        func confidence(_ i: Int, _ j: Int) -> Int {
+            guard wordKeys[i] == generatedKeys[j] else { return 0 }
+            guard i + 1 < words.count, j + 1 < transcribed.count else { return 1 }
+            return wordKeys[i + 1] == generatedKeys[j + 1] ? 2 : 0
         }
         while i < words.count, j < transcribed.count {
             // Nothing to match on: punctuation the model wrote as a word, say.
@@ -296,7 +301,7 @@ public enum SpeakIPAText {
                 continue
             }
             if wordKeys[i] == generatedKeys[j] {
-                ipa[i] = [transcribed[j].ipa]
+                ipa[i] = [transcribed[j]]
                 i += 1
                 j += 1
                 continue
@@ -305,7 +310,7 @@ public enum SpeakIPAText {
             if let count = (2...lookahead).first(where: {
                 j + $0 <= transcribed.count && generatedKeys[j..<(j + $0)].joined() == wordKeys[i]
             }) {
-                ipa[i] = transcribed[j..<(j + count)].map(\.ipa)
+                ipa[i] = Array(transcribed[j..<(j + count)])
                 i += 1
                 j += count
                 continue
@@ -317,22 +322,31 @@ public enum SpeakIPAText {
                 let ipaWords = transcribed[j].ipa.split(whereSeparator: \.isWhitespace)
                 if ipaWords.count == count {
                     for (offset, word) in ipaWords.enumerated() {
-                        ipa[i + offset] = [String(word)]
+                        ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: String(word))]
                     }
                 }
                 i += count
                 j += 1
                 continue
             }
-            // The model added words, or left some out: whichever gets the two back in step soonest.
-            let added = ((j + 1)..<min(j + 1 + lookahead, transcribed.count)).first { inStep(i, $0) }
-            let leftOut = ((i + 1)..<min(i + 1 + lookahead, words.count)).first { inStep($0, j) }
-            if let added, added - j <= (leftOut.map { $0 - i } ?? .max) {
-                j = added
-                continue
+            // The model added words, or left some out: whichever gets the two back in step most
+            // surely, then soonest.
+            var best: (confidence: Int, skipped: Int, i: Int, j: Int)?
+            for k in (j + 1)..<min(j + 1 + lookahead, transcribed.count) {
+                let found = (confidence(i, k), k - j, i, k)
+                if found.0 > 0, best.map({ found.0 > $0.confidence || (found.0 == $0.confidence && found.1 < $0.skipped) }) ?? true {
+                    best = found
+                }
             }
-            if let leftOut {
-                i = leftOut
+            for m in (i + 1)..<min(i + 1 + lookahead, words.count) {
+                let found = (confidence(m, j), m - i, m, j)
+                if found.0 > 0, best.map({ found.0 > $0.confidence || (found.0 == $0.confidence && found.1 < $0.skipped) }) ?? true {
+                    best = found
+                }
+            }
+            if let best {
+                i = best.i
+                j = best.j
                 continue
             }
             // Another word in this one's place.

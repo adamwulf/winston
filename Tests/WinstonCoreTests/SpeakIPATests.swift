@@ -5,6 +5,9 @@ import VoiceLoop
 import VoiceLoopTestSupport
 import WinstonCore
 
+/// A recognizer failure, which ends the voice loop on its own.
+private struct RecognizerFailure: Error {}
+
 /// Speak IPA, the message list's menu item: a message said with the on-device model's IPA, a chunk
 /// at a time, what stops it, and what Adam is told.
 @MainActor
@@ -175,18 +178,64 @@ struct SpeakIPATests {
         #expect(speakIPA.note(for: message)?.hasSuffix("The model failed on part of the message.") == true)
     }
 
-    @Test func ifKokoroFailsTheNoteSaysTheRestWasntSaid() async throws {
+    @Test func ifKokoroFailsTheNoteSaysTheRestWasntSaidAndTheRefusedAnswerIsntKept() async throws {
         let harness = await harnessWithKokoro()
         let speakIPA = harness.model.speakIPA
         let message = message(twoChunks)
+        harness.bed.kokoro.failingRequest = 0
+        harness.bed.kokoro.holdsSynthesis = true
+        harness.transcriber.holdsAnswers = true
+
+        speakIPA.toggle(message)
+        #expect(await eventually { harness.transcriber.heldAnswers == 1 })
+        harness.transcriber.releaseAnswer(0)
+        // The second chunk is being written as Kokoro fails on the first.
+        #expect(await eventually { harness.transcriber.heldAnswers == 1 && harness.bed.kokoro.heldSyntheses == 1 })
+        harness.bed.kokoro.holdsSynthesis = false
+        harness.bed.kokoro.releaseSyntheses()
+        #expect(await eventually { harness.bed.systemVoiceTexts.count == 1 })
+        harness.transcriber.releaseAnswer(1)
+
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+        #expect(speakIPA.note(for: message)
+            == "The Kokoro voice stopped partway: the system voice finished the part it was on, and the rest wasn't said.")
+        // Said again: the second chunk's answer came after the speech refused it, so it wasn't
+        // kept, and the model is asked again.
+        harness.transcriber.holdsAnswers = false
+        speakIPA.toggle(message)
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+        #expect(harness.transcriber.chunks == [firstSentence, secondSentence, secondSentence])
+    }
+
+    @Test func ifKokoroFailsOnTheLastChunkTheNoteSaysTheSystemVoiceSaidTheRest() async throws {
+        let harness = await harnessWithKokoro()
+        let speakIPA = harness.model.speakIPA
+        let message = message("Short one.")
         harness.bed.kokoro.failingRequest = 0
 
         speakIPA.toggle(message)
 
         #expect(await eventually { speakIPA.phase(for: message) == nil })
-        #expect(speakIPA.note(for: message)
-            == "The Kokoro voice stopped partway: the system voice finished the part it was on, and the rest wasn't said.")
-        #expect(harness.bed.kokoro.requests.count == 1)
+        #expect(speakIPA.note(for: message) == "The Kokoro voice stopped partway: the system voice said the rest of the message.")
+    }
+
+    @Test func itDoesntStartWhileVoiceModeShowsResumeListening() async throws {
+        let harness = await harnessWithKokoro()
+        let model = harness.model
+        await model.setVoiceMode(true)
+        harness.bed.recognizer.fail(RecognizerFailure())
+        #expect(await eventually { model.voiceLoop.state == .off })
+        // Voice mode stays on in the app, which offers to resume it.
+        #expect(model.isVoiceMode)
+        let engines = harness.bed.audio.engines.count
+
+        let message = message("Hello there.")
+        model.speakIPA.toggle(message)
+
+        #expect(model.speakIPA.note(for: message) == "Speak IPA plays only while voice mode is off.")
+        #expect(harness.transcriber.chunks.isEmpty)
+        #expect(harness.bed.audio.engines.count == engines)
+        await model.setVoiceMode(false)
     }
 
     @Test func aMessageWhoseIPAIsKeptIsSaidAgainWithoutTheModel() async throws {
@@ -197,8 +246,11 @@ struct SpeakIPATests {
         #expect(await eventually { speakIPA.phase(for: message) == nil })
 
         harness.transcriber.availability = .unavailable(.modelNotReady)
+        let reads = harness.transcriber.availabilityReads
         speakIPA.toggle(message)
 
+        // Not even asked whether the model can run.
+        #expect(harness.transcriber.availabilityReads == reads)
         #expect(speakIPA.note(for: message) == nil)
         #expect(await eventually { speakIPA.phase(for: message) == nil })
         #expect(harness.bed.kokoro.requests.count == 4)
