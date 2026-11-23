@@ -39,13 +39,14 @@ final class ShareState {
     }
 
     static func openWinston(_ count: Int) -> String {
-        "Open Winston to choose the agent \(count == 1 ? "it goes" : "they go") to."
+        "Tap Done, then open Winston to choose the agent \(count == 1 ? "it goes" : "they go") to."
     }
 }
 
-/// The share extension's sheet. It saves what was shared for Winston at once, then says to open
+/// The share extension's sheet. It copies what was shared at once, then says to tap Done and open
 /// Winston, whose Send to Agent sheet asks which agent it goes to, as for a file from Open in.
-/// Done closes it; Cancel, at any point, removes what was saved.
+/// Done hands the files to Winston and closes; Cancel, at any point, removes them, and Winston
+/// never sees them.
 struct SharePanel: View {
     let state: ShareState
     let done: () -> Void

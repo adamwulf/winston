@@ -17,8 +17,22 @@ extension ShareOutbox {
         }
     }
 
-    /// Saves what the share sheet handed over in `providers` to the outbox for Winston, all or
-    /// none, in the order given, and returns the saved files. Each goes under its own name.
+    /// Files the share extension has copied into `Staging`, not yet handed to Winston: `publish`
+    /// hands them over, `discard` drops them.
+    public struct Staged: Sendable {
+        /// Their batch folder in `Staging`.
+        let batch: URL
+        /// Each file's path in the batch, its item folder and its name, in the order shared.
+        let paths: [String]
+
+        public var count: Int {
+            paths.count
+        }
+    }
+
+    /// Copies what the share sheet handed over in `providers` into a batch folder in `Staging`,
+    /// all or none, in the order given, each under its own name. Winston doesn't see them until
+    /// `publish(_:)`.
     ///
     /// A shared file usually comes with its file URL and its content. The file URL comes first,
     /// as it keeps the file's name: the content's copy is named from the sharing app's suggested
@@ -26,51 +40,75 @@ extension ShareOutbox {
     /// read, its content is copied instead. A file is read coordinated, so a file provider such as
     /// iCloud Drive can download it first, and off the caller's actor; content is copied on the
     /// provider's own queue. Throws `AddFailure.folder` for a folder, `AddFailure.noFile` for an
-    /// item with neither, and what failed otherwise, leaving nothing in the outbox.
+    /// item with neither, and what failed otherwise, leaving nothing behind.
     ///
     /// Runs on the caller's actor, the share extension's main actor, since `NSItemProvider` isn't
     /// Sendable.
-    @discardableResult
-    public nonisolated(nonsending) func add(_ providers: [NSItemProvider]) async throws -> [URL] {
+    public nonisolated(nonsending) func stage(_ providers: [NSItemProvider]) async throws -> Staged {
         let batch = stagingFolder.appending(path: UUID().uuidString, directoryHint: .isDirectory)
-        var saved: [URL] = []
+        var paths: [String] = []
         do {
-            var staged: [(folder: URL, name: String)] = []
-            for provider in providers {
-                let itemFolder = batch.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+            for (index, provider) in providers.enumerated() {
+                // Named by its place, which `files()` lists them in.
+                let item = String(format: "%03d", index)
+                let itemFolder = batch.appending(path: item, directoryHint: .isDirectory)
                 try FileManager.default.createDirectory(at: itemFolder, withIntermediateDirectories: true)
-                staged.append((itemFolder, try await stage(provider, in: itemFolder)))
-            }
-            try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
-            // Each move is one rename, so Winston sees each file whole or not at all.
-            for item in staged {
-                let destination = outboxFolder.appending(path: item.folder.lastPathComponent, directoryHint: .isDirectory)
-                try FileManager.default.moveItem(at: item.folder, to: destination)
-                saved.append(destination.appending(path: item.name))
+                paths.append("\(item)/\(try await copy(provider, into: itemFolder))")
             }
         } catch {
             // Codes only: a file error's description names the file.
-            Self.log.error("saving shared files failed", error.logCodes(["count": String(providers.count)]))
-            remove(saved)
+            Self.log.error("staging shared files failed", error.logCodes(["count": String(providers.count)]))
             Self.removeIfPresent(batch)
             throw error
         }
-        Self.removeIfPresent(batch)
-        Self.log.notice("shared files saved", ["count": saved.count])
-        return saved
+        Self.log.notice("shared files staged", ["count": paths.count])
+        return Staged(batch: batch, paths: paths)
+    }
+
+    /// Hands staged files to Winston: moves their batch into `Outbox` in one rename, so Winston
+    /// sees all of them or none. Returns where they are now.
+    @discardableResult
+    public func publish(_ staged: Staged) throws -> [URL] {
+        let destination = outboxFolder.appending(path: staged.batch.lastPathComponent, directoryHint: .isDirectory)
+        do {
+            try FileManager.default.createDirectory(at: outboxFolder, withIntermediateDirectories: true)
+            try FileManager.default.moveItem(at: staged.batch, to: destination)
+        } catch {
+            // Codes only: a file error's description names the file.
+            Self.log.error("publishing shared files failed", error.logCodes(["count": String(staged.count)]))
+            throw error
+        }
+        Self.log.notice("shared files published", ["count": staged.count])
+        return staged.paths.map { destination.appending(path: $0) }
+    }
+
+    /// Removes staged files Adam cancelled.
+    public func discard(_ staged: Staged) {
+        Self.removeIfPresent(staged.batch)
+        Self.log.notice("staged shared files discarded", ["count": staged.count])
     }
 
     /// The name to send a file under: the name the sharing app suggested, or else the loaded
-    /// file's, with an extension for `type` if it has none. Some apps suggest a name with no
-    /// extension, such as "Screenshot 2026-11-20 at 2.35.00 PM", whose "00 PM" isn't one.
+    /// file's, with an extension for `type` if it hasn't one. Some apps suggest a name with no
+    /// extension, such as "Screenshot 2026-11-20 at 2.35.00 PM", whose "00 PM" isn't one, and
+    /// a loaded file can have a temporary one, such as "download.tmp" for a PDF: then the type's
+    /// own extension is used.
     static func fileName(suggested: String?, loaded url: URL, type: UTType) -> String {
-        var name = suggested.flatMap { $0.isEmpty ? nil : $0 } ?? url.lastPathComponent
-        let ext = (name as NSString).pathExtension
-        let hasExtensionForType = !ext.isEmpty && UTType(filenameExtension: ext)?.conforms(to: type) == true
-        if !hasExtensionForType, let typeExtension = url.pathExtension.isEmpty ? type.preferredFilenameExtension : url.pathExtension {
-            name += ".\(typeExtension)"
+        let isForType = { (ext: String) in
+            !ext.isEmpty && UTType(filenameExtension: ext)?.conforms(to: type) == true
         }
-        return safeFileName(name)
+        let loadedExtension = isForType(url.pathExtension) ? url.pathExtension : type.preferredFilenameExtension
+        if let suggested, !suggested.isEmpty {
+            if isForType((suggested as NSString).pathExtension) {
+                return safeFileName(suggested)
+            }
+            return safeFileName(loadedExtension.map { "\(suggested).\($0)" } ?? suggested)
+        }
+        if isForType(url.pathExtension) {
+            return safeFileName(url.lastPathComponent)
+        }
+        let base = url.deletingPathExtension().lastPathComponent
+        return safeFileName(loadedExtension.map { "\(base).\($0)" } ?? url.lastPathComponent)
     }
 
     /// File content, as opposed to a link to it: data that isn't a URL.
@@ -79,7 +117,7 @@ extension ShareOutbox {
     }
 
     /// Copies one shared item into `folder`, and returns the copy's name.
-    private nonisolated(nonsending) func stage(_ provider: NSItemProvider, in folder: URL) async throws -> String {
+    private nonisolated(nonsending) func copy(_ provider: NSItemProvider, into folder: URL) async throws -> String {
         let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
         // Highest fidelity first.
         let contentType = types.first(where: Self.isContent)
@@ -142,6 +180,10 @@ extension ShareOutbox {
                     return
                 }
                 continuation.resume(with: Result {
+                    // A document kept as a folder, such as a package, can come this way too.
+                    if try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true {
+                        throw AddFailure.folder
+                    }
                     let name = fileName(suggested: suggestedName, loaded: url, type: type)
                     try FileManager.default.copyItem(at: url, to: folder.appending(path: name))
                     return name

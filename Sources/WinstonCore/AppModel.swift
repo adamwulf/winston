@@ -95,6 +95,8 @@ public final class AppModel {
     /// `openSharedFiles()`). Nil on the Mac, which has no share extension, in a build not signed
     /// with the App Group, and in tests that don't pass one.
     @ObservationIgnored private let shareOutbox: ShareOutbox?
+    /// The latest scan of the share outbox (see `openSharedFiles()`). Each waits for the one before.
+    @ObservationIgnored private var sharedFilesScan: Task<Void, Never>?
     /// Gives each opened file its place in the order they were opened.
     @ObservationIgnored private var nextOpenedFileSequence = 0
     /// The copies being made, by file (see `waitForOpenedFileCopies()`).
@@ -1044,23 +1046,33 @@ public final class AppModel {
     /// agent sheet, which asks which agent it goes to. Each activation does, the one at launch
     /// included: the extension can't open Winston. A file already opened, still being copied or
     /// waiting for Try Again, isn't opened again. Once Winston's copy is made, or on Cancel, the
-    /// extension's goes. Also removes what an interrupted save left, an hour old or more. Package
-    /// for the tests, which call it as an activation does.
+    /// extension's goes. Also removes what an interrupted or cancelled save left, an hour old or
+    /// more. The outbox is read off the main actor, one scan after another, so two activations
+    /// close together don't both open a file. Package for the tests, which call it as an
+    /// activation does (see `waitForSharedFiles()`).
     package func openSharedFiles() {
         guard let shareOutbox else { return }
-        let waiting = shareOutbox.files().filter { file in
-            !openedFiles.contains { $0.source == file }
+        let previous = sharedFilesScan
+        sharedFilesScan = Task {
+            await previous?.value
+            let found = await shareOutbox.files()
+            // Checked here, on the main actor, where files are opened.
+            let waiting = found.filter { file in
+                !openedFiles.contains { $0.source == file }
+            }
+            if !waiting.isEmpty {
+                Self.log.notice("shared files found", ["count": waiting.count])
+            }
+            for file in waiting {
+                openFile(at: file, sharedFolder: file.deletingLastPathComponent())
+            }
+            await shareOutbox.removeLeftovers(before: Date(timeIntervalSinceNow: -60 * 60))
         }
-        if !waiting.isEmpty {
-            Self.log.notice("shared files found", ["count": waiting.count])
-        }
-        for file in waiting {
-            openFile(at: file, sharedFolder: file.deletingLastPathComponent())
-        }
-        let cutoff = Date(timeIntervalSinceNow: -60 * 60)
-        Task {
-            await shareOutbox.removeLeftovers(before: cutoff)
-        }
+    }
+
+    /// Waits until the scans `openSharedFiles()` started are done, for the tests.
+    package func waitForSharedFiles() async {
+        await sharedFilesScan?.value
     }
 
     /// `openFile(at:)`, for a file in `sharedFolder` if the share extension saved it.

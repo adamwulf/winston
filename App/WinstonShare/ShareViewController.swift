@@ -16,9 +16,9 @@ final class ShareViewController: UIViewController {
 
     private let outbox = ShareOutbox.appGroup()
     private let state = ShareState(phase: .saving(count: 0))
-    private var saveTask: Task<Void, Never>?
-    /// What was saved, for Cancel to remove.
-    private var saved: [URL] = []
+    /// The files copied for Winston, which Done hands over and Cancel removes.
+    private var staged: ShareOutbox.Staged?
+    /// Set by Cancel, so a copy still under way is removed once it ends rather than kept.
     private var isCancelled = false
 
     override func viewDidLoad() {
@@ -47,8 +47,9 @@ final class ShareViewController: UIViewController {
         return items.flatMap { $0.attachments ?? [] }
     }
 
-    /// Saves what can be sent at once, so the sheet says what's next as soon as it can. Anything
-    /// else that came with it, such as a web link, is left out.
+    /// Copies what can be sent at once, so Done can hand it over as soon as Adam taps it. Winston
+    /// doesn't see it until then. Anything else that came with it, such as a web link, is left
+    /// out.
     private func save() {
         guard let outbox else {
             state.phase = .unavailable("Sharing isn't set up in this build of Winston.")
@@ -62,18 +63,17 @@ final class ShareViewController: UIViewController {
             return
         }
         state.phase = .saving(count: providers.count)
-        saveTask = Task {
+        Task {
             do {
-                let files = try await outbox.add(providers)
+                let staged = try await outbox.stage(providers)
                 guard !isCancelled else {
-                    outbox.remove(files)
+                    outbox.discard(staged)
                     return
                 }
-                saved = files
-                state.phase = .saved(count: files.count)
+                self.staged = staged
+                state.phase = .saved(count: staged.count)
             } catch {
-                let nsError = error as NSError
-                Self.log.error("saving shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
+                Self.logFailure("staging", error)
                 state.phase = .failed(Self.message(for: error, count: providers.count))
             }
         }
@@ -87,18 +87,39 @@ final class ShareViewController: UIViewController {
         }
     }
 
+    private static func logFailure(_ step: String, _ error: any Error) {
+        // Codes only: a file error's description names the file.
+        let nsError = error as NSError
+        log.error("\(step, privacy: .public) shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
+    }
+
+    /// Hands the copied files to Winston, then closes.
     private func done() {
+        guard let outbox, let staged else { return }
+        do {
+            try outbox.publish(staged)
+        } catch {
+            Self.logFailure("publishing", error)
+            state.phase = .failed("Winston couldn't keep \(staged.count == 1 ? "that file" : "those files"). Try sharing again.")
+            outbox.discard(staged)
+            self.staged = nil
+            return
+        }
+        self.staged = nil
         Self.log.notice("share done")
         extensionContext?.completeRequest(returningItems: nil)
     }
 
-    /// Removes what was saved, or will be once the save under way ends.
+    /// Removes the copied files, or the copy under way once it ends, and closes. Winston never
+    /// sees them: only Done hands them over. If iOS ends the extension first, what it copied stays
+    /// in `Staging` until Winston removes it, an hour later.
     private func cancel() {
         Self.log.notice("share cancelled")
         isCancelled = true
-        saveTask?.cancel()
-        outbox?.remove(saved)
-        saved = []
+        if let outbox, let staged {
+            outbox.discard(staged)
+            self.staged = nil
+        }
         extensionContext?.cancelRequest(withError: CocoaError(.userCancelled))
     }
 }

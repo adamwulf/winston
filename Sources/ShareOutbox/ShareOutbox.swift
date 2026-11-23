@@ -4,13 +4,14 @@ import LogSupport
 
 /// The hand-off from Winston's iOS share extension to the app, in the App Group container they
 /// share. The extension can't run TDLib, nor open Winston, so it saves what the share sheet hands
-/// it (`add(_:)`), and Winston opens each file the next time it's active, as it opens a file from
-/// Open in: its Send to Agent sheet asks which agent it goes to (`AppModel.openSharedFiles()`).
+/// it, and Winston opens each file the next time it's active, as it opens a file from Open in:
+/// its Send to Agent sheet asks which agent it goes to (`AppModel.openSharedFiles()`).
 ///
-/// Each file waits in a folder of its own in `Outbox`, under its own name. The extension copies
-/// the files it is handed into a folder of their own in `Staging` first, and moves each into
-/// `Outbox` once they all are, so Winston never sees a file half copied. What an interrupted save
-/// leaves in `Staging` goes later (`removeLeftovers(before:)`).
+/// The extension copies the files it is handed into a batch folder in `Staging` as soon as it
+/// opens (`stage(_:)`), each in a folder of its own under its own name. Done moves the whole batch
+/// into `Outbox` in one rename (`publish(_:)`), so Winston never sees a file half copied, nor a
+/// share Adam hasn't confirmed; Cancel removes it (`discard(_:)`). What an interrupted or
+/// cancelled save leaves in `Staging` goes later (`removeLeftovers(before:)`).
 ///
 /// The logs give counts only, never file names or contents.
 public struct ShareOutbox: Sendable {
@@ -44,33 +45,43 @@ public struct ShareOutbox: Sendable {
         folder.appending(path: "Staging", directoryHint: .isDirectory)
     }
 
-    /// The shared files waiting for Winston, in the order they were shared. Each is alone in its
-    /// folder, which `remove(_:)` removes with it.
-    public func files() -> [URL] {
-        let folders = contents(of: outboxFolder, keys: [.creationDateKey], skippingHidden: true)
-        let dated = folders.compactMap { listed -> (file: URL, date: Date)? in
-            // The one file in it, hidden or not, as a name such as ".env" is. An empty folder,
-            // which nothing leaves, is skipped.
-            guard let name = contents(of: listed, keys: [], skippingHidden: false).first?.lastPathComponent else { return nil }
-            let date = (try? listed.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
-            // Under `outboxFolder` as given: the listing resolves /var to /private/var.
-            let folder = outboxFolder.appending(path: listed.lastPathComponent, directoryHint: .isDirectory)
-            return (folder.appending(path: name), date)
-        }
-        return dated.sorted { $0.date < $1.date }.map(\.file)
-    }
-
-    /// Removes shared files and their folders: once Winston has its own copy, or when Adam
-    /// cancels. A failure is only logged.
-    public func remove(_ files: [URL]) {
-        for file in files {
-            Self.removeItem(at: file.deletingLastPathComponent())
-        }
-    }
-
-    /// Removes what interrupted saves left in `Staging` from before `cutoff`, as when iOS ended
-    /// the extension mid-copy. Returns how many it removed. A save under way is newer.
+    /// The shared files waiting for Winston, in the order they were shared, found off the caller's
+    /// actor. Each is alone in its folder, which Winston removes once it has its own copy, or on
+    /// Cancel. A batch whose files have all gone is removed here.
     @concurrent
+    public func files() async -> [URL] {
+        let batches = contents(of: outboxFolder, keys: [.creationDateKey], skippingHidden: true)
+            .map { batch in (batch, (try? batch.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast) }
+            .sorted { $0.1 < $1.1 }
+            .map(\.0)
+        var files: [URL] = []
+        for listed in batches {
+            // Under `outboxFolder` as given: the listing resolves /var to /private/var.
+            let batch = outboxFolder.appending(path: listed.lastPathComponent, directoryHint: .isDirectory)
+            // Named by their place in the batch.
+            let items = contents(of: batch, keys: [], skippingHidden: true)
+                .map(\.lastPathComponent)
+                .sorted()
+            guard !items.isEmpty else {
+                Self.removeItem(at: batch)
+                continue
+            }
+            for item in items {
+                let folder = batch.appending(path: item, directoryHint: .isDirectory)
+                // The one file in it, hidden or not, as a name such as ".env" is. An empty item
+                // folder, which nothing leaves, is skipped.
+                guard let name = contents(of: folder, keys: [], skippingHidden: false).first?.lastPathComponent else { continue }
+                files.append(folder.appending(path: name))
+            }
+        }
+        return files
+    }
+
+    /// Removes what saves left in `Staging` from before `cutoff`, as when iOS ended the extension
+    /// mid-copy, or after Cancel. Returns how many it removed, which it logs. A save under way is
+    /// newer.
+    @concurrent
+    @discardableResult
     public func removeLeftovers(before cutoff: Date) async -> Int {
         var removed = 0
         for batch in contents(of: stagingFolder, keys: [.creationDateKey], skippingHidden: true) {

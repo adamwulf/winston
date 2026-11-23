@@ -19,15 +19,21 @@ private func twoBots(sharingIn folder: URL) -> (harness: Harness, outbox: ShareO
     return (Harness(fake: fake, shareOutbox: outbox), outbox)
 }
 
-/// Shares a file named `name` holding `data`, as the share extension saves one from the share
-/// sheet, and returns the saved file.
-private func share(_ name: String, _ data: Data, to outbox: ShareOutbox, from folder: URL) async throws -> URL {
+/// A provider for a file named `name` holding `data`, as the share sheet hands one from Files.
+private func provider(_ name: String, _ data: Data, in folder: URL) throws -> NSItemProvider {
     let source = folder.appending(path: "Source-\(UUID().uuidString)", directoryHint: .isDirectory)
     try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
     let file = source.appending(path: name)
     try data.write(to: file)
-    let provider = try #require(NSItemProvider(contentsOf: file))
-    return try #require(try await outbox.add([provider]).first)
+    return try #require(NSItemProvider(contentsOf: file))
+}
+
+/// Shares a file named `name` holding `data`, as the share extension does once Adam taps Done,
+/// and returns where it waits for Winston.
+@discardableResult
+private func share(_ name: String, _ data: Data, to outbox: ShareOutbox, from folder: URL) async throws -> URL {
+    let staged = try await outbox.stage([try provider(name, data, in: folder)])
+    return try #require(try outbox.publish(staged).first)
 }
 
 /// The documents TDLib was asked to send, in order.
@@ -72,6 +78,13 @@ private func removeUploads(_ paths: [String], documents: Bool) {
     }
 }
 
+/// Comes back to Winston, as Adam does after sharing, and waits for it to look at what was shared.
+@MainActor
+private func comeBack(to model: AppModel) async {
+    model.appDidBecomeActive()
+    await model.waitForSharedFiles()
+}
+
 /// What the iOS share extension saves goes the way of a file from Open in: Winston opens it into
 /// the Send to Agent sheet when it's next active, and sends it to the agent picked there.
 @MainActor
@@ -86,8 +99,7 @@ struct AppModelShareTests {
         let name = uniqueName("logs", "zip")
         let shared = try await share(name, Data("zip bytes".utf8), to: outbox, from: folder)
 
-        // Adam comes back to Winston after sharing.
-        model.appDidBecomeActive()
+        await comeBack(to: model)
 
         #expect(await copied(1, in: model))
         let file = try #require(model.openedFiles.first)
@@ -97,8 +109,8 @@ struct AppModelShareTests {
         // Winston has its own copy, so the share extension's is gone, and coming back again opens
         // nothing more.
         #expect(!exists(shared.deletingLastPathComponent()))
-        #expect(outbox.files().isEmpty)
-        model.appDidBecomeActive()
+        #expect(await outbox.files().isEmpty)
+        await comeBack(to: model)
         #expect(model.openedFiles.count == 1)
 
         // Laptop, while Home is the chat shown.
@@ -121,7 +133,7 @@ struct AppModelShareTests {
         try await share(uniqueName("Screenshot", "png"), try imageData(width: 40, height: 20), to: outbox, from: folder)
         try await share(uniqueName("dancing", "gif"), try imageData(width: 40, height: 30, type: .gif, frames: 3), to: outbox, from: folder)
 
-        model.appDidBecomeActive()
+        await comeBack(to: model)
 
         #expect(await copied(2, in: model))
         // In the order they were shared.
@@ -140,15 +152,33 @@ struct AppModelShareTests {
         #expect(documents.map { URL(filePath: $0.path).pathExtension } == ["gif"])
     }
 
-    @Test func filesSharedBeforeLoginWaitForTheChats() async throws {
+    @Test func aShareNotYetConfirmedIsNotOpened() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (harness, outbox) = twoBots(sharingIn: folder)
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        // Copied, but Adam hasn't tapped Done: he switched to Winston with the share sheet open.
+        let staged = try await outbox.stage([try provider(uniqueName("notes", "txt"), Data("hello".utf8), in: folder)])
+
+        await comeBack(to: model)
+
+        #expect(model.openedFiles.isEmpty)
+        // Cancel then leaves nothing for a later activation.
+        outbox.discard(staged)
+        await comeBack(to: model)
+        #expect(model.openedFiles.isEmpty)
+    }
+
+    @Test func aFileSharedBeforeTheChatsLoadWaitsForThem() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         try await share(uniqueName("notes", "txt"), Data("hello".utf8), to: outbox, from: folder)
 
-        // The activation at launch, before TDLib has its session.
-        model.appDidBecomeActive()
+        // The activation at launch, before TDLib has started.
+        await comeBack(to: model)
 
         #expect(await copied(1, in: model))
         #expect(!model.isPickingAgentForOpenedFiles)
@@ -166,14 +196,16 @@ struct AppModelShareTests {
         // As while an iCloud Drive download is under way.
         let hold = try WriteHold(on: shared)
 
+        // Two activations close together.
         model.appDidBecomeActive()
         model.appDidBecomeActive()
+        await model.waitForSharedFiles()
 
         #expect(model.openedFiles.count == 1)
         #expect(model.openedFilesBeingCopied == 1)
         hold.release()
         #expect(await copied(1, in: model))
-        #expect(outbox.files().isEmpty)
+        #expect(await outbox.files().isEmpty)
         model.cancelOpenedFiles()
     }
 
@@ -185,41 +217,73 @@ struct AppModelShareTests {
         #expect(await harness.startAndLoadChats())
         let shared = try await share(uniqueName("big", "zip"), Data("zip bytes".utf8), to: outbox, from: folder)
         let hold = try WriteHold(on: shared)
-        model.appDidBecomeActive()
+        await comeBack(to: model)
 
         model.cancelOpenedFiles()
         hold.release()
         await model.waitForOpenedFileCopies()
 
         #expect(model.openedFiles.isEmpty)
-        #expect(outbox.files().isEmpty)
-        model.appDidBecomeActive()
+        #expect(await outbox.files().isEmpty)
+        await comeBack(to: model)
         #expect(model.openedFiles.isEmpty)
         #expect(sentDocuments(of: harness).isEmpty)
     }
 
-    @Test func aSharedFileThatCannotBeCopiedStaysForTryAgainUntilCancel() async throws {
+    @Test func aSharedFileThatCouldNotBeCopiedGoesOnTryAgain() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (harness, outbox) = twoBots(sharingIn: folder)
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        let name = uniqueName("locked", "txt")
+        let shared = try await share(name, Data("hello".utf8), to: outbox, from: folder)
+        // Unreadable for now, as a file still being downloaded can be.
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: shared.path(percentEncoded: false))
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: shared.path(percentEncoded: false)) }
+
+        await comeBack(to: model)
+
+        #expect(await copied(1, in: model))
+        let file = try #require(model.openedFiles.first)
+        #expect(file.copyError != nil)
+        // Kept for Try Again, and not opened a second time meanwhile.
+        #expect(await outbox.files() == [shared])
+        await comeBack(to: model)
+        #expect(model.openedFiles.count == 1)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: shared.path(percentEncoded: false))
+        model.retryCopy(of: file.id)
+
+        #expect(await eventually { model.openedFiles.first?.isCopied == true })
+        #expect(model.openedFiles.map(\.id) == [file.id])
+        #expect(await outbox.files().isEmpty)
+        await comeBack(to: model)
+        #expect(model.openedFiles.count == 1)
+        await model.sendOpenedFiles(to: ChatID(1))
+        let sent = sentDocuments(of: harness)
+        defer { removeUploads(sent.map(\.path), documents: true) }
+        #expect(sent.map { URL(filePath: $0.path).lastPathComponent } == [name])
+    }
+
+    @Test func aSharedFolderIsTurnedDownAndCancelRemovesIt() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         #expect(await harness.startAndLoadChats())
         // A folder in the outbox, which Winston's copy turns down.
-        let item = outbox.folder.appending(path: "Outbox/\(UUID().uuidString)/reports", directoryHint: .isDirectory)
+        let item = outbox.folder.appending(path: "Outbox/\(UUID().uuidString)/000/reports", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: item, withIntermediateDirectories: true)
 
-        model.appDidBecomeActive()
+        await comeBack(to: model)
 
         #expect(await copied(1, in: model))
         #expect(model.openedFiles.first?.copyError == "Winston can send files, but not folders.")
-        // Kept for Try Again, and not opened a second time meanwhile.
-        #expect(outbox.files().count == 1)
-        model.appDidBecomeActive()
-        #expect(model.openedFiles.count == 1)
 
         model.cancelOpenedFiles()
 
-        #expect(outbox.files().isEmpty)
+        #expect(await outbox.files().isEmpty)
     }
 
     @Test func whatAnInterruptedShareLeftAnHourAgoIsRemoved() async throws {
@@ -228,8 +292,8 @@ struct AppModelShareTests {
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         let staging = outbox.folder.appending(path: "Staging", directoryHint: .isDirectory)
-        let old = staging.appending(path: "old/item", directoryHint: .isDirectory)
-        let recent = staging.appending(path: "recent/item", directoryHint: .isDirectory)
+        let old = staging.appending(path: "old/000", directoryHint: .isDirectory)
+        let recent = staging.appending(path: "recent/000", directoryHint: .isDirectory)
         for batch in [old, recent] {
             try FileManager.default.createDirectory(at: batch, withIntermediateDirectories: true)
             try Data("half".utf8).write(to: batch.appending(path: "big.zip"))
@@ -239,9 +303,9 @@ struct AppModelShareTests {
             ofItemAtPath: staging.appending(path: "old").path(percentEncoded: false)
         )
 
-        model.appDidBecomeActive()
+        await comeBack(to: model)
 
-        #expect(await eventually { !exists(staging.appending(path: "old")) })
+        #expect(!exists(staging.appending(path: "old")))
         #expect(exists(recent))
         // Nothing half copied is opened.
         #expect(model.openedFiles.isEmpty)
