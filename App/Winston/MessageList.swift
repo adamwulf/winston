@@ -280,6 +280,7 @@ struct PhotoView: View {
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("Loading photo")
             }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)

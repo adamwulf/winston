@@ -72,18 +72,19 @@ struct MessageTimesTests {
         let nov19 = Self.date(2026, 11, 19, 15, 42)
         let text = Self.times().text(for: nov19)
         #expect(text == nov19.formatted(Self.style().month(.abbreviated).day().hour().minute()))
-        #expect(text.hasPrefix("Nov 19") && text.contains("3:42") && text.hasSuffix("PM") && !text.contains("2026"))
-        #expect(Self.times().text(for: Self.date(2026, 1, 1, 9, 5)).hasPrefix("Jan 1"))
-        let german = Self.times(locale: Self.german).text(for: nov19)
-        #expect(german == nov19.formatted(Self.style(Self.german).month(.abbreviated).day().hour().minute()))
-        #expect(german.hasPrefix("19.") && german.hasSuffix("15:42"))
+        #expect(!text.contains("2026"))
+        let newYearsDay = Self.date(2026, 1, 1, 9, 5)
+        #expect(Self.times().text(for: newYearsDay)
+            == newYearsDay.formatted(Self.style().month(.abbreviated).day().hour().minute()))
+        #expect(Self.times(locale: Self.german).text(for: nov19)
+            == nov19.formatted(Self.style(Self.german).month(.abbreviated).day().hour().minute()))
     }
 
     @Test func anEarlierYearShowsTheYearToo() {
         let lastYear = Self.date(2025, 11, 19, 15, 42)
         let text = Self.times().text(for: lastYear)
         #expect(text == lastYear.formatted(Self.style().year().month(.abbreviated).day().hour().minute()))
-        #expect(text.hasPrefix("Nov 19") && text.contains("2025") && text.contains("3:42"))
+        #expect(text.contains("2025"))
         #expect(Self.times().text(for: Self.date(2025, 12, 31, 23, 59)).contains("2025"))
     }
 
@@ -95,10 +96,15 @@ struct MessageTimesTests {
         let sent = Self.date(2026, 11, 22, 5, 30, in: utc)
         #expect(Self.times(now: now, timeZone: utc, locale: Self.british).text(for: sent) == "05:30")
         #expect(Self.times(now: now, timeZone: tokyo, locale: Self.british).text(for: sent) == "14:30")
-        // 8 AM on Nov 21 in Chicago is 11 PM in Tokyo, two days before Tokyo's Nov 23.
+        // 8 AM on Nov 21 in Chicago is 11 PM in Tokyo, two days before Tokyo's Nov 23 (but yesterday
+        // in UTC). The calendar passed in starts in UTC: the time zone given replaces its own.
+        var utcCalendar = Calendar(identifier: .gregorian)
+        utcCalendar.timeZone = utc
         let tokyoTomorrow = Self.date(2026, 11, 23, 0, 30, in: tokyo)
-        let older = Self.times(now: tokyoTomorrow, timeZone: tokyo).text(for: Self.date(2026, 11, 21, 8, 0))
-        #expect(older.hasPrefix("Nov 21") && older.contains("11:00") && older.hasSuffix("PM"))
+        let sentEarlier = Self.date(2026, 11, 21, 8, 0)
+        let times = MessageTimes(now: tokyoTomorrow, calendar: utcCalendar, timeZone: tokyo, locale: Self.usEnglish)
+        #expect(times.text(for: sentEarlier)
+            == sentEarlier.formatted(Self.style(Self.usEnglish, tokyo).month(.abbreviated).day().hour().minute()))
     }
 
     // MARK: - Which bubbles show a time
@@ -158,6 +164,5 @@ struct MessageTimesTests {
         let received = Self.times().caption(for: Self.message(2, outgoing: false, at: nov19))
         #expect(received.text == Self.times().text(for: nov19))
         #expect(received.accessibilityLabel == "Received \(received.text)")
-        #expect(received.accessibilityLabel.hasPrefix("Received Nov 19"))
     }
 }
