@@ -17,13 +17,14 @@ extension AppModel {
             _ text: String,
             attachment: Attachment? = nil,
             reactions: [Reaction] = [],
-            sendState: SendState = .sent
+            sendState: SendState = .sent,
+            date: Date? = nil
         ) -> ChatMessage {
             ChatMessage(
                 id: MessageID(id),
                 chatID: chat.id,
                 isOutgoing: outgoing,
-                date: start.addingTimeInterval(Double(id) * 30),
+                date: date ?? start.addingTimeInterval(Double(id) * 30),
                 text: text,
                 attachment: attachment,
                 reactions: reactions,
@@ -31,7 +32,30 @@ extension AppModel {
             )
         }
 
-        let homeMessages = [
+        // Earlier days, for the days' headers: across a New Year at least ten days back (so before
+        // the days below), then a week, three days and one day ago.
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: .now)
+        func day(_ daysAgo: Int, at hour: Int, from day: Date = today) -> Date {
+            let date = calendar.date(byAdding: .day, value: -daysAgo, to: day)!
+            return calendar.date(bySettingHour: hour, minute: 15, second: 0, of: date)!
+        }
+        var newYear = calendar.dateInterval(of: .year, for: .now)!.start
+        if calendar.dateComponents([.day], from: newYear, to: today).day! < 10 {
+            newYear = calendar.date(byAdding: .year, value: -1, to: newYear)!
+        }
+        let earlierMessages = [
+            message(101, in: home, outgoing: true, "Is the nightly still running?", date: day(1, at: 22, from: newYear)),
+            message(102, in: home, outgoing: false, "Yes, it finishes after midnight.", date: day(1, at: 23, from: newYear)),
+            message(103, in: home, outgoing: false, "Happy New Year! The nightly passed.", date: day(0, at: 0, from: newYear)),
+            message(104, in: home, outgoing: true, "Turn the heating down tonight.", date: day(7, at: 19)),
+            message(105, in: home, outgoing: false, "Done: 17°C from 10 PM.", date: day(7, at: 19)),
+            message(106, in: home, outgoing: true, "Did the backup run?", date: day(3, at: 8)),
+            message(107, in: home, outgoing: false, "It finished at 2:40 with no errors.", date: day(3, at: 8)),
+            message(108, in: home, outgoing: false, "The front door was left unlocked.", date: day(1, at: 21)),
+        ]
+
+        let homeMessages = earlierMessages + [
             message(1, in: home, outgoing: true, "What's on the build server today?"),
             message(2, in: home, outgoing: false, "Two jobs are queued. The nightly finished at 3:12 with all tests passing.",
                     reactions: [Reaction(emoji: "👍", count: 1, isChosen: true)]),

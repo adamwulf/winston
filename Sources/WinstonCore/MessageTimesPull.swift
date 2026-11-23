@@ -12,7 +12,8 @@ import TelegramLink
 /// `release()`, and calls `settled(after:)` once the bubbles are back, which hides the times.
 ///
 /// Only `slide` and `showsTimes` are observed, so a drag redraws only what reads them: the one
-/// view that slides the bubbles, and the times' slots when they show or hide.
+/// view that slides the bubbles, the days' headers that slide back to hold still, and the times'
+/// slots when they show or hide.
 @MainActor @Observable
 public final class MessageTimesPull {
     /// How far from the leading edge of the window a drag has to start to be a pull. That edge is
