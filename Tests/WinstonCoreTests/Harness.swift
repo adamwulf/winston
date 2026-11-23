@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import ShareOutbox
 import TelegramLink
 import TelegramLinkTestSupport
 import VoiceLoop
@@ -30,11 +31,14 @@ final class Harness {
     ///   - openedFileInboxes: the folders standing in for iOS's Documents/Inbox and
     ///     tmp/<bundle ID>-Inbox, where the system puts a file it opens in Winston. None by
     ///     default, as on the Mac.
+    ///   - shareOutbox: the folder standing in for the App Group's, where the iOS share extension
+    ///     saves files for Winston. None by default, as on the Mac.
     init(
         fake: FakeTDLib = FakeTDLib(),
         settings: [String: Any] = [:],
         soundCues: Bool = false,
-        openedFileInboxes: [URL] = []
+        openedFileInboxes: [URL] = [],
+        shareOutbox: ShareOutbox? = nil
     ) {
         self.fake = fake
         for (key, value) in settings {
@@ -45,7 +49,8 @@ final class Harness {
             voiceLoop: bed.makeLoop(soundCues: soundCues),
             defaults: testDefaults.defaults,
             pronunciationSuggester: suggester,
-            openedFileInboxes: openedFileInboxes
+            openedFileInboxes: openedFileInboxes,
+            shareOutbox: shareOutbox
         )
     }
 

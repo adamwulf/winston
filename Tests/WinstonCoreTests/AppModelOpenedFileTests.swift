@@ -84,30 +84,6 @@ private func workingCopies(named name: String) throws -> [URL] {
     return folders.filter { exists($0.appending(path: name)) }
 }
 
-/// Holds a coordinated write on a file until `release()`, so a coordinated read of it, as
-/// `DocumentFiles.copyForSending` makes, waits meanwhile: as for an iCloud Drive file still
-/// downloading.
-private final class WriteHold: Sendable {
-    private let released = DispatchSemaphore(value: 0)
-
-    init(on url: URL) throws {
-        let started = DispatchSemaphore(value: 0)
-        let released = released
-        DispatchQueue.global().async {
-            var error: NSError?
-            NSFileCoordinator().coordinate(writingItemAt: url, options: [], error: &error) { _ in
-                started.signal()
-                released.wait()
-            }
-        }
-        try #require(started.wait(timeout: .now() + 10) == .success)
-    }
-
-    func release() {
-        released.signal()
-    }
-}
-
 /// A file opened in Winston from another app: copied, offered in the agent sheet once Winston is
 /// logged in with its bot chats, and sent to the agent picked, or cancelled.
 @MainActor

@@ -143,19 +143,3 @@ struct DisplayImageTests {
         #expect(await PhotoFiles.displayImage(at: folder.appending(path: "gone.png"), maxPixelSize: 100) == nil)
     }
 }
-
-/// Which shared files go as a photo: the image types ImageIO reads.
-@Suite struct CanConvertTests {
-    @Test func imageTypesImageIOReadsConvert() {
-        for type in [UTType.png, .jpeg, .heic, .gif, .tiff] {
-            #expect(PhotoFiles.canConvert(typeIdentifier: type.identifier), "\(type.identifier)")
-        }
-    }
-
-    @Test func otherFilesDoNot() {
-        for type in [UTType.pdf, .zip, .plainText, .data, .svg] {
-            #expect(!PhotoFiles.canConvert(typeIdentifier: type.identifier), "\(type.identifier)")
-        }
-        #expect(!PhotoFiles.canConvert(typeIdentifier: "not a type"))
-    }
-}

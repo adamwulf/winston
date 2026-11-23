@@ -22,6 +22,12 @@ private final class TestFolder {
         return file
     }
 
+    /// What's in the share folder's `name` folder, by name. None if it doesn't exist.
+    func contents(of name: String) -> [String] {
+        let folder = outbox.folder.appending(path: name, directoryHint: .isDirectory)
+        return (try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? []
+    }
+
     deinit {
         try? FileManager.default.removeItem(at: url)
     }
@@ -31,210 +37,69 @@ private func exists(_ url: URL) -> Bool {
     FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
 }
 
-@Suite struct ShareAgentListTests {
-    @Test func savedAgentsReadBackInTheSameOrder() throws {
-        let folder = TestFolder()
-        let agents = [ShareAgent(id: 1, name: "Home"), ShareAgent(id: -1002, name: "Laptop")]
-
-        try folder.outbox.saveAgents(agents)
-
-        #expect(try folder.outbox.agents() == agents)
-    }
-
-    @Test func savingAgainReplacesTheList() throws {
-        let folder = TestFolder()
-        try folder.outbox.saveAgents([ShareAgent(id: 1, name: "Home"), ShareAgent(id: 2, name: "Laptop")])
-
-        try folder.outbox.saveAgents([])
-
-        #expect(try folder.outbox.agents().isEmpty)
-    }
-
-    @Test func beforeWinstonSavesAnyThereAreNone() throws {
-        #expect(try TestFolder().outbox.agents().isEmpty)
-    }
+private func text(of url: URL) throws -> String {
+    String(decoding: try Data(contentsOf: url), as: UTF8.self)
 }
 
-@Suite struct OutboxManifestTests {
-    @Test func anAddedFileReadsBackWithItsAgentNameAndType() throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("source.zip", "zip bytes")
-        let sharedAt = Date(timeIntervalSinceReferenceDate: 815_000_000.25)
-
-        let added = try folder.outbox.add(fileAt: source, named: "logs.zip", typeIdentifier: "public.zip-archive", for: 2, now: sharedAt)
-
-        let items = folder.outbox.items()
-        #expect(items == [added])
-        let item = try #require(items.first)
-        #expect(item.agentID == 2)
-        #expect(item.fileName == "logs.zip")
-        #expect(item.typeIdentifier == "public.zip-archive")
-        #expect(item.createdAt == sharedAt)
-        #expect(item.fileURL.lastPathComponent == "logs.zip")
-        #expect(try Data(contentsOf: item.fileURL) == Data("zip bytes".utf8))
-        // A copy: the shared file stays where it was.
-        #expect(exists(source))
+/// A provider holding only `data` as `type`, with no file URL, as the screenshot editor and Photos
+/// hand an image over.
+private func contentProvider(_ data: Data, type: UTType, suggestedName: String?) -> NSItemProvider {
+    let provider = NSItemProvider()
+    provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+        completion(data, nil)
+        return nil
     }
-
-    @Test func itemsAreListedOldestFirst() throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("note.txt", "hello")
-        let now = Date()
-        try folder.outbox.add(fileAt: source, named: "second.txt", typeIdentifier: "public.plain-text", for: 1, now: now)
-        try folder.outbox.add(fileAt: source, named: "first.txt", typeIdentifier: "public.plain-text", for: 1, now: now.addingTimeInterval(-0.5))
-        try folder.outbox.add(fileAt: source, named: "third.txt", typeIdentifier: "public.plain-text", for: 1, now: now.addingTimeInterval(0.5))
-
-        #expect(folder.outbox.items().map(\.fileName) == ["first.txt", "second.txt", "third.txt"])
-    }
-
-    @Test func aFileNamedLikeAManifestKeepsItsName() throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("manifest.json", "{}")
-
-        try folder.outbox.add(fileAt: source, named: "manifest.json", typeIdentifier: "public.json", for: 1)
-
-        let item = try #require(folder.outbox.items().first)
-        #expect(item.fileName == "manifest.json")
-        #expect(try Data(contentsOf: item.fileURL) == Data("{}".utf8))
-    }
-
-    @Test func aSlashInTheNameCannotLeaveTheItemsFolder() throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("a.txt", "a")
-
-        let item = try folder.outbox.add(fileAt: source, named: "../a/b.txt", typeIdentifier: "public.plain-text", for: 1)
-
-        #expect(item.fileName == "..-a-b.txt")
-        #expect(item.fileURL.deletingLastPathComponent() == item.folder)
-    }
-
-    @Test func aFileThatCannotBeCopiedLeavesNothingBehind() throws {
-        let folder = TestFolder()
-        let missing = folder.url.appending(path: "gone.txt")
-
-        #expect(throws: (any Error).self) {
-            try folder.outbox.add(fileAt: missing, named: "gone.txt", typeIdentifier: "public.plain-text", for: 1)
-        }
-
-        #expect(folder.outbox.items().isEmpty)
-        let outboxFolder = folder.outbox.folder.appending(path: "Outbox")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: outboxFolder.path(percentEncoded: false)).isEmpty)
-    }
-
-    @Test func aFolderWithoutItsManifestIsNotListed() throws {
-        let folder = TestFolder()
-        // As the share extension leaves an item while it's still copying the file.
-        let unfinished = folder.outbox.folder.appending(path: "Outbox/\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: unfinished, withIntermediateDirectories: true)
-        try Data("half".utf8).write(to: unfinished.appending(path: "big.zip"))
-
-        #expect(folder.outbox.items().isEmpty)
-    }
-
-    @Test func removingAnItemRemovesItsFileAndManifest() throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("a.txt", "a")
-        let item = try folder.outbox.add(fileAt: source, named: "a.txt", typeIdentifier: "public.plain-text", for: 1)
-
-        try folder.outbox.remove(item)
-
-        #expect(folder.outbox.items().isEmpty)
-        #expect(!exists(item.folder))
-        let outboxFolder = folder.outbox.folder.appending(path: "Outbox")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: outboxFolder.path(percentEncoded: false)).isEmpty)
-    }
-}
-
-/// What a fake sender was handed, in order, and whether each file was still there when it was.
-private actor SentLog {
-    private(set) var sent: [(fileName: String, agentID: Int64, fileExisted: Bool)] = []
-
-    func record(_ item: OutboxItem) {
-        sent.append((item.fileName, item.agentID, exists(item.fileURL)))
-    }
-}
-
-@Suite struct OutboxSendTests {
-    @Test func eachItemIsSentOldestFirstThenRemoved() async throws {
-        let folder = TestFolder()
-        let source = try folder.sourceFile("a.png", "png")
-        let now = Date()
-        try folder.outbox.add(fileAt: source, named: "screenshot.png", typeIdentifier: "public.png", for: 2, now: now)
-        try folder.outbox.add(fileAt: source, named: "logs.zip", typeIdentifier: "public.zip-archive", for: 1, now: now.addingTimeInterval(-1))
-        let log = SentLog()
-
-        let count = await folder.outbox.sendAll { item in await log.record(item) }
-
-        #expect(count == 2)
-        let sent = await log.sent
-        #expect(sent.map(\.fileName) == ["logs.zip", "screenshot.png"])
-        #expect(sent.map(\.agentID) == [1, 2])
-        #expect(sent.map(\.fileExisted) == [true, true])
-        #expect(folder.outbox.items().isEmpty)
-        let outboxFolder = folder.outbox.folder.appending(path: "Outbox")
-        #expect(try FileManager.default.contentsOfDirectory(atPath: outboxFolder.path(percentEncoded: false)).isEmpty)
-    }
-
-    @Test func anEmptyOutboxSendsNothing() async {
-        let log = SentLog()
-
-        let count = await TestFolder().outbox.sendAll { item in await log.record(item) }
-
-        #expect(count == 0)
-        #expect(await log.sent.isEmpty)
-    }
-
-    @Test func theAgentListIsLeftAlone() async throws {
-        let folder = TestFolder()
-        let agents = [ShareAgent(id: 1, name: "Home")]
-        try folder.outbox.saveAgents(agents)
-        try folder.outbox.add(fileAt: try folder.sourceFile("a.txt", "a"), named: "a.txt", typeIdentifier: "public.plain-text", for: 1)
-
-        await folder.outbox.sendAll { _ in }
-
-        #expect(try folder.outbox.agents() == agents)
-    }
+    provider.suggestedName = suggestedName
+    return provider
 }
 
 /// What the share extension does with what the share sheet hands it.
-@Suite struct OutboxItemProviderTests {
-    @Test func aFileIsCopiedUnderItsNameWithItsType() async throws {
+@Suite struct ShareOutboxAddTests {
+    @Test func aFileIsSavedUnderItsOwnNameAndListedForWinston() async throws {
         let folder = TestFolder()
         let source = try folder.sourceFile("nightly logs.zip", "zip bytes")
         // Registers the file's content as a zip archive and its file URL, with no suggested name.
         let provider = try #require(NSItemProvider(contentsOf: source))
 
-        let item = try await folder.outbox.add(provider, for: 7)
+        let saved = try await folder.outbox.add([provider])
 
-        #expect(item.agentID == 7)
-        #expect(item.fileName == "nightly logs.zip")
-        #expect(item.typeIdentifier == UTType.zip.identifier)
-        #expect(try Data(contentsOf: item.fileURL) == Data("zip bytes".utf8))
-        #expect(folder.outbox.items() == [item])
+        #expect(saved.map(\.lastPathComponent) == ["nightly logs.zip"])
+        #expect(try text(of: try #require(saved.first)) == "zip bytes")
+        #expect(folder.outbox.files() == saved)
+        // A copy: the shared file stays where it was.
+        #expect(exists(source))
+        // Nothing is left half done.
+        #expect(folder.contents(of: "Staging").isEmpty)
     }
 
-    @Test func imageDataTakesTheSuggestedNameAndTheTypesExtension() async throws {
+    @Test func imageContentTakesTheSuggestedNameAndTheTypesExtension() async throws {
         let folder = TestFolder()
-        let provider = NSItemProvider(item: Data("png bytes".utf8) as NSData, typeIdentifier: UTType.png.identifier)
-        provider.suggestedName = "Screenshot 2026-11-20 at 2.35.00 PM"
+        let provider = contentProvider(Data("png bytes".utf8), type: .png, suggestedName: "Screenshot 2026-11-20 at 2.35.00 PM")
 
-        let item = try await folder.outbox.add(provider, for: 1)
+        let saved = try await folder.outbox.add([provider])
 
-        #expect(item.fileName == "Screenshot 2026-11-20 at 2.35.00 PM.png")
-        #expect(item.typeIdentifier == UTType.png.identifier)
-        #expect(try Data(contentsOf: item.fileURL) == Data("png bytes".utf8))
+        #expect(saved.map(\.lastPathComponent) == ["Screenshot 2026-11-20 at 2.35.00 PM.png"])
+        #expect(try text(of: try #require(saved.first)) == "png bytes")
     }
 
-    @Test func aFileURLIsCopiedUnderItsName() async throws {
+    @Test func aSuggestedNameWithTheTypesExtensionKeepsIt() async throws {
+        let folder = TestFolder()
+        let provider = contentProvider(Data("jpeg bytes".utf8), type: .jpeg, suggestedName: "IMG_0042.JPG")
+
+        let saved = try await folder.outbox.add([provider])
+
+        #expect(saved.map(\.lastPathComponent) == ["IMG_0042.JPG"])
+    }
+
+    @Test func aFileURLAloneIsCopiedUnderItsName() async throws {
         let folder = TestFolder()
         let source = try folder.sourceFile("report.txt", "All 214 tests passed.")
         let provider = NSItemProvider(object: source as NSURL)
 
-        let item = try await folder.outbox.add(provider, for: 1)
+        let saved = try await folder.outbox.add([provider])
 
-        #expect(item.fileName == "report.txt")
-        #expect(item.typeIdentifier == UTType.plainText.identifier)
-        #expect(try Data(contentsOf: item.fileURL) == Data("All 214 tests passed.".utf8))
+        #expect(saved.map(\.lastPathComponent) == ["report.txt"])
+        #expect(try text(of: try #require(saved.first)) == "All 214 tests passed.")
     }
 
     @Test func whenTheFileURLCannotBeReadItsContentIsCopiedUnderTheSuggestedName() async throws {
@@ -247,23 +112,149 @@ private actor SentLog {
         }
         provider.suggestedName = "logs.zip"
 
-        let item = try await folder.outbox.add(provider, for: 1)
+        let saved = try await folder.outbox.add([provider])
 
-        #expect(item.fileName == "logs.zip")
-        #expect(item.typeIdentifier == UTType.zip.identifier)
-        #expect(try Data(contentsOf: item.fileURL) == Data("zip bytes".utf8))
-        #expect(folder.outbox.items() == [item])
+        #expect(saved.map(\.lastPathComponent) == ["logs.zip"])
+        #expect(try text(of: try #require(saved.first)) == "zip bytes")
     }
 
-    @Test func aWebLinkIsNotAFile() async throws {
+    @Test func aSlashInTheSuggestedNameCannotLeaveTheFilesFolder() async throws {
+        let folder = TestFolder()
+        let provider = contentProvider(Data("a".utf8), type: .plainText, suggestedName: "../a/b.txt")
+
+        let saved = try await folder.outbox.add([provider])
+
+        let file = try #require(saved.first)
+        #expect(file.lastPathComponent == "..-a-b.txt")
+        #expect(folder.outbox.files() == [file])
+    }
+
+    @Test func severalAreSavedInTheOrderGivenAndListedSo() async throws {
+        let folder = TestFolder()
+        let providers = try ["one.txt", "two.zip", "three.pdf"].map { name in
+            try #require(NSItemProvider(contentsOf: try folder.sourceFile(name, name)))
+        }
+
+        let saved = try await folder.outbox.add(providers)
+
+        #expect(saved.map(\.lastPathComponent) == ["one.txt", "two.zip", "three.pdf"])
+        #expect(folder.outbox.files().map(\.lastPathComponent) == ["one.txt", "two.zip", "three.pdf"])
+    }
+
+    @Test func twoFilesWithTheSameNameAreBothKept() async throws {
+        let folder = TestFolder()
+        let first = try #require(NSItemProvider(contentsOf: try folder.sourceFile("image.png", "first")))
+        let second = try #require(NSItemProvider(contentsOf: try folder.sourceFile("image.png", "second")))
+
+        try await folder.outbox.add([first])
+        try await folder.outbox.add([second])
+
+        let files = folder.outbox.files()
+        #expect(files.map(\.lastPathComponent) == ["image.png", "image.png"])
+        #expect(try files.map(text) == ["first", "second"])
+    }
+
+    @Test func aWebLinkIsNotAFileAndNothingIsSaved() async throws {
         let folder = TestFolder()
         let link = try #require(URL(string: "https://example.com/report.txt"))
         let provider = NSItemProvider(object: link as NSURL)
 
-        await #expect(throws: ShareOutbox.AddFailure.self) {
-            try await folder.outbox.add(provider, for: 1)
+        #expect(!ShareOutbox.canAdd(provider))
+        await #expect(throws: ShareOutbox.AddFailure.noFile) {
+            try await folder.outbox.add([provider])
         }
 
-        #expect(folder.outbox.items().isEmpty)
+        #expect(folder.outbox.files().isEmpty)
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
+    @Test func aFolderIsTurnedDownAndNothingIsSaved() async throws {
+        let folder = TestFolder()
+        let shared = folder.url.appending(path: "reports", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+        let provider = NSItemProvider(object: shared as NSURL)
+
+        await #expect(throws: ShareOutbox.AddFailure.folder) {
+            try await folder.outbox.add([provider])
+        }
+
+        #expect(folder.outbox.files().isEmpty)
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
+    @Test func whenOneCannotBeSavedNoneIs() async throws {
+        let folder = TestFolder()
+        let file = try #require(NSItemProvider(contentsOf: try folder.sourceFile("notes.txt", "hello")))
+        let shared = folder.url.appending(path: "reports", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: shared, withIntermediateDirectories: true)
+
+        await #expect(throws: ShareOutbox.AddFailure.folder) {
+            try await folder.outbox.add([file, NSItemProvider(object: shared as NSURL)])
+        }
+
+        #expect(folder.outbox.files().isEmpty)
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
+    @Test func filesAndContentCanBeAddedButNotALinkAlone() throws {
+        let folder = TestFolder()
+        let file = try #require(NSItemProvider(contentsOf: try folder.sourceFile("notes.txt", "hello")))
+
+        #expect(ShareOutbox.canAdd(file))
+        #expect(ShareOutbox.canAdd(contentProvider(Data(), type: .heic, suggestedName: nil)))
+        #expect(ShareOutbox.canAdd(NSItemProvider(object: try folder.sourceFile("a.zip", "a") as NSURL)))
+    }
+}
+
+/// Winston's side: what it finds, and what it removes.
+@Suite struct ShareOutboxFilesTests {
+    @Test func beforeAnythingIsSharedThereIsNothing() {
+        #expect(TestFolder().outbox.files().isEmpty)
+    }
+
+    @Test func removingAFileRemovesItsFolder() async throws {
+        let folder = TestFolder()
+        let providers = try ["one.txt", "two.txt"].map { name in
+            try #require(NSItemProvider(contentsOf: try folder.sourceFile(name, name)))
+        }
+        let saved = try await folder.outbox.add(providers)
+
+        folder.outbox.remove([saved[0]])
+
+        #expect(folder.outbox.files() == [saved[1]])
+        #expect(!exists(saved[0].deletingLastPathComponent()))
+        #expect(folder.contents(of: "Outbox").count == 1)
+    }
+
+    @Test func leftoversInStagingFromBeforeTheCutoffGoAndLaterOnesStay() async throws {
+        let folder = TestFolder()
+        let staging = folder.outbox.folder.appending(path: "Staging", directoryHint: .isDirectory)
+        // As an interrupted save leaves it: a batch folder with a half-copied file.
+        let old = staging.appending(path: "old/item", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data("half".utf8).write(to: old.appending(path: "big.zip"))
+        let cutoff = Date()
+        let new = staging.appending(path: "new/item", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: new, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.creationDate: cutoff.addingTimeInterval(-60)],
+            ofItemAtPath: staging.appending(path: "old").path(percentEncoded: false)
+        )
+        try FileManager.default.setAttributes(
+            [.creationDate: cutoff.addingTimeInterval(60)],
+            ofItemAtPath: staging.appending(path: "new").path(percentEncoded: false)
+        )
+        let saved = try await folder.outbox.add([try #require(NSItemProvider(contentsOf: try folder.sourceFile("a.txt", "a")))])
+
+        let removed = await folder.outbox.removeLeftovers(before: cutoff)
+
+        #expect(removed == 1)
+        #expect(folder.contents(of: "Staging") == ["new"])
+        // A saved file isn't a leftover.
+        #expect(folder.outbox.files() == saved)
+    }
+
+    @Test func withNoStagingThereAreNoLeftovers() async {
+        #expect(await TestFolder().outbox.removeLeftovers(before: Date()) == 0)
     }
 }

@@ -91,6 +91,10 @@ public final class AppModel {
     /// Where Winston keeps its working copies of opened files, in the temporary directory: a folder
     /// of their own, which each launch clears of what an earlier run left.
     @ObservationIgnored private let openedFileFolder: URL
+    /// Where the iOS share extension saves files for Winston, in the App Group container (see
+    /// `openSharedFiles()`). Nil on the Mac, which has no share extension, in a build not signed
+    /// with the App Group, and in tests that don't pass one.
+    @ObservationIgnored private let shareOutbox: ShareOutbox?
     /// Gives each opened file its place in the order they were opened.
     @ObservationIgnored private var nextOpenedFileSequence = 0
     /// The copies being made, by file (see `waitForOpenedFileCopies()`).
@@ -196,12 +200,6 @@ public final class AppModel {
     private let link: TelegramLink?
     /// Suggests phonemes for an IPA pronunciation's word in settings.
     private let pronunciationSuggester: any PronunciationSuggester
-    /// The agent list and the outbox shared with the iOS share extension, or nil: on the Mac, which
-    /// has no share extension, in a build not signed with the App Group, and in tests that don't
-    /// pass one.
-    @ObservationIgnored private let shareOutbox: ShareOutbox?
-    /// True while the outbox's files are being sent, so a second activation doesn't send them again.
-    @ObservationIgnored private var isSendingSharedFiles = false
     /// Where the settings persist.
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
@@ -390,7 +388,7 @@ public final class AppModel {
         ])
         isAppActive = true
         sendOnlineStatus()
-        Task { await sendSharedFiles() }
+        openSharedFiles()
     }
 
     /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
@@ -592,9 +590,6 @@ public final class AppModel {
         isLogOutRequested = true
         do {
             try await link?.logOut()
-            // Logged out, there are no agents to share to. Not on TDLib's logging-out state, which
-            // it also reports while closing as the app quits.
-            saveShareAgents([])
         } catch {
             isLogOutRequested = false
             Self.log.error("log out failed", error.logContext())
@@ -764,9 +759,6 @@ public final class AppModel {
             Self.log.info("bot chats loaded", ["count": loadedChats.count])
             chats = loadedChats
             chatsLoaded = true
-            saveShareAgents(chats)
-            // Not waiting on it: the histories load meanwhile.
-            Task { await sendSharedFiles() }
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
@@ -957,13 +949,7 @@ public final class AppModel {
     /// `loadData` loads the picked photo's data; in the app it is `PhotosPickerItem.loadTransferable`, which
     /// returns nil when the photo can't be read. Returns false and sets `errorMessage` on failure.
     public func sendPhoto(caption: String, loadData: () async throws -> Data?) async -> Bool {
-        guard let chat = currentChat else { return false }
-        return await sendPhoto(caption: caption, to: chat, loadData: loadData)
-    }
-
-    /// The same, to `chat` whichever chat is shown: for a file shared to an agent from the share sheet.
-    private func sendPhoto(caption: String, to chat: BotChat, loadData: () async throws -> Data?) async -> Bool {
-        guard let link else { return false }
+        guard let link, let chat = currentChat else { return false }
         isSendingAttachment = true
         defer { isSendingAttachment = false }
         do {
@@ -993,13 +979,7 @@ public final class AppModel {
     /// so the caption, was sent: true when all were, and also when a later one was turned down.
     public func sendDocuments(caption: String, fileURLs: [URL]) async -> Bool {
         // The chat is the one shown now, even if Adam switches chats while the files are copied.
-        guard let chat = currentChat else { return false }
-        return await sendDocuments(caption: caption, fileURLs: fileURLs, to: chat)
-    }
-
-    /// The same, to `chat` whichever chat is shown: for a file shared to an agent from the share sheet.
-    private func sendDocuments(caption: String, fileURLs: [URL], to chat: BotChat) async -> Bool {
-        guard let link, !fileURLs.isEmpty else { return false }
+        guard let link, let chat = currentChat, !fileURLs.isEmpty else { return false }
         isSendingAttachment = true
         defer { isSendingAttachment = false }
         var copies: [URL] = []
@@ -1056,12 +1036,42 @@ public final class AppModel {
     /// the agent sheet, and Winston copies it off the main actor (see `makeCopy(of:)`). The chat
     /// shown stays the same.
     public func openFile(at url: URL) {
+        openFile(at: url, sharedFolder: nil)
+    }
+
+    /// Opens the files the iOS share extension saved for Winston in the App Group (see
+    /// `ShareOutbox`), each as `openFile(at:)` opens one from Open in: it takes its place in the
+    /// agent sheet, which asks which agent it goes to. Each activation does, the one at launch
+    /// included: the extension can't open Winston. A file already opened, still being copied or
+    /// waiting for Try Again, isn't opened again. Once Winston's copy is made, or on Cancel, the
+    /// extension's goes. Also removes what an interrupted save left, an hour old or more. Package
+    /// for the tests, which call it as an activation does.
+    package func openSharedFiles() {
+        guard let shareOutbox else { return }
+        let waiting = shareOutbox.files().filter { file in
+            !openedFiles.contains { $0.source == file }
+        }
+        if !waiting.isEmpty {
+            Self.log.notice("shared files found", ["count": waiting.count])
+        }
+        for file in waiting {
+            openFile(at: file, sharedFolder: file.deletingLastPathComponent())
+        }
+        let cutoff = Date(timeIntervalSinceNow: -60 * 60)
+        Task {
+            await shareOutbox.removeLeftovers(before: cutoff)
+        }
+    }
+
+    /// `openFile(at:)`, for a file in `sharedFolder` if the share extension saved it.
+    private func openFile(at url: URL, sharedFolder: URL?) {
         guard url.isFileURL else {
             Self.log.notice("opened URL ignored: not a file", ["scheme": url.scheme ?? "none"])
             return
         }
         Self.log.notice("file opened", [
             "type": Self.logType(of: url),
+            "shared": sharedFolder != nil,
             "authState": authState.logName,
             "chatsLoaded": chatsLoaded,
             "waiting": openedFiles.count,
@@ -1073,7 +1083,8 @@ public final class AppModel {
             name: url.lastPathComponent,
             sequence: nextOpenedFileSequence,
             source: url,
-            inboxes: openedFileInboxes
+            inboxes: openedFileInboxes,
+            sharedFolder: sharedFolder
         )
         nextOpenedFileSequence += 1
         openedFiles.append(file)
@@ -1114,6 +1125,13 @@ public final class AppModel {
             case .success(let copied):
                 openedFiles[index].copy = copied.copy
                 openedFiles[index].isPhoto = copied.isPhoto
+                if let shared = openedFiles[index].sharedFolder {
+                    // Winston's copy is made, so the share extension's is done with, and the next
+                    // activation won't open it again. If Winston ends before the file is sent, it is
+                    // gone, as a file from Open in is.
+                    OpenedFile.remove(shared)
+                    openedFiles[index].sharedFolder = nil
+                }
                 Self.log.notice("opened file copied", ["as": openedFiles[index].logKind, "waiting": openedFiles.count])
             case .failure(let error):
                 // Codes only: a file error's description names the file.
@@ -1330,62 +1348,6 @@ public final class AppModel {
     private static func logType(of url: URL) -> String {
         guard let type = UTType(filenameExtension: url.pathExtension), !type.isDynamic else { return "unknown" }
         return type.identifier
-    }
-
-    // MARK: - Shared files
-
-    /// Saves `chats` as the agents the iOS share extension lists. After each load of the bot chats,
-    /// and as none after a logout.
-    private func saveShareAgents(_ chats: [BotChat]) {
-        guard let shareOutbox else { return }
-        do {
-            try shareOutbox.saveAgents(chats.map { ShareAgent(id: $0.id.rawValue, name: $0.title) })
-        } catch {
-            // Codes only: a file error's description holds the container's path.
-            Self.log.error("saving share agents failed", error.logCodes())
-        }
-    }
-
-    /// Sends the files shared to agents from the iOS share sheet. The share extension can't run
-    /// TDLib, so they wait in the outbox until Winston is active, logged in and has its bot chats:
-    /// each activation and each load of the bot chats sends them. Each goes out as the + button
-    /// sends it, an image as a photo and anything else as a document, then leaves the outbox
-    /// whether it was sent or not, as a failure shows its error. Package for the tests, which call
-    /// it in place of an activation.
-    package func sendSharedFiles() async {
-        guard let shareOutbox, authState == .ready, chatsLoaded, !isSendingSharedFiles else { return }
-        isSendingSharedFiles = true
-        defer { isSendingSharedFiles = false }
-        await shareOutbox.sendAll { item in
-            await self.sendSharedFile(item)
-        }
-    }
-
-    private func sendSharedFile(_ item: OutboxItem) async {
-        guard let chat = chats.first(where: { $0.id.rawValue == item.agentID }) else {
-            Self.log.error("shared file not sent: its agent isn't a bot chat", ["type": item.typeIdentifier])
-            errorMessage = "Couldn't send a shared file: its agent isn't in Winston anymore."
-            return
-        }
-        let asPhoto = PhotoFiles.canConvert(typeIdentifier: item.typeIdentifier)
-        let sent = if asPhoto {
-            await sendPhoto(caption: "", to: chat) {
-                try await Self.contents(of: item.fileURL)
-            }
-        } else {
-            await sendDocuments(caption: "", fileURLs: [item.fileURL], to: chat)
-        }
-        Self.log.notice("shared file handed to telegram", [
-            "type": item.typeIdentifier,
-            "as": asPhoto ? "photo" : "document",
-            "sent": sent,
-        ])
-    }
-
-    /// Reads a file off the main actor.
-    @concurrent
-    private static func contents(of url: URL) async throws -> Data {
-        try Data(contentsOf: url)
     }
 
     /// Adds Adam's 👍 to `message`, or removes it. An added 👍 becomes `addedThumbsUp` once it shows.
