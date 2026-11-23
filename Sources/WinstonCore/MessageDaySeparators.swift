@@ -2,9 +2,10 @@ import Foundation
 import TelegramLink
 
 /// The headers in the chat where a new day starts, as in Messages: one above the first message
-/// shown, and one above each message on another day than the message before it. Each says the
-/// day in the given calendar, time zone and locale (the app passes the user's): "Today",
-/// "Yesterday", the weekday for the five days before those, and the date otherwise.
+/// with a date, and one above each message on another day than the last message with a date
+/// before it (see `compute`). Each says the day in the given calendar, time zone and locale (the
+/// app passes the user's): "Today", "Yesterday", the weekday for the five days before those, and
+/// the date otherwise.
 public enum MessageDaySeparators {
     /// One header: the day it shows, and what VoiceOver reads for it.
     public struct Separator: Equatable, Sendable {

@@ -15,8 +15,9 @@ struct MessageDaySeparatorsTests {
     private static let german = Locale(identifier: "de_DE")
 
     /// The date's header style, as the code builds it.
-    private static func style(_ locale: Locale = usEnglish, _ timeZone: TimeZone = chicago) -> Date.FormatStyle {
-        var calendar = Calendar(identifier: .gregorian)
+    private static func style(_ locale: Locale = usEnglish, _ timeZone: TimeZone = chicago,
+                              calendar: Calendar = Calendar(identifier: .gregorian)) -> Date.FormatStyle {
+        var calendar = calendar
         calendar.timeZone = timeZone
         calendar.locale = locale
         return Date.FormatStyle(locale: locale, calendar: calendar, timeZone: timeZone,
@@ -269,6 +270,25 @@ struct MessageDaySeparatorsTests {
             Self.message(4, at: Self.date(2027, 1, 2, 9, 0)),
         ]
         #expect(Self.texts(messages, now: now) == [1: "Sun, Dec 20, 2026", 2: "Thursday", 3: "Yesterday", 4: "Today"])
+    }
+
+    @Test func theYearIsTheCalendars() {
+        // The Persian year 1405 began on Mar 21 2026 (Nowruz), so Mar 10 is in 1404 and Mar 25 in
+        // 1405, both before Apr 1 2026 in the same Gregorian year.
+        let persian = Calendar(identifier: .persian)
+        let style = Self.style(calendar: persian)
+        let now = Self.date(2026, 4, 1, 12, 0)
+        func header(_ date: Date) -> MessageDaySeparators.Separator {
+            MessageDaySeparators.separator(forDayOf: date, now: now, calendar: persian,
+                                           timeZone: Self.chicago, locale: Self.usEnglish)
+        }
+        let lastYear = Self.date(2026, 3, 10, 12, 0)
+        #expect(header(lastYear).text == lastYear.formatted(style.weekday(.abbreviated).month(.abbreviated).day().year()))
+        #expect(header(lastYear).text.contains("1404"))
+        #expect(header(lastYear).accessibilityLabel.contains("1404"))
+        let thisYear = Self.date(2026, 3, 25, 12, 0)
+        #expect(header(thisYear).text == thisYear.formatted(style.weekday(.abbreviated).month(.abbreviated).day()))
+        #expect(!header(thisYear).text.contains("1405"))
     }
 
     @Test func aDayAfterTodayIsItsDate() {
