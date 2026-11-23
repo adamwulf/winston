@@ -1,0 +1,15 @@
+// Build settings for the Winston app target alone, on top of those it shares with its iOS
+// share extension.
+
+#include "Shared.xcconfig"
+
+// With Info.plist's document types. NO on iOS: iOS hands Winston a copy of a file opened in it,
+// in one of its inboxes, which Winston removes once the file is sent or cancelled, rather than
+// the file in place. App Store Connect
+// warns about an iOS app with document types that leaves this out (ITMS-90737). YES on the Mac,
+// which hands over the file itself: the Mac build refuses NO, and without a Mac value of its own
+// it fails the same way, as of Xcode 27.2. Not in Shared.xcconfig: the share extension has no
+// document types, and would get the key too.
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=iphoneos*] = NO
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=iphonesimulator*] = NO
+INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=macosx*] = YES

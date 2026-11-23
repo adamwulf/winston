@@ -8,9 +8,13 @@
 		<dict>
 			<!-- Photos and screenshots from Photos and the screenshot editor, and files from
 			     Files, Mail and the like, mixed, up to 10 of each: Winston's Send to Agent sheet
-			     takes several at once. Not a web page or text alone. -->
+			     takes several at once. Not a web page or text alone. Version 2 matches an item
+			     Winston takes one of the types of, not only one whose types it takes all of; the
+			     extension leaves out what it can't send. -->
 			<key>NSExtensionActivationRule</key>
 			<dict>
+				<key>NSExtensionActivationDictionaryVersion</key>
+				<integer>2</integer>
 				<key>NSExtensionActivationSupportsFileWithMaxCount</key>
 				<integer>10</integer>
 				<key>NSExtensionActivationSupportsImageWithMaxCount</key>
