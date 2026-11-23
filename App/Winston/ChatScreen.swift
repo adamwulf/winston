@@ -1,6 +1,7 @@
 import SwiftUI
 import TelegramLink
 import WinstonCore
+import WinstonLogging
 
 /// The one chat screen: a picker for the bot chats, the message list, and the bottom bar.
 struct ChatScreen: View {
@@ -181,12 +182,18 @@ struct ChatScreen: View {
 }
 
 #if os(iOS)
-/// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, until it is
-/// active again, so the app switcher shows the bottom bar where it was. In the simulator, on the way
-/// to the background, UIKit reported the keyboard at another height just before the snapshot, which
-/// moved the bar; on an iPhone the bar showed hidden behind the keyboard, most likely for the same
-/// reason. See `BottomInsetHold`.
+/// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, so the app
+/// switcher shows the bottom bar where it was, until the app is active again with the system's inset
+/// back to the held one, or a second after it is active if that doesn't happen. In the simulator, on
+/// the way to the background, UIKit reported the keyboard at another height just before the
+/// snapshot, which moved the bar; on an iPhone the bar showed hidden behind the keyboard, most
+/// likely for the same reason. See `BottomInsetHold`.
 private struct HoldsBottomInsetWhileInactive: ViewModifier {
+    private static let log = Logger(label: "app.layout")
+    /// How long to wait, once active, for the keyboard to come back before letting go anyway, in
+    /// case it doesn't.
+    private static let keyboardReturnTimeout = Duration.seconds(1)
+
     @Environment(\.scenePhase) private var scenePhase
     @State private var hold = BottomInsetHold()
 
@@ -201,8 +208,35 @@ private struct HoldsBottomInsetWhileInactive: ViewModifier {
                 hold.measured(inset)
             }
             .onChange(of: scenePhase, initial: true) {
+                // Whether the keyboard was already back as the app became active.
+                if scenePhase == .active, let held = hold.heldInset {
+                    Self.log.info("active with the bottom inset held", ["held": inset(held), "now": inset(hold.latestInset)])
+                }
                 hold.sceneIsActive(scenePhase == .active)
             }
+            .task(id: hold.isWaitingToLetGo) {
+                guard hold.isWaitingToLetGo else { return }
+                do {
+                    try await Task.sleep(for: Self.keyboardReturnTimeout)
+                } catch {
+                    return
+                }
+                Self.log.info("bottom inset not back in time", ["held": inset(hold.heldInset), "now": inset(hold.latestInset)])
+                hold.letGo()
+            }
+            // With the lifecycle log's scene phases, these show when the keyboard came back.
+            .onChange(of: hold.heldInset) { old, new in
+                if let new {
+                    Self.log.info("bottom inset held", ["inset": inset(new)])
+                } else {
+                    Self.log.info("bottom inset let go", ["held": inset(old), "now": inset(hold.latestInset)])
+                }
+            }
+    }
+
+    /// An inset for the log, to the tenth of a point.
+    private func inset(_ inset: CGFloat?) -> String {
+        inset.map { Double($0).formatted(.number.precision(.fractionLength(1))) } ?? "none"
     }
 }
 #endif
