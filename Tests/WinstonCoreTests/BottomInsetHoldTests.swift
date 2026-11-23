@@ -4,7 +4,8 @@ import WinstonCore
 
 /// Holding the chat's bottom inset while the app isn't active, so the app switcher's snapshot shows
 /// the bottom bar above the keyboard. The insets are the iOS 27.2 simulator's: a 328-point keyboard,
-/// reported as 352 points for the snapshot, then gone (34, the home indicator's).
+/// reported as 352 points on the way to the background, just before the snapshot, then gone (34,
+/// the home indicator's).
 @Suite(.timeLimit(.minutes(1)))
 struct BottomInsetHoldTests {
     /// Active, with the keyboard up.
@@ -33,7 +34,7 @@ struct BottomInsetHoldTests {
         var hold = activeWithKeyboard()
         hold.sceneIsActive(false)
 
-        // The snapshot's keyboard, measured before the background's callback, then none.
+        // The keyboard reported at 352 points, measured before the background's callback, then none.
         hold.measured(352)
         hold.sceneIsActive(false)
         hold.measured(34)

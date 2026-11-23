@@ -182,9 +182,10 @@ struct ChatScreen: View {
 
 #if os(iOS)
 /// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, until it is
-/// active again, so the app switcher shows the bottom bar where it was. On the way to the
-/// background, UIKit can report the keyboard at another height just before the snapshot, which
-/// moved the bar: on an iPhone it showed hidden behind the keyboard. See `BottomInsetHold`.
+/// active again, so the app switcher shows the bottom bar where it was. In the simulator, on the way
+/// to the background, UIKit reported the keyboard at another height just before the snapshot, which
+/// moved the bar; on an iPhone the bar showed hidden behind the keyboard, most likely for the same
+/// reason. See `BottomInsetHold`.
 private struct HoldsBottomInsetWhileInactive: ViewModifier {
     @Environment(\.scenePhase) private var scenePhase
     @State private var hold = BottomInsetHold()
