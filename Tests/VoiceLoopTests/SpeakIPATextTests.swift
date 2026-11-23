@@ -268,6 +268,11 @@ import Testing
         ]), symbols: symbols)
         #expect(fourWords.parts[2] == .phonemes(word: "state of the art", phonemes: "stˌAtəvðiˈɑɹt"))
         #expect(fourWords.wordsWithIPA == 6)
+        // Each word's own slashes part them, as spaces do.
+        let slashed = SpeakIPAText.speech(of: "Read this now.", transcribed: words([
+            ("Read this", "/rid/ /ðɪs/"), ("now", "naʊ"),
+        ]), symbols: symbols)
+        #expect(slashed.parts.prefix(3) == [.phonemes(word: "Read", phonemes: "ɹid"), .text(" "), .phonemes(word: "this", phonemes: "ðɪs")])
         // Of two readings, the first, before it is split word by word.
         let readings = SpeakIPAText.speech(of: "A data base.", transcribed: words([
             ("A", "ə"), ("database", "ˈdeɪtəbeɪs, ˈdætəbeɪs"),
@@ -315,6 +320,24 @@ import Testing
         )
         #expect(twoLeftOut.parts[4] == .phonemes(word: "like", phonemes: "lIk"))
         #expect(twoLeftOut.wordsWithoutIPA == ["really", "good"])
+    }
+
+    @Test func anotherWordInAWordsPlaceDoesntSendTheMatchToALaterLookAlike() {
+        // "A" for "One": the words after are in step at once, so the later "a" isn't taken.
+        let speech = SpeakIPAText.speech(
+            of: "One step at a time.",
+            transcribed: words([("A", "ə"), ("step", "stɛp"), ("at", "æt"), ("a", "ə"), ("time", "taɪm")]),
+            symbols: symbols
+        )
+        #expect(speech.wordsWithoutIPA == ["One"])
+        #expect(speech.wordsWithIPA == 4)
+        let file = SpeakIPAText.speech(
+            of: "Select a file in a folder.",
+            transcribed: words([("Select", "sɪˈlɛkt"), ("the", "ðə"), ("file", "faɪl"), ("in", "ɪn"), ("a", "ə"), ("folder", "ˈfoʊldɚ")]),
+            symbols: symbols
+        )
+        #expect(file.wordsWithoutIPA == ["a"])
+        #expect(file.parts[4] == .phonemes(word: "file", phonemes: "fIl"))
     }
 
     @Test func aWordLeftOutIsNotMatchedToALaterWordSpelledTheSame() {
@@ -382,6 +405,9 @@ import Testing
         #expect(SpeakIPAText.firstReading(of: "həˈloʊ,") == "həˈloʊ,")
         #expect(SpeakIPAText.firstReading(of: "/həˈloʊ/,") == "həˈloʊ,")
         #expect(SpeakIPAText.firstReading(of: "“/həˈloʊ/”") == "“həˈloʊ”")
+        #expect(SpeakIPAText.firstReading(of: "“/həˈloʊ/,”") == "“həˈloʊ,”")
+        // No reading at all: its punctuation, to be recorded as left out.
+        #expect(SpeakIPAText.firstReading(of: "—") == "—")
         #expect(SpeakIPAText.firstReading(of: "/ˈiːðər/, /ˈaɪðər/") == "ˈiːðər")
         // A space between syllables of one reading stays.
         #expect(SpeakIPAText.firstReading(of: "ˈwɪn stən") == "ˈwɪn stən")

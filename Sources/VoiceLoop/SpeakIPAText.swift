@@ -326,14 +326,15 @@ public enum SpeakIPAText {
     /// readings: one after the only reading stays, inside its slashes or not ("həˈloʊ," or
     /// "/həˈloʊ/,"), as do quotes around it, for `ClosestPhonemes` to leave out, and record.
     static func firstReading(of ipa: String) -> String {
-        func nonBlank(_ pieces: [Substring]) -> [Substring] {
-            pieces.filter { !$0.allSatisfy(\.isWhitespace) }
+        // Whether `piece` has more than punctuation and spaces: a reading.
+        func isReading(_ piece: Substring) -> Bool {
+            !piece.allSatisfy { $0.isPunctuation || $0.isWhitespace }
         }
-        let pieces = nonBlank(ipa.split { "/[]".contains($0) })
-        let readings = pieces.filter { !$0.allSatisfy { $0.isPunctuation || $0.isWhitespace } }
-        // Of one reading, punctuation around it ("“/həˈloʊ/”") stays, to be recorded.
-        var reading = readings.count == 1 ? Substring(pieces.joined()) : readings.first ?? ""
-        let listed = nonBlank(reading.split { ",;|".contains($0) })
+        let pieces = ipa.split { "/[]".contains($0) }
+        let readings = pieces.filter(isReading)
+        // Of one reading, or none, the punctuation around it ("“/həˈloʊ/”") stays, to be recorded.
+        var reading = readings.count <= 1 ? Substring(pieces.joined()) : readings[0]
+        let listed = reading.split { ",;|".contains($0) }.filter(isReading)
         if listed.count > 1 {
             reading = listed[0]
         }
@@ -421,10 +422,14 @@ public enum SpeakIPAText {
                 continue
             }
             // The model joined words, as many as it takes ("state-of-the-art" for "state of the
-            // art"): each gets a word of its first reading, if it has as many; otherwise its IPA
-            // is for the words together.
+            // art"): each gets a word of its IPA, if it has as many; otherwise its IPA is for the
+            // words together. Spaces part its words ("/rid/ /ðɪs/"); a comma, semicolon, bar or
+            // "or" parts readings of them all, of which the first is taken.
             if let count = joinedCount(i, j) {
-                let ipaWords = firstReading(of: transcribed[j].ipa).split(whereSeparator: \.isWhitespace)
+                let entry = transcribed[j].ipa
+                let listsReadings = entry.contains { ",;|".contains($0) }
+                    || entry.split(whereSeparator: \.isWhitespace).contains("or")
+                let ipaWords = (listsReadings ? firstReading(of: entry) : entry).split(whereSeparator: \.isWhitespace)
                 if ipaWords.count == count {
                     for (offset, word) in ipaWords.enumerated() {
                         ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: String(word))]
@@ -437,9 +442,14 @@ public enum SpeakIPAText {
                 j += 1
                 continue
             }
-            // The model added words, or left some out: whichever gets the two back in step most
-            // surely, then soonest.
+            // The model added words, left some out, or wrote another word in this one's place:
+            // whichever gets the two back in step most surely, then soonest. Another word in its
+            // place is weighed first, so it wins a tie: "A step at a time" for "One step at a
+            // time" goes on from "step", not from the later "a".
             var best: (confidence: Int, skipped: Int, i: Int, j: Int)?
+            if i + 1 < words.count, j + 1 < transcribed.count, confidence(i + 1, j + 1) > 0 {
+                best = (confidence(i + 1, j + 1), 1, i + 1, j + 1)
+            }
             for k in (j + 1)..<min(j + 1 + lookahead, transcribed.count) {
                 let found = (confidence(i, k), k - j, i, k)
                 if found.0 > 0, best.map({ found.0 > $0.confidence || (found.0 == $0.confidence && found.1 < $0.skipped) }) ?? true {
