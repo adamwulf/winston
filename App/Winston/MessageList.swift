@@ -74,9 +74,7 @@ struct MessageList: View {
             .scrollDismissesKeyboard(.interactively)
             // Scrolled up, a button back down to the newest message. Inside the chat's `.id` below, so
             // each chat starts without it.
-            .modifier(ShowsScrollToNewestButton { animated in
-                scrollToNewest(with: proxy, animated: animated)
-            })
+            .modifier(ShowsScrollToNewestButton())
             .onChange(of: model.currentMessages.last?.id) { oldID, newestID in
                 guard newestID != nil else { return }
                 // The list appears before the history loads, so going from no messages to some is usually the
@@ -164,11 +162,14 @@ private struct ShowsScrollToNewestButton: ViewModifier {
     @State private var visibility = ScrollToBottomVisibility()
     /// Where the list last said it was, which `visibility` takes once the update that said so is over.
     @State private var reportedZone = ScrollToBottomVisibility.Zone.nearBottom
-    /// Scrolls to the newest message, animated or not.
-    let scrollToNewest: (_ animated: Bool) -> Void
+    /// What the button sets to scroll the list to its bottom. Unlike a `ScrollViewProxy`'s
+    /// `scrollTo`, which the list ignores while it still glides after a flick, this cuts the glide
+    /// short and goes.
+    @State private var position = ScrollPosition()
 
     func body(content: Content) -> some View {
         content
+            .scrollPosition($position)
             .onScrollGeometryChange(for: ScrollToBottomVisibility.Zone.self) { geometry in
                 ScrollToBottomVisibility.Zone(distanceFromBottom: ScrollToBottomVisibility.distanceFromBottom(
                     contentHeight: geometry.contentSize.height,
@@ -204,7 +205,9 @@ private struct ShowsScrollToNewestButton: ViewModifier {
                             visibility.returnToNewest()
                         }
                         // With Reduce Motion, straight there rather than past every screen between.
-                        scrollToNewest(!reduceMotion)
+                        withAnimation(reduceMotion ? nil : .default) {
+                            position.scrollTo(edge: .bottom)
+                        }
                     }
                     // It covers the messages under it, so it stops growing at the larger
                     // accessibility text sizes. Here, outside it, for its circle's size to stop too.
