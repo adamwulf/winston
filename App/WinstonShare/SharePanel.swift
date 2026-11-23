@@ -7,7 +7,7 @@ final class ShareState {
     enum Phase: Equatable {
         /// Copying this many files into the App Group for Winston.
         case saving(count: Int)
-        /// Saved this many: Winston asks for the agent when it's next opened.
+        /// Saved this many: Done opens Winston, which asks for the agent.
         case saved(count: Int)
         /// Couldn't save them, and why. Nothing was saved.
         case failed(String)
@@ -29,7 +29,7 @@ final class ShareState {
     var announcement: String? {
         switch phase {
         case .saving: nil
-        case .saved(let count): "\(Self.readyTitle(count)). \(Self.openWinston(count))"
+        case .saved(let count): "\(Self.readyTitle(count)). \(Self.tapDone(count))"
         case .failed(let message), .unavailable(let message): message
         }
     }
@@ -38,15 +38,15 @@ final class ShareState {
         count == 1 ? "Ready to Send" : "\(count) Files Ready to Send"
     }
 
-    static func openWinston(_ count: Int) -> String {
-        "Tap Done, then open Winston to choose the agent \(count == 1 ? "it goes" : "they go") to."
+    static func tapDone(_ count: Int) -> String {
+        "Tap Done to open Winston and choose the agent \(count == 1 ? "it goes" : "they go") to."
     }
 }
 
-/// The share extension's sheet. It copies what was shared at once, then says to tap Done and open
-/// Winston, whose Send to Agent sheet asks which agent it goes to, as for a file from Open in.
-/// Done hands the files to Winston and closes; Cancel, at any point, removes them, and Winston
-/// never sees them.
+/// The share extension's sheet. It copies what was shared at once, then says to tap Done. Done
+/// hands the files to Winston and opens it, and its Send to Agent sheet asks which agent they go
+/// to, as for a file from Open in. Cancel, at any point, removes them, and Winston never sees
+/// them.
 struct SharePanel: View {
     let state: ShareState
     let done: () -> Void
@@ -85,7 +85,7 @@ struct SharePanel: View {
             ContentUnavailableView {
                 Label(ShareState.readyTitle(count), systemImage: "paperplane")
             } description: {
-                Text(ShareState.openWinston(count))
+                Text(ShareState.tapDone(count))
             }
         case .failed(let message):
             ContentUnavailableView {

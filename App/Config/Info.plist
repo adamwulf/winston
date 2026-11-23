@@ -27,6 +27,19 @@
 			</array>
 		</dict>
 	</array>
+	<!-- The share extension opens Winston with this scheme once Done has saved the files
+	     (ShareOutbox.urlScheme, which must match). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.milestonemade.winston</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>com.milestonemade.winston</string>
+			</array>
+		</dict>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>TelegramAPIID</key>

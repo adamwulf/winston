@@ -7,10 +7,9 @@ import UIKit
 /// `Config/WinstonShare-Info.plist`), over the app Adam shared from: Photos, the screenshot
 /// editor, Files, Mail.
 ///
-/// The extension can't run TDLib, nor open Winston, so it saves the shared files in the App
-/// Group (`ShareOutbox`) and says to open Winston. Winston opens each the next time it's active,
-/// as a file from Open in (`AppModel.openSharedFiles()`), and its Send to Agent sheet asks which
-/// agent it goes to.
+/// The extension can't run TDLib, so it saves the shared files in the App Group (`ShareOutbox`),
+/// and Done opens Winston. Winston opens each as a file from Open in
+/// (`AppModel.openSharedFiles()`), and its Send to Agent sheet asks which agent it goes to.
 final class ShareViewController: UIViewController {
     private static let log = Logger(subsystem: "com.milestonemade.winston.share", category: "share")
 
@@ -97,8 +96,8 @@ final class ShareViewController: UIViewController {
         log.error("\(step, privacy: .public) shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
     }
 
-    /// Hands the copied files to Winston, then closes. If they're gone, as when the sheet was
-    /// left open for a day and Winston removed them as leftovers, it says to share again: the
+    /// Hands the copied files to Winston, opens it, and closes. If they're gone, as when the sheet
+    /// was left open for a day and Winston removed them as leftovers, it says to share again: the
     /// originals are still where they were shared from.
     private func done() {
         guard let outbox, let staged else { return }
@@ -113,7 +112,28 @@ final class ShareViewController: UIViewController {
         }
         self.staged = nil
         Self.log.notice("share done")
+        openWinston()
         extensionContext?.completeRequest(returningItems: nil)
+    }
+
+    /// Opens Winston, whose Send to Agent sheet then asks for the agent. `NSExtensionContext`'s
+    /// `open(_:completionHandler:)` opens an app only from a Today or iMessage extension, so this
+    /// asks the extension's `UIApplication`, found up the responder chain. Found before the
+    /// request completes, while the view is still in its window. If Winston doesn't open, the
+    /// files wait in the outbox until Adam next opens it.
+    private func openWinston() {
+        guard let url = ShareOutbox.openURL else { return }
+        var responder: UIResponder? = self
+        while let next = responder {
+            if let application = next as? UIApplication {
+                application.open(url, options: [:]) { opened in
+                    Self.log.notice("opening Winston: \(opened ? "opened" : "failed", privacy: .public)")
+                }
+                return
+            }
+            responder = next.next
+        }
+        Self.log.error("opening Winston failed: no application in the responder chain")
     }
 
     /// Removes the copied files, or stops the copy under way, which removes what it copied, and

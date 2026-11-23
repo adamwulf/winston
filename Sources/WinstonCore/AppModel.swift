@@ -1041,14 +1041,28 @@ public final class AppModel {
         openFile(at: url, sharedFolder: nil)
     }
 
+    /// A URL Winston was handed (`onOpenURL`): the share extension's (`ShareOutbox.openURL`),
+    /// which opens Winston once Done has saved files for it, or a file from another app, which
+    /// goes to `openFile(at:)`. The extension's scans the outbox here too, not only on
+    /// activation: Winston may be active already, beside the app shared from on an iPad.
+    public func open(_ url: URL) {
+        if ShareOutbox.isWinstonURL(url) {
+            Self.log.notice("opened by the share extension")
+            openSharedFiles()
+        } else {
+            openFile(at: url)
+        }
+    }
+
     /// Opens the files the iOS share extension saved for Winston in the App Group (see
     /// `ShareOutbox`), each as `openFile(at:)` opens one from Open in: it takes its place in the
     /// agent sheet, which asks which agent it goes to. Each activation does, the one at launch
-    /// included: the extension can't open Winston. A file already opened, still being copied or
-    /// waiting for Try Again, isn't opened again. Once Winston's copy is made, or on Cancel, the
-    /// extension's goes. Also removes what an interrupted or cancelled save left, a day old or
-    /// more. The outbox is read off the main actor, one scan after another, so two activations
-    /// close together don't both open a file. Package for the tests, which call it as an
+    /// included, and so does the URL the extension opens Winston with (`open(_:)`). A file
+    /// already opened, still being copied or waiting for Try Again, isn't opened again. Once
+    /// Winston's copy is made, or on Cancel, the extension's goes. Also removes what an
+    /// interrupted or cancelled save left, a day old or more. The outbox is read off the main
+    /// actor, one scan after another, so two scans close together, as that URL's and its
+    /// activation's are, don't both open a file. Package for the tests, which call it as an
     /// activation does (see `waitForSharedFiles()`).
     package func openSharedFiles() {
         guard let shareOutbox else { return }
