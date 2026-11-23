@@ -33,6 +33,8 @@ public final class AppModel {
     /// False when `Secrets.xcconfig` is missing, so there is no Telegram session.
     public let hasCredentials: Bool
     public let voiceLoop: VoiceLoop
+    /// Speak IPA, the message list's menu item: a message said with the on-device model's IPA.
+    public let speakIPA: SpeakIPA
     public let pushRegistration: PushRegistration
     #if os(iOS)
     public let notificationAccess = NotificationAccess()
@@ -56,6 +58,8 @@ public final class AppModel {
         didSet {
             defaults.set(selectedChatID?.rawValue, forKey: StorageKey.selectedChatID)
             updateAgentWorking()
+            // Leaving a chat stops its message being said.
+            speakIPA.stop(unlessIn: selectedChatID)
         }
     }
     public private(set) var messages: [ChatID: [ChatMessage]] = [:]
@@ -228,19 +232,24 @@ public final class AppModel {
     }
 
     /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own,
-    /// a fake pronunciation suggester, and folders of their own as the inboxes for opened files.
-    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
+    /// a fake pronunciation suggester and IPA transcriber, and folders of their own as the inboxes
+    /// for opened files. `hasCredentials` defaults to whether there is a link; only previews have
+    /// one without the other. `speakIPATimeout` is how long Speak IPA waits for the model on a
+    /// chunk.
     package init(
         link: TelegramLink?,
         voiceLoop: VoiceLoop,
         defaults: UserDefaults,
         hasCredentials: Bool? = nil,
         pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester(),
+        ipaTranscriber: any IPATranscriber = OnDeviceIPATranscriber(),
+        speakIPATimeout: Duration = SpeakIPA.defaultTimeout,
         openedFileInboxes: [URL] = []
     ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
         self.voiceLoop = voiceLoop
+        speakIPA = SpeakIPA(voiceLoop: voiceLoop, transcriber: ipaTranscriber, timeout: speakIPATimeout)
         self.defaults = defaults
         self.hasCredentials = hasCredentials ?? (link != nil)
         self.pronunciationSuggester = pronunciationSuggester
@@ -625,6 +634,7 @@ public final class AppModel {
         // so their files stay until that launch's sweep finds them a day old.
         openedFileUploads = [:]
         earlyUploadOutcomes = [:]
+        speakIPA.reset()
     }
 
     // MARK: - Chats
@@ -1464,18 +1474,7 @@ public final class AppModel {
     /// Whether the suggestion list's play buttons play, and if not, what would let them: for the
     /// list's note.
     public var suggestionPlayback: SuggestionPlayback {
-        if voiceLoop.saysPhonemes {
-            return .plays
-        }
-        guard voiceLoop.chosenVoice?.engine == .kokoro else { return .needsKokoroVoice }
-        guard voiceLoop.kokoroModelVariant != nil else { return .needsVoiceModel }
-        switch voiceLoop.kokoroModelState {
-        case .failed:
-            return .voiceModelFailed
-        case .notLoaded, .loading, .downloading, .ready:
-            // A chosen Kokoro voice with a model chosen loads it: not loaded is about to.
-            return .waitsForVoiceModel
-        }
+        SuggestionPlayback(voiceLoop)
     }
 
     /// The suggested pronunciations of `word`, trimmed, for the list the Suggest button opens. It
@@ -1537,6 +1536,31 @@ public enum SuggestionPlayback: Equatable, Sendable {
     case waitsForVoiceModel
     /// The Kokoro voice model couldn't download or load: retrying it would.
     case voiceModelFailed
+
+    /// Whether `voiceLoop` says phonemes now, and if not, what would let it: also what Speak IPA
+    /// needs.
+    @MainActor
+    init(_ voiceLoop: VoiceLoop) {
+        if voiceLoop.saysPhonemes {
+            self = .plays
+            return
+        }
+        guard voiceLoop.chosenVoice?.engine == .kokoro else {
+            self = .needsKokoroVoice
+            return
+        }
+        guard voiceLoop.kokoroModelVariant != nil else {
+            self = .needsVoiceModel
+            return
+        }
+        switch voiceLoop.kokoroModelState {
+        case .failed:
+            self = .voiceModelFailed
+        case .notLoaded, .loading, .downloading, .ready:
+            // A chosen Kokoro voice with a model chosen loads it: not loaded is about to.
+            self = .waitsForVoiceModel
+        }
+    }
 }
 
 /// A 👍 Adam added from this app, once it shows on its message: what `AppModel.addedThumbsUp` holds.
