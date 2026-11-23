@@ -89,10 +89,22 @@ import Testing
     }
 
     @Test func aShortFirstSentenceStartsTheFirstChunkRatherThanBeingIt() {
-        let text = "Done. I pushed the fix to the branch and reran every test, and all of them passed."
+        let text = "Done. I pushed the fix to the branch and reran every test, and all of them passed on the very first try."
         let chunks = SpeakIPAText.chunks(in: text)
         // The strongest break in the second half of 80 characters: the comma.
-        #expect(chunks == ["Done. I pushed the fix to the branch and reran every test,", "and all of them passed."])
+        #expect(chunks == [
+            "Done. I pushed the fix to the branch and reran every test,",
+            "and all of them passed on the very first try.",
+        ])
+    }
+
+    @Test func aChunkTakesTheRestIfThatIsAtMostAQuarterOverItsLimit() {
+        // 81 characters: one over the first chunk's 80.
+        let text = "Two jobs are queued. The nightly finished at three twelve with all tests passing."
+        #expect(SpeakIPAText.chunks(in: text) == [text])
+        // 106: more than a quarter over.
+        let longer = text + " Ship it to everyone now."
+        #expect(SpeakIPAText.chunks(in: longer).count == 2)
     }
 
     @Test func linesAreSentencesOfTheirOwnAndChunksCrossThem() {

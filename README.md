@@ -623,7 +623,8 @@ it:
   characters so it plays soon, each later one at most 1.25 times the one
   before, up to 200. A chunk takes as many words as fit, then ends at the
   strongest break in its second half: a sentence end, then a comma, semicolon,
-  colon or dash, then any word. On a Mac the model writes about 0.24 s a word
+  colon or dash, then any word; it takes the rest of the message instead if
+  that is at most a quarter over. On a Mac the model writes about 0.24 s a word
   after about 0.75 s to start, and Kokoro says about 0.33 s a word, so a chunk
   much longer than the one before would still be being written when that one
   had played.

@@ -478,6 +478,10 @@ struct SpeakIPAStatus: View {
             }
             Button(action: stop) {
                 Image(systemName: "stop.circle.fill")
+                    .font(.title3)
+                    // A target big enough to hit, though the icon is small.
+                    .frame(minWidth: 44, minHeight: 32)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Stop speaking I P A")
@@ -500,6 +504,10 @@ struct SpeakIPANote: View {
                 .multilineTextAlignment(alignment)
             Button(action: dismiss) {
                 Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    // A target big enough to hit, though the icon is small.
+                    .frame(minWidth: 44, minHeight: 32)
+                    .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")

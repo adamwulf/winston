@@ -47,7 +47,9 @@ public enum SpeakIPAText {
     /// as many words as fit, then ends at the strongest break in its second half: the end of a
     /// sentence (each line is one), then a comma, semicolon, colon or dash, then any word. So a
     /// short first sentence, such as a heading, starts a chunk rather than being one, and a long
-    /// one is cut where a reader would pause. A word longer than a chunk is a chunk of its own.
+    /// one is cut where a reader would pause. A chunk takes the rest of the message, though, if
+    /// that is at most a quarter over its limit, so the last chunk isn't a word or two. A word
+    /// longer than a chunk is a chunk of its own.
     public static func chunks(
         in normalized: String,
         firstChunkLimit: Int = firstChunkLimit,
@@ -80,7 +82,12 @@ public enum SpeakIPAText {
                 breaks.append((last.end + 1, last.length + 1 + words[last.end].text.count))
             }
             var end = breaks[breaks.count - 1].end
-            if end < words.count {
+            let rest = words[start...].reduce(-1) { $0 + 1 + $1.text.count }
+            if end < words.count, rest * 4 <= limit * 5 {
+                // The rest of the message is within a quarter more: one chunk, rather than a last
+                // chunk of a word or two.
+                end = words.count
+            } else if end < words.count {
                 // The words run on: the strongest break in the second half, the latest of those.
                 var strongest = 0
                 for candidate in breaks where candidate.length * 2 >= limit {
