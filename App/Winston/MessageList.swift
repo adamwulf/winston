@@ -72,19 +72,18 @@ struct MessageList: View {
             .defaultScrollAnchor(.bottom)
             // Dragging the messages down pulls the keyboard down with the finger, as in Messages.
             .scrollDismissesKeyboard(.interactively)
+            // Scrolled up, a button back down to the newest message. Inside the chat's `.id` below, so
+            // each chat starts without it.
+            .modifier(ShowsScrollToNewestButton { animated in
+                scrollToNewest(with: proxy, animated: animated)
+            })
             .onChange(of: model.currentMessages.last?.id) { oldID, newestID in
-                guard let newestID else { return }
+                guard newestID != nil else { return }
                 // The list appears before the history loads, so going from no messages to some is usually the
                 // launch load: jump straight to the newest one rather than animating down to it. (The other case,
                 // the first message in an empty chat, fits on screen, so skipping the animation changes nothing.)
                 // New messages added to a shown list animate.
-                if oldID == nil {
-                    proxy.scrollTo(newestID, anchor: .bottom)
-                } else {
-                    withAnimation {
-                        proxy.scrollTo(newestID, anchor: .bottom)
-                    }
-                }
+                scrollToNewest(with: proxy, animated: oldID != nil)
             }
             .onChange(of: model.addedThumbsUp) { _, added in
                 guard let added else { return }
@@ -140,6 +139,128 @@ struct MessageList: View {
         .onDisappear {
             presentations.closePreview()
         }
+        #endif
+    }
+
+    /// Scrolls the list to its newest message, shown whole just above the bottom bar.
+    private func scrollToNewest(with proxy: ScrollViewProxy, animated: Bool) {
+        guard let newestID = model.currentMessages.last?.id else { return }
+        if animated {
+            withAnimation {
+                proxy.scrollTo(newestID, anchor: .bottom)
+            }
+        } else {
+            proxy.scrollTo(newestID, anchor: .bottom)
+        }
+    }
+}
+
+/// While the list is scrolled up away from its newest message, a round button with a down arrow at
+/// its trailing edge, just above the bottom bar, that scrolls back down to it: see
+/// `ScrollToBottomVisibility`. It follows the bar, and the keyboard, as the list's bottom inset
+/// changes. No unread count: a new message already scrolls the list down to it.
+private struct ShowsScrollToNewestButton: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var visibility = ScrollToBottomVisibility()
+    /// Where the list last said it was, which `visibility` takes once the update that said so is over.
+    @State private var reportedZone = ScrollToBottomVisibility.Zone.nearBottom
+    /// Scrolls to the newest message, animated or not.
+    let scrollToNewest: (_ animated: Bool) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: ScrollToBottomVisibility.Zone.self) { geometry in
+                ScrollToBottomVisibility.Zone(distanceFromBottom: ScrollToBottomVisibility.distanceFromBottom(
+                    contentHeight: geometry.contentSize.height,
+                    bottomInset: geometry.contentInsets.bottom,
+                    visibleMaxY: geometry.visibleRect.maxY
+                ))
+            } action: { _, zone in
+                reportedZone = zone
+            }
+            // The zone reported last by the time the task runs, read then, which may not be the
+            // one that started it. A change of size, such as the keyboard opening, can be reported
+            // with the list away from its bottom (the inset is taller, the list hasn't moved yet),
+            // then back at it once the list has scrolled to keep its bottom in place. On the iOS
+            // simulator both came in the same update, before the task ran, so the button never
+            // showed; a report after that starts the task again.
+            .task(id: reportedZone) {
+                withAnimation(Self.animation) {
+                    visibility.scrolled(into: reportedZone)
+                }
+            }
+            .onScrollPhaseChange { _, phase in
+                guard phase == .interacting else { return }
+                withAnimation(Self.animation) {
+                    visibility.userScrolled()
+                }
+            }
+            // Over the list rather than in it, so it stays put as the messages scroll, and isn't
+            // pulled aside with them on iOS. Laid out in the list's safe area, which ends at the bar.
+            .overlay(alignment: .bottomTrailing) {
+                if visibility.isShowing {
+                    ScrollToNewestButton {
+                        withAnimation(Self.animation) {
+                            visibility.returnToNewest()
+                        }
+                        // With Reduce Motion, straight there rather than past every screen between.
+                        scrollToNewest(!reduceMotion)
+                    }
+                    // It covers the messages under it, so it stops growing at the larger
+                    // accessibility text sizes. Here, outside it, for its circle's size to stop too.
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                    .padding(.trailing, Self.trailingPadding)
+                    .padding(.bottom, 12)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.5).combined(with: .opacity))
+                }
+            }
+    }
+
+    private static let animation = Animation.snappy(duration: 0.2)
+
+    /// From the list's trailing edge to the button's target, which at the default text size is 2
+    /// points wider than its circle. On iOS the circle then lines up with the bubbles, 16 points
+    /// in. The Mac's is more, to keep the target clear of a scroll bar shown all the time, about 15
+    /// points wide.
+    private static var trailingPadding: CGFloat {
+        #if os(macOS)
+        24
+        #else
+        14
+        #endif
+    }
+}
+
+/// The round button with a down arrow that scrolls the list back to its newest message.
+private struct ScrollToNewestButton: View {
+    /// The circle's diameter, which grows with the text size.
+    @ScaledMetric(relativeTo: .body) private var diameter: CGFloat = 40
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "chevron.down")
+                .font(.body.weight(.semibold))
+                .frame(width: diameter, height: diameter)
+                .background(.regularMaterial, in: .circle)
+                .overlay {
+                    Circle().strokeBorder(.separator)
+                }
+                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
+                // A target at least 44 points across, though the circle is smaller, and smaller
+                // still at the smaller text sizes.
+                .padding(2)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Scroll to latest message")
+        // Its size stops growing at the largest text sizes: a long press shows it bigger.
+        .accessibilityShowsLargeContentViewer()
+        #if os(macOS)
+        // A tooltip. Not on iOS, where VoiceOver would read it again as a hint.
+        .help("Scroll to latest message")
+        .pointerStyle(.link)
         #endif
     }
 }

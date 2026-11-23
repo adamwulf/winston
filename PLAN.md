@@ -217,6 +217,11 @@ Inside it:
   timeout.
 - Visible incoming messages are marked read, so Adam's other Telegram apps
   don't show stale unread badges.
+- **Back to the newest** (added later): scrolled up more than 200 points from
+  the newest message, a round button with a down arrow shows at the trailing
+  edge, just above the bottom bar, and tapping it scrolls back down. It hides
+  again within 100 points of the bottom (`ScrollToBottomVisibility`). It has
+  no unread count: a new message already scrolls the list down to it.
 - The bottom bar has a text field, a + button for files and photos, and a
   voice/text toggle. Typed messages are sent as-is, so slash commands like
   `/compact` still work in text mode.
