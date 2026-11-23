@@ -12,9 +12,10 @@ import Foundation
 /// manner, the vowel's height, backness and rounding), the way an English speaker would say it:
 /// the first whose every symbol Kokoro has is used. A symbol not in the table is put as its base
 /// letter without diacritics, or in lowercase, as that letter is. Only what has no sound close to
-/// it is left out: the glottal stop, tone letters, secondary articulation, length and prosodic
-/// breaks, when Kokoro lacks them, and punctuation always, which Kokoro has, but which in a word
-/// would be a pause.
+/// it is left out: the glottal stop, tone letters, secondary articulation and prosodic breaks,
+/// when Kokoro lacks them, and punctuation always, which Kokoro has, but which in a word would be
+/// a pause. (The conversion has already dropped length, aspiration and other diacritics; their
+/// entries are for IPA that reaches here unconverted.)
 enum ClosestPhonemes {
     /// What to say for each symbol Kokoro may not have, closest first. An empty list: nothing is
     /// close, and it is left out.

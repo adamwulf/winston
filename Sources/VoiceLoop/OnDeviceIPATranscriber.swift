@@ -39,8 +39,8 @@ public protocol IPATranscriber: Sendable {
 /// IPA be matched to the word it is for. Its symbols aren't held to Kokoro's by a guide: the
 /// guides take no character class, and an alternation of the symbols made a 17-word sentence take
 /// 69 s rather than about 4.5. A symbol Kokoro doesn't have is put as the closest one it has
-/// afterwards (`ClosestPhonemes`); only a word whose IPA has no sound left is read as Kokoro
-/// reads it.
+/// afterwards (`ClosestPhonemes`); only a word the model wrote no IPA for (left out, or another
+/// word in its place) or whose IPA has no sound left is read as Kokoro reads it.
 ///
 /// Each step is logged under `voice.speakipa` at notice level, and a failure at warning, with the
 /// request's and chunk's numbers and the time since it started (`ms`): the availability check,

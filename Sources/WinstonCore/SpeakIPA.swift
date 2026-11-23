@@ -619,14 +619,13 @@ public final class SpeakIPA {
         }
     }
 
-    /// `words`, each once, in order, the first five and how many more.
+    /// `words`, each once, in order: all of them, as the logs name none.
     private static func listed(_ words: [String]) -> String {
         var unique: [String] = []
         for word in words where !unique.contains(word) {
             unique.append(word)
         }
-        let shown = unique.prefix(5).joined(separator: ", ")
-        return unique.count > 5 ? "\(shown) and \(unique.count - 5) more" : shown
+        return unique.joined(separator: ", ")
     }
 
     /// Why a chunk was said as written, for the note.

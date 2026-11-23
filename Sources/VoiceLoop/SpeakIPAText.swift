@@ -69,11 +69,6 @@ public enum SpeakIPAText {
         // line, which stays a line break in its chunk: a lowercase list item after a full stop
         // is still a sentence of its own to the sentence splitters.
         var words: [(text: Substring, breakStrength: Int, endsLine: Bool)] = []
-        // The last character of `text` before any closing quotes or brackets: the comma of
-        // "“Wait,”".
-        func lastBeforeClosers(_ text: Substring) -> Character? {
-            text.last { !"\"'”’»)]".contains($0) }
-        }
         for line in normalized.split(whereSeparator: \.isNewline) {
             // A line ending with a comma or dash goes on into the next, on the same line.
             let continues = lastBeforeClosers(line).map { ",-–—".contains($0) } ?? false
@@ -212,9 +207,9 @@ public enum SpeakIPAText {
     /// ˌwɛlˈnoʊn for "well known") they are said together from its IPA, as one word, if only
     /// spaces lie between them. A word the model added is skipped,
     /// and one it left out has no IPA, as long as the two get back in step within three
-    /// words, and stay in step for the word after: in "Tell us how US rates changed" with "us"
-    /// left out, "US" isn't taken for "us". Past that, each word is matched to the model's word in
-    /// its place, only if they are the same.
+    /// words, preferring a match the word after bears out: in "Tell us how US rates changed" with
+    /// "us" left out, "US" isn't taken for "us". Past that, each word is matched to the model's
+    /// word in its place, only if they are the same.
     ///
     /// Each matched word's IPA, its first reading if the model wrote several
     /// (`firstReading(of:)`), without any parentheses, is converted to Kokoro's notation as one
@@ -266,7 +261,7 @@ public enum SpeakIPAText {
             if closest.phonemes.contains(where: { $0 != "ˈ" && $0 != "ˌ" }) {
                 phonemes[index] = closest.phonemes
             } else {
-                wordsWithNothingToSay.append(word)
+                wordsWithNothingToSay += wordsOf(index)
             }
         }
         let covered = Set(spans.flatMap { ($0.key + 1)..<($0.key + $0.value) })
@@ -329,16 +324,15 @@ public enum SpeakIPAText {
     /// "/ˈiːðər/ /ˈaɪðər/", "ˈiːðər, ˈaɪðər" or "ˈiːðər or ˈaɪðər" are all ˈiːðər. Slashes and
     /// brackets around a transcription go. A comma, semicolon, bar or "or" counts only between two
     /// readings: one after the only reading stays, inside its slashes or not ("həˈloʊ," or
-    /// "/həˈloʊ/,"), for `ClosestPhonemes` to leave out, and record.
+    /// "/həˈloʊ/,"), as do quotes around it, for `ClosestPhonemes` to leave out, and record.
     static func firstReading(of ipa: String) -> String {
         func nonBlank(_ pieces: [Substring]) -> [Substring] {
             pieces.filter { !$0.allSatisfy(\.isWhitespace) }
         }
         let pieces = nonBlank(ipa.split { "/[]".contains($0) })
-        var reading = pieces.first ?? ""
-        if pieces.count > 1, pieces.dropFirst().allSatisfy({ $0.allSatisfy { $0.isPunctuation || $0.isWhitespace } }) {
-            reading = Substring(pieces.joined())
-        }
+        let readings = pieces.filter { !$0.allSatisfy { $0.isPunctuation || $0.isWhitespace } }
+        // Of one reading, punctuation around it ("“/həˈloʊ/”") stays, to be recorded.
+        var reading = readings.count == 1 ? Substring(pieces.joined()) : readings.first ?? ""
         let listed = nonBlank(reading.split { ",;|".contains($0) })
         if listed.count > 1 {
             reading = listed[0]
@@ -381,12 +375,25 @@ public enum SpeakIPAText {
         // How far ahead to look for the two to get back in step.
         let lookahead = 3
         // How sure it is that word `i` and the model's word `j` are the same word: 0 if they
-        // differ; 2 if the words after them are the same too, so a word that only looks the same
-        // isn't taken; 1 if either has no word after, with nothing to check.
+        // differ; 3 if the words after them are the same too, so a word that only looks the same
+        // isn't taken while one borne out is near; 2 if either has no word after, with nothing
+        // to check; 1 if the words after differ, as when the model left out another word.
         func confidence(_ i: Int, _ j: Int) -> Int {
             guard wordKeys[i] == generatedKeys[j] else { return 0 }
-            guard i + 1 < words.count, j + 1 < transcribed.count else { return 1 }
-            return wordKeys[i + 1] == generatedKeys[j + 1] ? 2 : 0
+            guard i + 1 < words.count, j + 1 < transcribed.count else { return 2 }
+            return wordKeys[i + 1] == generatedKeys[j + 1] ? 3 : 1
+        }
+        // How many words from `i` the model's word `j` is, joined: two or more whose letters
+        // make its letters.
+        func joinedCount(_ i: Int, _ j: Int) -> Int? {
+            let target = generatedKeys[j]
+            var joined = wordKeys[i]
+            var count = 1
+            while i + count < words.count, joined.count < target.count, target.hasPrefix(joined) {
+                joined += wordKeys[i + count]
+                count += 1
+            }
+            return count > 1 && joined == target ? count : nil
         }
         while i < words.count, j < transcribed.count {
             // Nothing to match on: punctuation the model wrote as a word, say.
@@ -413,12 +420,11 @@ public enum SpeakIPAText {
                 j += count
                 continue
             }
-            // The model joined words: each gets a word of its IPA, if it has as many; otherwise
-            // its IPA is for the words together.
-            if let count = (2...lookahead).first(where: {
-                i + $0 <= words.count && wordKeys[i..<(i + $0)].joined() == generatedKeys[j]
-            }) {
-                let ipaWords = transcribed[j].ipa.split(whereSeparator: \.isWhitespace)
+            // The model joined words, as many as it takes ("state-of-the-art" for "state of the
+            // art"): each gets a word of its first reading, if it has as many; otherwise its IPA
+            // is for the words together.
+            if let count = joinedCount(i, j) {
+                let ipaWords = firstReading(of: transcribed[j].ipa).split(whereSeparator: \.isWhitespace)
                 if ipaWords.count == count {
                     for (offset, word) in ipaWords.enumerated() {
                         ipa[i + offset] = [TranscribedWord(word: words[i + offset], ipa: String(word))]
@@ -517,9 +523,15 @@ public enum SpeakIPAText {
     /// question or exclamation mark, ellipsis, colon or semicolon, which end a sentence or a
     /// clause, or a comma or a dash, after which the sentence goes on to the next line.
     private static func endsSentence(_ line: String) -> Bool {
-        let closers: Set<Character> = ["\"", "'", "”", "’", ")", "]", "}", "»"]
-        guard let last = line.last(where: { !closers.contains($0) }) else { return false }
+        guard let last = lastBeforeClosers(line[...]) else { return false }
         return ".!?…:;,-–—".contains(last)
+    }
+
+    /// The last character of `text` before any closing quotes or brackets: the comma of
+    /// "“Wait,”".
+    private static func lastBeforeClosers(_ text: Substring) -> Character? {
+        let closers: Set<Character> = ["\"", "'", "”", "’", ")", "]", "}", "»"]
+        return text.last { !closers.contains($0) }
     }
 
     // MARK: - Words

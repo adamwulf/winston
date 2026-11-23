@@ -645,7 +645,10 @@ it:
   and one it added or left out is skipped, preferring the way back in step that
   the next words bear out (so "US" isn't taken for an "us" the model left
   out). Each word is always said from the model's IPA, whatever it holds: it is
-  converted to Kokoro's notation (`MisakiPhonemes.fromIPA`), and each symbol
+  converted to Kokoro's notation (`MisakiPhonemes.fromIPA`, as Suggest does:
+  diphthongs and affricates joined, r as ɹ, and length, aspiration, nasal and
+  other diacritics, tie bars and syllable dots dropped, as misaki writes
+  American English; not recorded, being notation, not a change), and each symbol
   Kokoro can't say now (`VoiceLoop.kokoroPhonemeSymbols`: the loaded model's
   vocabulary, else misaki's US symbols) is put as the closest one it can
   (`ClosestPhonemes`, below), or left out if nothing is close; a symbol it can
@@ -669,11 +672,11 @@ it:
   (y to u, ʏ to ʊ, ø and œ to ɜ, ɯ to u, ɤ to ʌ, ɨ to ᵻ, ɐ and ɘ to ə, ɒ to
   ɑ); misaki's own symbols, should a Kokoro lack one, to the next nearest
   (diphthongs to their two vowels). A symbol not in the table is put as its
-  letter without diacritics or in lowercase ("ã" as ɑ). The glottal stop,
-  aspiration and other secondary marks, length, tone letters and prosodic
-  breaks are left out when Kokoro lacks them, and punctuation always (Kokoro
-  has it, but in a word it would be a pause). Stress is placed before
-  conversion, on the vowel the model stressed, whatever it is put as.
+  letter without diacritics or in lowercase ("ã" as ɑ). What the conversion
+  leaves of the glottal stop, secondary marks such as ʲ, tone letters and
+  prosodic breaks is left out when Kokoro lacks it, and punctuation always
+  (Kokoro has it, but in a word it would be a pause). Stress is placed before
+  the table is used, on the vowel the model stressed, whatever it is put as.
 - A chunk is said as written only when there is no IPA for it: the model
   failed on it (declined, busy, failed, its own timeout, or cancelled by the
   system) or answered with no words; the next chunk is still asked. A chunk
