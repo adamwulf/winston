@@ -628,6 +628,23 @@ Section 5 of
 [the barge-in latency research](docs/research/voice-barge-in-latency.md)
 lists the lines and how to read them.
 
+The AirPods mute and media remote command lines under `voice.loop` carry
+`sinceVoiceModeStartMs`, milliseconds since voice mode started. On "input mute
+changed", "input mute handler called" and "input mute notification without a
+mute state", that is when the line was written, and it is their only time. On
+the "remote command …" lines, it is when the main actor took the command, the
+same on each of that command's lines, so an "input mute changed" between them
+can show a later time. They also carry how long after its own timestamp
+MediaPlayer handed the command to the app (`eventToReceiptMs`), and how long it
+then took to reach the main actor (`receiptToMainMs`). Once a press has
+toggled the mute, "remote command handled" adds the times from the receipt and
+from the timestamp to `setInputMuted` returning and to the change being
+applied: `receiptToSetMutedMs`, `receiptToAppliedMs`, `eventToSetMutedMs` and
+`eventToAppliedMs`. The times from the timestamp are
+left out, with `eventTimestampOnUptime=false`, when the timestamp is 0 or less
+or more than a minute from the receipt: it can't be taken as on the uptime
+clock then, and a time from it could give the uptime away.
+
 ### Getting them out
 
 - Mac: Help → Open Log Folder shows the folder in Finder. Help → Export Debug
@@ -661,6 +678,15 @@ lists the lines and how to read them.
 - Never log on the audio thread or the speech synthesizer's thread. Record
   times and levels there (in an atomic or a `Mutex`), and write the line on
   the main actor, as `VoiceTimeline` does.
+- Log a time only as elapsed milliseconds: since the session started (`tMs`),
+  since voice mode started (`sinceVoiceModeStartMs`), or between two events.
+  Never a clock reading itself: the uptime (`ProcessInfo.systemUptime`), host
+  time (`mach_absolute_time`, `AVAudioTime.hostTime`), a `ContinuousClock`
+  instant, or an event's own timestamp such as `MPRemoteCommandEvent`'s. They
+  count from the device's start, the system boot time that the privacy
+  manifest uses only to measure time within the app (reason 35F9.1), and
+  Export Debug Logs shares the logs. Nor a time from an event's timestamp
+  that may be 0 or on another clock: that gives the uptime away too.
 - Messages are fixed strings. Values go in metadata with lowerCamelCase keys:
   `log.error("sending text failed", error.logContext(["chatID": chat.id.description]))`.
 - Log every caught error that isn't rethrown, with `error.logContext(...)`. Use

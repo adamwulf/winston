@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import VoiceLoop
 import VoiceLoopTestSupport
@@ -35,12 +36,19 @@ private final class FakeNowPlaying: NowPlaying {
 
     /// A press of the AirPods stem, as the system sends it.
     func press(_ command: RemoteCommand) {
-        handler?(RemoteCommandEvent(name: command.rawValue, command: command, timestamp: 1, receivedUptime: 1.001))
+        handler?(Self.event(name: command.rawValue, command: command))
     }
 
     /// A command the loop only logs, such as `nextTrack`.
     func press(loggedOnly name: String) {
-        handler?(RemoteCommandEvent(name: name, command: nil, timestamp: 1, receivedUptime: 1.001))
+        handler?(Self.event(name: name, command: nil))
+    }
+
+    /// A command received now, stamped a millisecond earlier, on the uptime clock as the app's
+    /// are, so the times the loop logs from them are as short as on a device.
+    private static func event(name: String, command: RemoteCommand?) -> RemoteCommandEvent {
+        let now = ProcessInfo.processInfo.systemUptime
+        return RemoteCommandEvent(name: name, command: command, timestamp: now - 0.001, receivedUptime: now)
     }
 }
 
