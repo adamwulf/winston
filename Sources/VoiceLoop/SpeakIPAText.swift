@@ -54,26 +54,33 @@ public enum SpeakIPAText {
     /// short first sentence, such as a heading, starts a chunk rather than being one, and a long
     /// one is cut where a reader would pause. A chunk takes the rest of the message, though, if
     /// that is at most a quarter over its limit, so the last chunk isn't a word or two. A word
-    /// longer than a chunk is a chunk of its own.
+    /// longer than a chunk is a chunk of its own. Lines stay lines in a chunk: Kokoro says each
+    /// as a sentence, and a lowercase list item after a full stop doesn't run into the line before.
     public static func chunks(
         in normalized: String,
         firstChunkLimit: Int = firstChunkLimit,
         chunkLimit: Int = chunkLimit,
         chunkGrowth: Double = chunkGrowth
     ) -> [String] {
-        // Each word, with punctuation, and how strong a break comes after it.
-        var words: [(text: Substring, breakStrength: Int)] = []
-        for sentence in KokoroText.sentences(in: normalized) {
-            let sentenceWords = sentence.split(separator: " ")
-            for (index, word) in sentenceWords.enumerated() {
-                let strength = if index == sentenceWords.count - 1 {
-                    3
-                } else if let last = word.last, ",;:—–".contains(last) {
-                    2
-                } else {
-                    1
+        // Each word, with punctuation, how strong a break comes after it, and whether it ends a
+        // line, which stays a line break in its chunk: a lowercase list item after a full stop
+        // is still a sentence of its own to the sentence splitters.
+        var words: [(text: Substring, breakStrength: Int, endsLine: Bool)] = []
+        for line in normalized.split(whereSeparator: \.isNewline) {
+            let sentences = KokoroText.sentences(in: String(line))
+            for (sentenceIndex, sentence) in sentences.enumerated() {
+                let sentenceWords = sentence.split(separator: " ")
+                for (index, word) in sentenceWords.enumerated() {
+                    let endsSentence = index == sentenceWords.count - 1
+                    let strength = if endsSentence {
+                        3
+                    } else if let last = word.last, ",;:—–".contains(last) {
+                        2
+                    } else {
+                        1
+                    }
+                    words.append((word, strength, endsSentence && sentenceIndex == sentences.count - 1))
                 }
-                words.append((word, strength))
             }
         }
         var chunks: [String] = []
@@ -103,7 +110,13 @@ public enum SpeakIPAText {
                     }
                 }
             }
-            chunks.append(words[start..<end].map(\.text).joined(separator: " "))
+            var chunk = ""
+            var separator = ""
+            for word in words[start..<end] {
+                chunk += separator + word.text
+                separator = word.endsLine ? "\n" : " "
+            }
+            chunks.append(chunk)
             start = end
         }
         return chunks
@@ -188,7 +201,8 @@ public enum SpeakIPAText {
     /// left out, "US" isn't taken for "us". Past that, each word is matched to the model's word in
     /// its place, only if they are the same.
     ///
-    /// Each matched word's IPA, without any parentheses, is converted to Kokoro's notation as one
+    /// Each matched word's IPA, its first reading if the model wrote several
+    /// (`firstReading(of:)`), without any parentheses, is converted to Kokoro's notation as one
     /// word (`MisakiPhonemes.fromIPA(_:asOneWord:)`). It is said as written instead if that is
     /// empty, if it has punctuation or a symbol not in `symbols` (the ones Kokoro has,
     /// `VoiceLoop.kokoroPhonemeSymbols`), or if the "IPA" is just the word, which the conversion
@@ -206,7 +220,9 @@ public enum SpeakIPAText {
         var emptyWords = 0
         var echoedWords = 0
         for (index, parts) in ipa {
-            let cleanedParts = parts.map { TranscribedWord(word: $0.word, ipa: $0.ipa.filter { $0 != "(" && $0 != ")" }) }
+            let cleanedParts = parts.map {
+                TranscribedWord(word: $0.word, ipa: firstReading(of: $0.ipa).filter { $0 != "(" && $0 != ")" })
+            }
             let converted = MisakiPhonemes.fromIPA(cleanedParts.map(\.ipa).joined(separator: " "), asOneWord: true)
             if converted.isEmpty || cleanedParts.contains(where: { MisakiPhonemes.fromIPA($0.ipa).isEmpty }) {
                 emptyWords += 1
@@ -232,8 +248,9 @@ public enum SpeakIPAText {
                 var text = original
                 let length = original.utf16.count
                 let endsASentence = sentenceEnds.contains { $0 > offset && $0 <= offset + length }
-                // A full stop then a space: not an ellipsis, nor the dot inside "README.md".
-                let isFullStop = text.first == "." && text.dropFirst().first?.isWhitespace == true
+                // A full stop then a space: not an ellipsis, nor the dot inside "README.md", nor
+                // one that ends a line, which always ends a sentence.
+                let isFullStop = text.first == "." && text.dropFirst().first == " "
                 if case .phonemes = parts.last, isFullStop, !endsASentence {
                     // Not a sentence's end: the abbreviation's full stop goes with its word.
                     text.removeFirst()
@@ -256,6 +273,17 @@ public enum SpeakIPAText {
             emptyWords: emptyWords,
             echoedWords: echoedWords
         )
+    }
+
+    /// The first reading of `ipa`, the IPA the model wrote for one word, when it wrote several:
+    /// "/ˈiːðər/ /ˈaɪðər/", "ˈiːðər, ˈaɪðər" or "ˈiːðər or ˈaɪðər" are all ˈiːðər. Slashes and
+    /// brackets around a transcription go, as do commas, semicolons and bars between readings.
+    static func firstReading(of ipa: String) -> String {
+        let first = ipa.split { "/[]|,;".contains($0) }
+            .first { !$0.allSatisfy(\.isWhitespace) } ?? ""
+        let words = first.split(whereSeparator: \.isWhitespace)
+        let reading = words.firstIndex(of: "or").map { words[..<$0] } ?? words[...]
+        return reading.joined(separator: " ")
     }
 
     /// Where each of `chunk`'s sentences ends, without the spaces after it, as a UTF-16 offset:
@@ -385,7 +413,7 @@ public enum SpeakIPAText {
     private static let abbreviations: [(NSRegularExpression, String)] = [
         (pattern(#"(?<![\p{L}.])(?i:e\.g\.)(?!\p{L})"#), "for example"),
         (pattern(#"(?<![\p{L}.])(?i:i\.e\.)(?!\p{L})"#), "that is"),
-        (pattern(#"(?<![\p{L}.])(?i:etc)\.(?=\s*$|\s+\p{Lu})"#), "et cetera."),
+        (pattern(#"(?<![\p{L}.])(?i:etc)\.(?=["'”’»)\]]*(?:\s*$|\s+\p{Lu}))"#), "et cetera."),
         (pattern(#"(?<![\p{L}.])(?i:etc)\.(?!\p{L})"#), "et cetera"),
         // Lowercase only: "VS" is more often Visual Studio, as in "VS Code".
         (pattern(#"(?<![\p{L}.])vs\.?(?![\p{L}.])"#), "versus"),

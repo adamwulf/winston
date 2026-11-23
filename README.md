@@ -627,7 +627,8 @@ it:
   fit, then ends at the strongest break in its second half: a sentence end,
   then a comma, semicolon, colon or dash, then any word; it takes the rest of
   the message instead if that is at most a quarter over, and a word longer
-  than a chunk is a chunk of its own. On a Mac the model writes about 0.24 s a
+  than a chunk is a chunk of its own. Lines stay lines within a chunk, so a
+  lowercase list item still ends where it did. On a Mac the model writes about 0.24 s a
   word after about 0.75 s to start, and Kokoro says about 0.33 s a word, so a
   chunk much longer than the one before would still be being written when that
   one had played.
@@ -650,10 +651,12 @@ it:
   the model split, if any part's is); so is a word the model left out
   (`SpeakIPAText.speech`).
 - A chunk with fewer than half its words said from IPA is said as written,
-  as is one the model fails on (declined, busy, failed, or cancelled by the
-  system): the next chunk is still asked. A chunk not answered in a minute is
-  given up on and cancelled, and the rest of the message is said as written,
-  as it is once the model stops being available.
+  as is one the model fails on (declined, busy, failed, its own timeout, or
+  cancelled by the system): the next chunk is still asked. A chunk Speak IPA
+  has waited a minute for is given up on and cancelled, and the rest of the
+  message is said as written, as it is once the model stops being available.
+- If the model writes several readings for a word ("/ˈiːðər/ /ˈaɪðər/", or
+  with a comma or "or" between), the first is used.
 - Text said as written has the pronunciations in settings, applied to the
   whole chunk once its words with IPA are placeholders, so a pronunciation of
   several words still matches and its punctuation is read in the chunk's
@@ -666,9 +669,10 @@ it:
   own (starting "zqv"): the next message gives their names out again, with its
   own phonemes, so nothing builds up message after message.
 - What the model wrote for each chunk that was said from IPA is kept in
-  memory for the last 20 messages, so saying one again starts at once, with
-  no model needed: it plays even while Apple Intelligence is unavailable. A
-  chunk said as written isn't kept: the next answer may be better.
+  memory for the last 20 messages, so saying one again starts at once. A
+  chunk said as written isn't kept: the next answer may be better. A message
+  whose every chunk is kept needs no model, and plays even while Apple
+  Intelligence is unavailable; one with a chunk to ask about again needs it.
 
 One message is said at a time. Another message's Speak IPA replaces it, and
 the same message's stops it, as do the stop button, another chat being shown,
@@ -688,8 +692,9 @@ a chunk the model answers after that is neither counted nor kept.
 A note under the bubble says why Speak IPA couldn't start (voice mode on, no
 Kokoro voice ready and what would fix it, Apple Intelligence off, not ready
 or not supported, or nothing to say, such as a message of only code) or, once
-a message has played, how many of its words were said from the model's IPA,
-and why a chunk was said as written if the model failed on it, or that Kokoro
+a message has played with at least one word said as written, how many of its
+words were said from the model's IPA (none, when all were), and why a chunk
+was said as written if the model failed on it, or that Kokoro
 stopped partway and either the rest wasn't said or, on the last chunk, the
 system voice said it. It stays until dismissed or Speak IPA says another
 message.
@@ -711,12 +716,13 @@ about 350 tokens before the answer (instructions 127, the schema about 150),
 and the answer about 15 tokens a word.
 
 `label=app.speakipa` is Speak IPA: `requested` (the request's number, counted
-across messages, the message's size, chunks, words, the model's availability,
-whether the message's IPA is kept), `can't start` with a reason, `chunk
-transcribed` for each chunk (words, the model's words, words with IPA,
-unmatched, unknown symbols, empty, echoed, whether it was said from IPA or as
-written, and whether it came from memory), `chunk failed` or `chunk timed out`,
-`chunks queued`, `first sound`, `stopped` with why, `answer dropped` for an
+across messages, the message's size, chunks, words, the model's availability
+or `notNeeded`, whether the message's IPA is kept), `can't start` with a
+reason, `chunk transcribed` for each chunk (words, the model's words, words
+with IPA, unmatched, unknown symbols, empty, echoed, `sayAs` IPA or written,
+and whether it came from memory), `chunk failed` or `chunk timed out`, `chunk
+not queued` when the speech had already ended and took no more, `chunks
+queued`, `first sound`, `stopped` with why, `answer dropped` for an
 answer that came after Speak IPA stopped waiting, and `ended`, with how it
 ended (`finished`, `stopped` or `kokoroFailed`) and how much was said from IPA.
 `label=voice.speakipa` is the model (`model checked`, `session created`,

@@ -14,16 +14,18 @@ import VoiceLoop
 /// one at a time, in order, each in a minute at most, and each chunk plays as soon as it is ready
 /// and the one before has played (`VoiceLoop.startIPASpeech(request:onFirstSound:onEnded:)`). A
 /// word whose IPA Kokoro can't say is said as written, as is a chunk with less than half its
-/// words said so, or one the model failed on (`SpeakIPAText.speech(of:transcribed:symbols:)`).
-/// After a timeout, the rest of the message is said as written: a model that stalled once would
-/// likely stall again. What the model wrote for a message is kept for the last
-/// `cachedMessages` messages, so saying one again starts at once.
+/// words said so, or one the model failed on (`SpeakIPAText.speech(of:transcribed:symbols:)`),
+/// including a timeout of the model's own. When Speak IPA's own minute runs out, the rest of the
+/// message is said as written: a model that stalled once would likely stall again. What the
+/// model wrote for a message is kept for the last `cachedMessages` messages, so saying one again
+/// starts at once; with every chunk kept, it needs no model at all.
 ///
 /// One message is said at a time: another message's Speak IPA replaces it, and the same
 /// message's stops it, as does `stop()`, another chat being shown, logging out, or anything that
 /// cuts off a preview, such as Speak or voice mode starting. It plays only while voice mode is
 /// off, and only with a Kokoro voice ready; otherwise, or when the model can't run, the message
-/// says why (`note(for:)`), as it does when part of a message was said as written.
+/// says why (`note(for:)`), as it does once a message has played with some of it said as
+/// written.
 ///
 /// Each step is logged under `app.speakipa` at notice level, and a failure or a timeout at
 /// warning, with the request's number (counted across messages), chunk numbers, counts and times:
@@ -321,8 +323,9 @@ public final class SpeakIPA {
             // guard above. One that passes it came from elsewhere (the system can cancel a
             // request): a failure like any other, so the message goes on.
             let reason = error as? PronunciationSuggestionError ?? .failed
-            // Codes only: a transcriber's error can quote the text.
-            Self.log.warning("speak ipa chunk failed; said as written", error.logCodes([
+            // Codes only: a transcriber's error can quote the text. To be said as written, unless
+            // the speech has ended ("chunk not queued").
+            Self.log.warning("speak ipa chunk failed", error.logCodes([
                 "request": "\(number)",
                 "chunk": "\(index)",
                 "reason": reason.logName,
@@ -343,7 +346,7 @@ public final class SpeakIPA {
     /// the message is said as written.
     private func timedOut(request number: Int, chunk index: Int) {
         guard var run, run.number == number, run.next == index, run.request != nil else { return }
-        Self.log.warning("speak ipa chunk timed out; the rest is said as written", [
+        Self.log.warning("speak ipa chunk timed out", [
             "request": number,
             "chunk": index,
             "timeoutMs": Int(timeout / .milliseconds(1)),
@@ -363,7 +366,8 @@ public final class SpeakIPA {
         guard var run else { return false }
         let chunk = run.chunks[index]
         let speech = SpeakIPAText.speech(of: chunk, transcribed: transcribed, symbols: voiceLoop.kokoroPhonemeSymbols)
-        // Counts only: the words and their IPA are the user's.
+        // Counts only: the words and their IPA are the user's. `sayAs` is what is asked of the
+        // speech; "chunk not queued" follows if it has ended.
         Self.log.notice("speak ipa chunk transcribed", [
             "request": run.number,
             "chunk": index,
@@ -375,7 +379,7 @@ public final class SpeakIPA {
             "unknownSymbols": speech.unknownSymbolWords,
             "empty": speech.emptyWords,
             "echoed": speech.echoedWords,
-            "said": speech.usesIPA ? "ipa" : "written",
+            "sayAs": speech.usesIPA ? "ipa" : "written",
             "cached": cached,
             "ms": Self.milliseconds(since: run.chunkStarted),
             "totalMs": Self.milliseconds(since: run.started),
@@ -384,7 +388,7 @@ public final class SpeakIPA {
             return sayAsWritten(chunk: index, failure: nil)
         }
         // Counted and kept only once the speech has taken it.
-        guard queue({ run.speech.say(speech.parts) }) else { return false }
+        guard queue(chunk: index, { run.speech.say(speech.parts) }) else { return false }
         run.words += speech.words
         run.wordsWithIPA += speech.wordsWithIPA
         run.next = index + 1
@@ -401,7 +405,7 @@ public final class SpeakIPA {
         guard var run else { return false }
         let chunk = run.chunks[index]
         // Counted only once the speech has taken it.
-        guard queue({ run.speech.sayAsWritten(chunk) }) else { return false }
+        guard queue(chunk: index, { run.speech.sayAsWritten(chunk) }) else { return false }
         run.words += SpeakIPAText.words(of: chunk).count
         run.writtenChunks += 1
         if run.failure == nil {
@@ -420,12 +424,12 @@ public final class SpeakIPA {
         finishQueueing()
     }
 
-    /// Queues a chunk with `say`, which returns whether the speech took it. Returns whether the
-    /// speech is still going; once it isn't, `ended(request:end:)` has been or will be told.
-    private func queue(_ say: () -> Bool) -> Bool {
+    /// Queues chunk `index` with `say`, which returns whether the speech took it. Returns whether
+    /// the speech is still going; once it isn't, `ended(request:end:)` has been or will be told.
+    private func queue(chunk index: Int, _ say: () -> Bool) -> Bool {
         guard say() else {
             if let run {
-                Self.log.notice("speak ipa chunk not queued; the speech has ended", ["request": run.number])
+                Self.log.notice("speak ipa chunk not queued; the speech has ended", ["request": run.number, "chunk": index])
             }
             return false
         }

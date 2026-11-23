@@ -45,6 +45,8 @@ import Testing
             == "Use a tool, for example grep, that is the fast one.")
         #expect(SpeakIPAText.normalized("Apples, pears, etc. Then lunch.") == "Apples, pears, et cetera. Then lunch.")
         #expect(SpeakIPAText.normalized("Apples, etc. and pears.") == "Apples, et cetera and pears.")
+        #expect(SpeakIPAText.normalized("She said “bring pens, paper, etc.” Then we left.")
+            == "She said “bring pens, paper, et cetera.” Then we left.")
         #expect(SpeakIPAText.normalized("Swift vs. Kotlin") == "Swift versus Kotlin.")
         // In capitals, it's more often Visual Studio.
         #expect(SpeakIPAText.normalized("Open VS Code.") == "Open VS Code.")
@@ -114,9 +116,19 @@ import Testing
         #expect(SpeakIPAText.chunks(in: longer).count == 2)
     }
 
-    @Test func linesAreSentencesOfTheirOwnAndChunksCrossThem() {
+    @Test func linesAreSentencesOfTheirOwnAndStayLinesInAChunk() {
         let chunks = SpeakIPAText.chunks(in: "First item.\nSecond item.\nThird item.", firstChunkLimit: 20, chunkLimit: 100)
-        #expect(chunks == ["First item.", "Second item. Third item."])
+        #expect(chunks == ["First item.", "Second item.\nThird item."])
+    }
+
+    @Test func aLowercaseListItemDoesntRunIntoTheLineBefore() {
+        let normalized = SpeakIPAText.normalized("- check the build\n- run the tests")
+        let chunk = try? #require(SpeakIPAText.chunks(in: normalized).first)
+        #expect(chunk == "check the build.\nrun the tests.")
+        let transcribed = words([("check", "tʃɛk"), ("the", "ðə"), ("build", "bɪld"), ("run", "rʌn"), ("the", "ðə"), ("tests", "tɛsts")])
+        let speech = SpeakIPAText.speech(of: chunk ?? "", transcribed: transcribed, symbols: symbols)
+        // The full stop after "build" stays: the line ends there.
+        #expect(speech.parts[5] == .text(".\n"))
     }
 
     @Test func aLongSentenceIsCutAfterClausePunctuationThenBetweenWords() {
@@ -299,9 +311,20 @@ import Testing
 
     @Test func ipaWithPunctuationIsSaidAsWrittenThoughKokoroHasTheSymbol() {
         // A loaded model's vocabulary has punctuation; in a word's phonemes it would be a pause.
-        let speech = SpeakIPAText.speech(of: "Hello", transcribed: words([("Hello", "həˈloʊ,")]), symbols: symbols.union([","]))
+        let speech = SpeakIPAText.speech(of: "Hello", transcribed: words([("Hello", "həˈloʊ!")]), symbols: symbols.union(["!"]))
         #expect(speech.parts == [.text("Hello")])
         #expect(speech.unknownSymbolWords == 1)
+    }
+
+    @Test func ofSeveralReadingsTheFirstIsSaid() {
+        #expect(SpeakIPAText.firstReading(of: "/ˈiːðər/ /ˈaɪðər/") == "ˈiːðər")
+        #expect(SpeakIPAText.firstReading(of: "[ˈiːðər]") == "ˈiːðər")
+        #expect(SpeakIPAText.firstReading(of: "ˈiːðər, ˈaɪðər") == "ˈiːðər")
+        #expect(SpeakIPAText.firstReading(of: "ˈiːðər or ˈaɪðər") == "ˈiːðər")
+        // A space between syllables of one reading stays.
+        #expect(SpeakIPAText.firstReading(of: "ˈwɪn stən") == "ˈwɪn stən")
+        let speech = SpeakIPAText.speech(of: "either", transcribed: words([("either", "/ˈiːðər/ /ˈaɪðər/")]), symbols: symbols)
+        #expect(speech.parts == [.phonemes(word: "either", phonemes: "ˈiðəɹ")])
     }
 
     @Test func aFullStopThatDoesntEndASentenceGoesWithItsWord() {
