@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import LogSupport
 import Observation
+import ShareOutbox
 import TelegramLink
 import UniformTypeIdentifiers
 import VoiceLoop
@@ -195,6 +196,12 @@ public final class AppModel {
     private let link: TelegramLink?
     /// Suggests phonemes for an IPA pronunciation's word in settings.
     private let pronunciationSuggester: any PronunciationSuggester
+    /// The agent list and the outbox shared with the iOS share extension, or nil: on the Mac, which
+    /// has no share extension, in a build not signed with the App Group, and in tests that don't
+    /// pass one.
+    @ObservationIgnored private let shareOutbox: ShareOutbox?
+    /// True while the outbox's files are being sent, so a second activation doesn't send them again.
+    @ObservationIgnored private var isSendingSharedFiles = false
     /// Where the settings persist.
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private var started = false
@@ -210,33 +217,36 @@ public final class AppModel {
     /// The observers of the app coming and going, removed with the model (the tests make many).
     @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
-    /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
-    /// the standard user defaults.
+    /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop,
+    /// the standard user defaults, and on iOS the share extension's outbox in the App Group container.
     public convenience init() {
-        self.init(voiceLoop: VoiceLoop(), defaults: .standard)
+        self.init(voiceLoop: VoiceLoop(), defaults: .standard, shareOutbox: Self.appShareOutbox())
     }
 
     /// The app's model with a Telegram session if `Secrets.xcconfig` supplied credentials. Tests pass a voice
     /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone.
-    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults) {
+    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults, shareOutbox: ShareOutbox? = nil) {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
             voiceLoop: voiceLoop,
             defaults: defaults,
-            openedFileInboxes: Self.appOpenedFileInboxes
+            openedFileInboxes: Self.appOpenedFileInboxes,
+            shareOutbox: shareOutbox
         )
     }
 
     /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own,
-    /// a fake pronunciation suggester, and folders of their own as the inboxes for opened files.
-    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
+    /// a fake pronunciation suggester, folders of their own as the inboxes for opened files, and a
+    /// share outbox in a folder of their own. `hasCredentials` defaults to whether there is a link;
+    /// only previews have one without the other.
     package init(
         link: TelegramLink?,
         voiceLoop: VoiceLoop,
         defaults: UserDefaults,
         hasCredentials: Bool? = nil,
         pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester(),
-        openedFileInboxes: [URL] = []
+        openedFileInboxes: [URL] = [],
+        shareOutbox: ShareOutbox? = nil
     ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
@@ -246,6 +256,7 @@ public final class AppModel {
         self.pronunciationSuggester = pronunciationSuggester
         self.openedFileInboxes = openedFileInboxes
         openedFileFolder = URL.temporaryDirectory.appending(path: "OpenedFiles", directoryHint: .isDirectory)
+        self.shareOutbox = shareOutbox
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
@@ -379,6 +390,7 @@ public final class AppModel {
         ])
         isAppActive = true
         sendOnlineStatus()
+        Task { await sendSharedFiles() }
     }
 
     /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
@@ -469,6 +481,16 @@ public final class AppModel {
         return inboxes
         #else
         []
+        #endif
+    }
+
+    /// The share extension's outbox in the App Group container, on iOS only. The Mac app has no share
+    /// extension, and reading another app group's container there would make macOS ask Adam for access.
+    private static func appShareOutbox() -> ShareOutbox? {
+        #if os(iOS)
+        ShareOutbox.appGroup()
+        #else
+        nil
         #endif
     }
 
@@ -570,6 +592,9 @@ public final class AppModel {
         isLogOutRequested = true
         do {
             try await link?.logOut()
+            // Logged out, there are no agents to share to. Not on TDLib's logging-out state, which
+            // it also reports while closing as the app quits.
+            saveShareAgents([])
         } catch {
             isLogOutRequested = false
             Self.log.error("log out failed", error.logContext())
@@ -739,6 +764,9 @@ public final class AppModel {
             Self.log.info("bot chats loaded", ["count": loadedChats.count])
             chats = loadedChats
             chatsLoaded = true
+            saveShareAgents(chats)
+            // Not waiting on it: the histories load meanwhile.
+            Task { await sendSharedFiles() }
             if currentChat == nil {
                 selectedChatID = chats.first?.id
             }
@@ -929,7 +957,13 @@ public final class AppModel {
     /// `loadData` loads the picked photo's data; in the app it is `PhotosPickerItem.loadTransferable`, which
     /// returns nil when the photo can't be read. Returns false and sets `errorMessage` on failure.
     public func sendPhoto(caption: String, loadData: () async throws -> Data?) async -> Bool {
-        guard let link, let chat = currentChat else { return false }
+        guard let chat = currentChat else { return false }
+        return await sendPhoto(caption: caption, to: chat, loadData: loadData)
+    }
+
+    /// The same, to `chat` whichever chat is shown: for a file shared to an agent from the share sheet.
+    private func sendPhoto(caption: String, to chat: BotChat, loadData: () async throws -> Data?) async -> Bool {
+        guard let link else { return false }
         isSendingAttachment = true
         defer { isSendingAttachment = false }
         do {
@@ -959,7 +993,13 @@ public final class AppModel {
     /// so the caption, was sent: true when all were, and also when a later one was turned down.
     public func sendDocuments(caption: String, fileURLs: [URL]) async -> Bool {
         // The chat is the one shown now, even if Adam switches chats while the files are copied.
-        guard let link, let chat = currentChat, !fileURLs.isEmpty else { return false }
+        guard let chat = currentChat else { return false }
+        return await sendDocuments(caption: caption, fileURLs: fileURLs, to: chat)
+    }
+
+    /// The same, to `chat` whichever chat is shown: for a file shared to an agent from the share sheet.
+    private func sendDocuments(caption: String, fileURLs: [URL], to chat: BotChat) async -> Bool {
+        guard let link, !fileURLs.isEmpty else { return false }
         isSendingAttachment = true
         defer { isSendingAttachment = false }
         var copies: [URL] = []
@@ -1290,6 +1330,62 @@ public final class AppModel {
     private static func logType(of url: URL) -> String {
         guard let type = UTType(filenameExtension: url.pathExtension), !type.isDynamic else { return "unknown" }
         return type.identifier
+    }
+
+    // MARK: - Shared files
+
+    /// Saves `chats` as the agents the iOS share extension lists. After each load of the bot chats,
+    /// and as none after a logout.
+    private func saveShareAgents(_ chats: [BotChat]) {
+        guard let shareOutbox else { return }
+        do {
+            try shareOutbox.saveAgents(chats.map { ShareAgent(id: $0.id.rawValue, name: $0.title) })
+        } catch {
+            // Codes only: a file error's description holds the container's path.
+            Self.log.error("saving share agents failed", error.logCodes())
+        }
+    }
+
+    /// Sends the files shared to agents from the iOS share sheet. The share extension can't run
+    /// TDLib, so they wait in the outbox until Winston is active, logged in and has its bot chats:
+    /// each activation and each load of the bot chats sends them. Each goes out as the + button
+    /// sends it, an image as a photo and anything else as a document, then leaves the outbox
+    /// whether it was sent or not, as a failure shows its error. Package for the tests, which call
+    /// it in place of an activation.
+    package func sendSharedFiles() async {
+        guard let shareOutbox, authState == .ready, chatsLoaded, !isSendingSharedFiles else { return }
+        isSendingSharedFiles = true
+        defer { isSendingSharedFiles = false }
+        await shareOutbox.sendAll { item in
+            await self.sendSharedFile(item)
+        }
+    }
+
+    private func sendSharedFile(_ item: OutboxItem) async {
+        guard let chat = chats.first(where: { $0.id.rawValue == item.agentID }) else {
+            Self.log.error("shared file not sent: its agent isn't a bot chat", ["type": item.typeIdentifier])
+            errorMessage = "Couldn't send a shared file: its agent isn't in Winston anymore."
+            return
+        }
+        let asPhoto = PhotoFiles.canConvert(typeIdentifier: item.typeIdentifier)
+        let sent = if asPhoto {
+            await sendPhoto(caption: "", to: chat) {
+                try await Self.contents(of: item.fileURL)
+            }
+        } else {
+            await sendDocuments(caption: "", fileURLs: [item.fileURL], to: chat)
+        }
+        Self.log.notice("shared file handed to telegram", [
+            "type": item.typeIdentifier,
+            "as": asPhoto ? "photo" : "document",
+            "sent": sent,
+        ])
+    }
+
+    /// Reads a file off the main actor.
+    @concurrent
+    private static func contents(of url: URL) async throws -> Data {
+        try Data(contentsOf: url)
     }
 
     /// Adds Adam's 👍 to `message`, or removes it. An added 👍 becomes `addedThumbsUp` once it shows.

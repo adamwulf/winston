@@ -78,6 +78,14 @@ public enum PhotoFiles {
         }
     }
 
+    /// Whether `jpegForSending` can convert a file of this type: an image type ImageIO reads, such
+    /// as PNG, HEIC or JPEG. Not a PDF, which ImageIO may also read but isn't an image type.
+    public static func canConvert(typeIdentifier: String) -> Bool {
+        guard UTType(typeIdentifier)?.conforms(to: .image) == true else { return false }
+        let readable = CGImageSourceCopyTypeIdentifiers() as? [String] ?? []
+        return readable.contains(typeIdentifier)
+    }
+
     /// Decodes an image file at a display size, upright. Nil if the file isn't a readable image.
     @concurrent
     public static func displayImage(at url: URL, maxPixelSize: Int) async -> CGImage? {
