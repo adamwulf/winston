@@ -11,12 +11,13 @@ mode, a hands-free voice mode, and [push-to-talk](#push-to-talk). See
   (the app's state and logic: `AppModel`, `AppSecrets`, `PhotoFiles`,
   `DocumentFiles`, `OpenedFile`), plus
   their tests. `LogSupport` and `WinstonLogging` hold the logging (see
-  [Logging](#logging)).
+  [Logging](#logging)). `ShareOutbox` is the hand-off to the iOS share
+  extension (see [Share extension](#share-extension-ios)).
 - `App/Winston.xcodeproj`: the multiplatform SwiftUI app (iOS 26+, macOS 26+).
   `App/Winston/` is a folder-synced group, so new files there join the target
   without project file edits. It holds only SwiftUI views and AppKit/UIKit
   glue, and has no tests. Anything with logic worth testing goes in a package
-  target.
+  target. `App/WinstonShare/` is the same for the iOS share extension target.
 - `App/Winston.xcworkspace`: the app project plus the package, so the
   `Winston` scheme can run the package's tests. Open this one to test in
   Xcode. Opened alone, the project sees the package's libraries but not its
@@ -51,11 +52,11 @@ voice mode; background speech still requires an already active voice session.
 
 ### Turning push back on
 
-`App/Config/iOS.entitlements` holds `aps-environment`. Without the Push Notifications
-capability on the App ID, no profile includes that entitlement, so local signing fails and
-Xcode Cloud's App Store export fails. That happened to every build from 39 until push was
-turned off. Do these steps in order. [plans/enable-push.md](plans/enable-push.md) has
-them in more detail, with how to check each one.
+Signing in `aps-environment` without the Push Notifications capability on the App ID
+fails: no profile includes that entitlement, so local signing fails and Xcode Cloud's App
+Store export fails. That happened to every build from 39 until push was turned off. Do
+these steps in order. [plans/enable-push.md](plans/enable-push.md) has them in more
+detail, with how to check each one.
 
 1. In the Apple Developer account, go to Certificates, IDs & Profiles → Identifiers →
    `com.milestonemade.winston`. Check Push Notifications and Save. App Store Connect needs
@@ -63,13 +64,15 @@ them in more detail, with how to check each one.
 2. Refresh the provisioning profiles. Xcode Cloud's automatic signing should make new ones
    on its next build. On a Mac, sign in to Xcode → Settings → Accounts, then build to an
    iPhone with automatic signing, so Xcode makes a profile for the App ID with Push.
-3. Sign the entitlement back in. In `App/Config/Shared.xcconfig`, replace the "Push is
-   off" comment with:
+3. Sign the entitlement back in. The iOS app already signs in `App/Config/iOS.entitlements`
+   (for the App Group, see [Share extension](#share-extension-ios)). Add to its dict:
 
    ```
-   CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Config/iOS.entitlements
-   CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = Config/iOS.entitlements
+   <key>aps-environment</key>
+   <string>$(PUSH_ENVIRONMENT)</string>
    ```
+
+   and remove the "Push is off" comment from `App/Config/Shared.xcconfig`.
 
 4. Check that a signed Release archive succeeds and that
    `codesign -d --entitlements - <archive>/Products/Applications/Winston.app` prints
@@ -371,6 +374,50 @@ Try Again), `sending opened file failed` (turned down at once) and `opened
 file upload failed` (later). At launch, `opened file leftovers removed` gives a
 count, and a logout during uploads logs `opened file uploads discarded`. No
 file name is logged.
+
+## Share extension (iOS)
+
+From the Share sheet in any app, Winston takes one image or one file: a
+screenshot, a photo, a zip, a document. Its sheet lists the agents (the bot
+chats), one row each, with Cancel. With one agent it still asks, so a stray tap
+sends nothing. With none yet it says to open Winston first.
+
+The extension (`App/WinstonShare/`, bundle ID `com.milestonemade.winston.share`)
+can't run TDLib, so it hands off through the App Group
+`group.com.milestonemade.winston`, with `ShareOutbox`:
+
+- Each load of the bot chats saves them as the agent list. Logging out saves
+  none.
+- Picking an agent copies the file into the outbox with a small manifest (agent,
+  name, type), then closes.
+- Each time Winston becomes active, and each time its bot chats load, it sends
+  the outbox the way the + button sends: an image as a photo, any other file as
+  a document under its own name. Each item then leaves the outbox, sent or not;
+  a failure shows its error.
+
+So the file goes out the next time Winston is opened: an extension has no
+supported way to open its app. The Mac app has no share extension; files
+dropped on its chat window already go to the chat shown.
+
+### Signing setup
+
+Like push, an entitlement the App ID doesn't have fails signing and Xcode
+Cloud's App Store export, and both iOS targets now sign in the App Group. Do
+this before a signed build:
+
+1. In the Apple Developer account, go to Certificates, IDs & Profiles →
+   Identifiers → App Groups, and register `group.com.milestonemade.winston`.
+2. In Identifiers → App IDs, open `com.milestonemade.winston`, check App Groups,
+   choose that group, and Save.
+3. Register a new App ID (App IDs → App) with the explicit bundle ID
+   `com.milestonemade.winston.share`. Check App Groups and choose the same group.
+4. Xcode Cloud's automatic signing makes the new profiles, for the extension
+   too, on its next build. On a Mac, build to an iPhone with automatic signing.
+
+App Store Connect needs no change: the extension ships inside the app. Both
+targets take their version from `App/Config/Shared.xcconfig`, so the build
+number `ci_pre_xcodebuild.sh` stamps there reaches the extension too, and the
+two always match, as App Store Connect requires.
 
 ## Push-to-talk
 

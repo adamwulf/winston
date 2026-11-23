@@ -1,4 +1,5 @@
-// Build settings shared by every configuration of the Winston app target.
+// Build settings shared by every configuration of the Winston app target and of its iOS
+// share extension, WinstonShare, so the two always have the same version and build number.
 
 // Versions live here, not in the project file, so Xcode Cloud's ci_pre_xcodebuild.sh can
 // stamp CURRENT_PROJECT_VERSION with its build number.
@@ -22,8 +23,9 @@ INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=iphonesimulator*] = NO
 INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace[sdk=macosx*] = YES
 
 // Push is off: the App ID doesn't have Push Notifications yet, so no profile carries
-// aps-environment and App Store export fails. Config/iOS.entitlements holds that entitlement
-// but isn't signed in. To turn push on, follow plans/enable-push.md.
+// aps-environment and App Store export fails. Config/iOS.entitlements, which the iOS app
+// signs in for its App Group, leaves that entitlement out. To turn push on, follow
+// plans/enable-push.md.
 
 // Telegram API credentials from https://my.telegram.org (API development tools).
 // Real values go in Secrets.xcconfig, which is gitignored. Copy Secrets.example.xcconfig to start.
