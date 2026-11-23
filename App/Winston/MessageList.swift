@@ -8,7 +8,8 @@ import QuickLook
 import AppKit
 #endif
 
-/// The current chat's messages, scrolled to the newest. Incoming messages are marked read as they appear,
+/// The current chat's messages, scrolled to the newest, with a header where each day starts (see
+/// `MessageDaySeparators`). Incoming messages are marked read as they appear,
 /// but only while the window is active, so replies that arrive while Adam is elsewhere stay unread.
 struct MessageList: View {
     @Environment(AppModel.self) private var model
@@ -20,17 +21,19 @@ struct MessageList: View {
     /// Holds the document Quick Look shows, which a document row sets.
     @Environment(Presentations.self) private var presentations
     #endif
-    // The user's, for the messages' times. They follow changes in system settings.
+    // The user's, for the messages' times and days. They follow changes in system settings.
     @Environment(\.calendar) private var calendar
     @Environment(\.timeZone) private var timeZone
     @Environment(\.locale) private var locale
-    /// What "today" is for the messages' times. Moves on as the day or the time zone changes, and
-    /// when the window becomes active again.
+    /// What "today" is for the messages' times and the days' headers. Moves on as the day or the
+    /// time zone changes, and when the window becomes active again.
     @State private var now = Date.now
 
     var body: some View {
         let messages = model.currentMessages
         let times = MessageTimes(now: now, calendar: calendar, timeZone: timeZone, locale: locale)
+        // A header above the first message of each day.
+        let days = MessageDaySeparators.compute(messages, now: now, calendar: calendar, timeZone: timeZone, locale: locale)
         #if os(iOS)
         // Each message has its own time, shown beside it while the list is pulled aside.
         let time: (ChatMessage) -> MessageTimes.Caption? = times.pulledCaption(for:)
@@ -43,6 +46,12 @@ struct MessageList: View {
             ScrollView {
                 LazyVStack(spacing: 10) {
                     ForEach(messages) { message in
+                        // A row of its own, before the message's: scrolling to the message shows
+                        // the message's row, and the message's row keeps its identity as the
+                        // header comes or goes.
+                        if let day = days[message.id] {
+                            DaySeparator(separator: day)
+                        }
                         MessageRow(message: message, time: time(message))
                             .id(message.id)
                             .onAppear {
@@ -100,7 +109,7 @@ struct MessageList: View {
         // down from there.
         .id(model.selectedChatID)
         .task {
-            // At midnight today's times become yesterday's.
+            // At midnight today's times become yesterday's, and "Today" becomes "Yesterday".
             for await _ in NotificationCenter.default.notifications(named: .NSCalendarDayChanged) {
                 now = .now
             }
@@ -275,6 +284,29 @@ struct MessageRow: View {
     }
 }
 
+/// The header above the first message of a day, as in Messages: the day, small, dimmed and centered.
+/// VoiceOver reads it as a heading, so the rotor's Headings go from day to day. On iOS it holds
+/// still while the bubbles slide aside to show their times: it isn't a message, and has no time.
+struct DaySeparator: View {
+    let separator: MessageDaySeparators.Separator
+
+    var body: some View {
+        Text(separator.text)
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            // Wraps at the largest text sizes, rather than being cut short.
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: .infinity)
+            // More room above than between messages, so a new day stands apart.
+            .padding(.top, 8)
+            .accessibilityLabel(separator.accessibilityLabel)
+            .accessibilityAddTraits(.isHeader)
+            #if os(iOS)
+            .modifier(HoldsStillForMessageTimes())
+            #endif
+    }
+}
+
 #if os(iOS)
 private extension VerticalAlignment {
     /// The middle of a message's bubble, which the time beside it lines up with.
@@ -335,14 +367,25 @@ private struct PulledTime: View {
     }
 }
 
-/// Slides the bubbles, all together, as far as the list's `MessageTimesPull` says. The only view that
-/// reads `slide`, so a drag redraws nothing else.
+/// Slides the bubbles, all together, as far as the list's `MessageTimesPull` says. With the days'
+/// headers, which `HoldsStillForMessageTimes` slides back, the only views that read `slide`, so a
+/// drag redraws nothing else.
 private struct SlidesForMessageTimes: ViewModifier {
     @Environment(MessageTimesPull.self) private var pull: MessageTimesPull?
 
     func body(content: Content) -> some View {
         // Toward the leading edge: SwiftUI mirrors the offset in a right-to-left layout.
         content.offset(x: -(pull?.slide ?? 0))
+    }
+}
+
+/// Keeps a view in the list where it is while `SlidesForMessageTimes` slides the list: it slides it
+/// back as far, in the same frame and with the same spring, so it doesn't move at all.
+private struct HoldsStillForMessageTimes: ViewModifier {
+    @Environment(MessageTimesPull.self) private var pull: MessageTimesPull?
+
+    func body(content: Content) -> some View {
+        content.offset(x: pull?.slide ?? 0)
     }
 }
 
