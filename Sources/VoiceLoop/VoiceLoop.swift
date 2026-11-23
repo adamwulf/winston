@@ -162,6 +162,9 @@ public final class VoiceLoop {
     public private(set) var isInputMuted = false
     /// Follows the AirPods mute while voice mode runs (see `isInputMuted`). Nil while it is off.
     @ObservationIgnored private var inputMuteObserver: Task<Void, Never>?
+    /// What the mute and remote command logs count their times from: voice mode's start, set
+    /// with `inputMuteObserver`. Nil while it is off.
+    @ObservationIgnored private var mediaLogClock: MediaLogClock?
     /// Takes the media remote commands while voice mode runs (see `installRemoteCommands()`).
     /// Nil while it is off, and in tests that don't set `VoiceEnvironment.makeNowPlaying`.
     @ObservationIgnored private var nowPlaying: (any NowPlaying)?
@@ -1644,6 +1647,8 @@ public final class VoiceLoop {
     /// Starts following the AirPods mute (see `isInputMuted`), unless it is already followed.
     private func observeInputMute() {
         guard inputMuteObserver == nil else { return }
+        let clock = MediaLogClock()
+        mediaLogClock = clock
         let changes = NotificationCenter.default.notifications(named: AVAudioApplication.inputMuteStateChangeNotification)
             .map { $0.userInfo?[AVAudioApplication.muteStateKey] as? Bool }
         inputMuteObserver = Task { [weak self] in
@@ -1651,7 +1656,7 @@ public final class VoiceLoop {
                 guard let self, !Task.isCancelled else { return }
                 guard let isMuted else {
                     Self.log.notice("input mute notification without a mute state", [
-                        "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
+                        "sinceVoiceModeStartMs": clock.milliseconds(at: MediaDiagnostics.uptime()),
                         "platform": Self.platform,
                     ])
                     continue
@@ -1667,7 +1672,7 @@ public final class VoiceLoop {
             try AVAudioApplication.shared.setInputMuteStateChangeHandler { @Sendable isMuted in
                 VoiceLoop.log.notice("input mute handler called", [
                     "muted": isMuted,
-                    "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
+                    "sinceVoiceModeStartMs": clock.milliseconds(at: MediaDiagnostics.uptime()),
                     "platform": VoiceLoop.platform,
                 ])
                 gate.setMuted(isMuted)
@@ -1710,6 +1715,7 @@ public final class VoiceLoop {
             self.nowPlaying = nil
             Self.log.notice("remote commands removed", ["platform": Self.platform])
         }
+        mediaLogClock = nil
         Self.log.notice("input mute observer removed", ["platform": Self.platform])
     }
 
@@ -1717,14 +1723,15 @@ public final class VoiceLoop {
     /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already. `source` says
     /// what told the loop, `notification` or `remoteCommand`, for the logs.
     private func inputMuteChanged(_ isMuted: Bool, source: String) {
-        Self.log.notice("input mute changed", [
+        var fields: [String: CustomStringConvertible] = [
             "muted": isMuted,
             "mutedBefore": isInputMuted,
             "source": source,
-            "uptime": MediaDiagnostics.seconds(MediaDiagnostics.uptime()),
             "voiceMode": voiceModeLogState,
             "platform": Self.platform,
-        ])
+        ]
+        fields["sinceVoiceModeStartMs"] = mediaLogClock?.milliseconds(at: MediaDiagnostics.uptime())
+        Self.log.notice("input mute changed", fields)
         guard isMuted != isInputMuted else { return }
         isInputMuted = isMuted
         nowPlaying?.setMuted(isMuted)
@@ -1778,22 +1785,18 @@ public final class VoiceLoop {
     /// A media remote command came, as a press of the AirPods stem may: toggles the mute for
     /// play, pause and play/pause, and only logs any other command.
     private func remoteCommandReceived(_ event: RemoteCommandEvent) {
-        let handlerUptime = MediaDiagnostics.uptime()
+        let handled = MediaDiagnostics.uptime()
         let mutedBefore = isInputMuted
-        // The event's own timestamp, the uptime MediaPlayer called the handler at, and how long
-        // the hop to the main actor took. `eventToReceiptMs` holds only if the timestamp is on
-        // the uptime clock; the raw values show if it isn't.
-        var fields: [String: CustomStringConvertible] = [
+        // Since voice mode started, how long the hop to the main actor took, and how long after
+        // the event's own timestamp MediaPlayer called the handler, if that timestamp is on the
+        // uptime clock. Never the uptimes themselves.
+        var fields = MediaDiagnostics.remoteCommandTimes(event, handled: handled, clock: mediaLogClock).merging([
             "command": event.name,
-            "eventTimestamp": MediaDiagnostics.seconds(event.timestamp),
-            "receivedUptime": MediaDiagnostics.seconds(event.receivedUptime),
-            "eventToReceiptMs": MediaDiagnostics.milliseconds(from: event.timestamp, to: event.receivedUptime),
-            "receiptToMainMs": MediaDiagnostics.milliseconds(from: event.receivedUptime, to: handlerUptime),
             "voiceMode": voiceModeLogState,
             "appState": MediaDiagnostics.appState,
             "mutedBefore": mutedBefore,
             "platform": Self.platform,
-        ]
+        ]) { $1 }
         guard event.command != nil else {
             fields["mutedAfter"] = isInputMuted
             Self.log.notice("remote command received (not handled)", fields)
@@ -1809,12 +1812,9 @@ public final class VoiceLoop {
         let applied = toggleInputMute()
         fields["mutedAfter"] = isInputMuted
         if let applied {
-            // From the press (by its timestamp) and from receipt, to `setInputMuted` returning
-            // and to `inputMuteChanged` having run.
-            fields["eventToSetMutedMs"] = MediaDiagnostics.milliseconds(from: event.timestamp, to: applied.setMutedReturned)
-            fields["eventToAppliedMs"] = MediaDiagnostics.milliseconds(from: event.timestamp, to: applied.muteChanged)
-            fields["receiptToSetMutedMs"] = MediaDiagnostics.milliseconds(from: event.receivedUptime, to: applied.setMutedReturned)
-            fields["receiptToAppliedMs"] = MediaDiagnostics.milliseconds(from: event.receivedUptime, to: applied.muteChanged)
+            // From receipt, and from the press (by its timestamp) if it can be measured, to
+            // `setInputMuted` returning and to `inputMuteChanged` having run.
+            fields.merge(MediaDiagnostics.remoteCommandTimes(event, handled: handled, applied: applied, clock: mediaLogClock)) { $1 }
         }
         Self.log.notice("remote command handled", fields)
     }

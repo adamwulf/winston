@@ -116,14 +116,17 @@ package enum RemoteCommand: String, Sendable {
     case pause
 }
 
-/// One media remote command as it came from the system, for the loop and its logs.
+/// One media remote command as it came from the system, for the loop and its logs. The logs
+/// write only how long after its times later steps came, never the times themselves
+/// (`MediaDiagnostics.remoteCommandTimes`).
 package struct RemoteCommandEvent: Sendable {
     /// The command's name, such as `togglePlayPause` or `nextTrack`.
     package var name: String
     /// The command voice mode acts on. Nil for one it only logs (see `NowPlaying.install`).
     package var command: RemoteCommand?
     /// `MPRemoteCommandEvent.timestamp`: when the event occurred, in seconds. Apple doesn't say
-    /// on what clock; like `UIEvent.timestamp`, it is likely the system uptime.
+    /// on what clock; like `UIEvent.timestamp`, it is likely the system uptime. The logs measure
+    /// from it only if it is close to `receivedUptime` (`MediaDiagnostics.isOnUptimeClock`).
     package var timestamp: TimeInterval
     /// `ProcessInfo.systemUptime` when MediaPlayer called the handler, before it hops to the main
     /// actor.
