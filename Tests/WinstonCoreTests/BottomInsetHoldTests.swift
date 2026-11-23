@@ -33,9 +33,9 @@ struct BottomInsetHoldTests {
         var hold = activeWithKeyboard()
         hold.sceneIsActive(false)
 
-        // Inactive, then the background, where the snapshot's keyboard comes, then none.
-        hold.sceneIsActive(false)
+        // The snapshot's keyboard, measured before the background's callback, then none.
         hold.measured(352)
+        hold.sceneIsActive(false)
         hold.measured(34)
 
         #expect(hold.heldInset == 328)
@@ -51,6 +51,20 @@ struct BottomInsetHoldTests {
         hold.sceneIsActive(true)
 
         #expect(hold.heldInset == nil)
+    }
+
+    @Test func theKeyboardBackBeforeActiveIsHeldTheNextTime() {
+        var hold = activeWithKeyboard()
+        hold.sceneIsActive(false)
+        hold.measured(352)
+        hold.measured(34)
+        // Back in the foreground: the keyboard as it was before active, then no change.
+        hold.measured(328)
+        hold.sceneIsActive(true)
+
+        hold.sceneIsActive(false)
+
+        #expect(hold.heldInset == 328)
     }
 
     @Test func theNextTimeItHoldsTheInsetOfThatTime() {
