@@ -306,10 +306,12 @@ private struct PulledTime: View {
                     Text(text)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        // One line, shrunk to fit if it must: a caption line is shorter than any bubble,
-                        // so the times of neighboring rows never overlap, as wrapped ones could.
+                        // One line, shrunk to fit whole if it must: a caption line is shorter than any
+                        // bubble, so the times of neighboring rows never overlap, as wrapped ones could.
+                        // An earlier year's time at the largest text size, in a 320-point window, needs
+                        // about a third; a fifth leaves room for longer languages.
                         .lineLimit(1)
-                        .minimumScaleFactor(0.4)
+                        .minimumScaleFactor(0.2)
                         // Its line's height, which the zero-size point it hangs from doesn't give it.
                         .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { proxy in

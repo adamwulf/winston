@@ -64,13 +64,15 @@ struct MessageTimesPullTests {
             #expect(slide > fullyRevealed && slide < pull)
             #expect(slide < fullyRevealed + MessageTimesPull.maxStretch)
         }
-        // Further each time, by less for each point of drag.
+        // Further each time, by less for each point of drag than the time before, and less than the
+        // drag itself from the start.
+        var lastStep: CGFloat = 1
         for index in 1..<slides.count {
             #expect(slides[index] > slides[index - 1])
+            let step = (slides[index] - slides[index - 1]) / (pulls[index] - pulls[index - 1])
+            #expect(step < lastStep)
+            lastStep = step
         }
-        let firstStep = (slides[1] - slides[0]) / (pulls[1] - pulls[0])
-        let laterStep = (slides[3] - slides[2]) / (pulls[3] - pulls[2])
-        #expect(laterStep < firstStep && firstStep < 1)
         // No jump where the stretch starts.
         #expect(abs(MessageTimesPull.slide(forPull: 66.01, fullyRevealed: fullyRevealed) - 66) < 0.01)
     }

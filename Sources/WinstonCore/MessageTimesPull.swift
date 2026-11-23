@@ -23,8 +23,8 @@ public final class MessageTimesPull {
     /// where the rows do.
     nonisolated public static let spacing: CGFloat = 16
     /// The most of the list's width a time can take. A longer one, as at the largest text sizes,
-    /// shrinks to fit (on one line, so it is never taller than its bubble), so the bubbles never
-    /// slide more than about this far.
+    /// shrinks to fit whole (on one line, so it is never taller than its bubble), so the bubbles
+    /// never slide more than about this far.
     nonisolated public static let widestTimeFraction: CGFloat = 0.5
     /// The furthest the bubbles stretch past showing the widest time, however far the drag goes.
     nonisolated public static let maxStretch: CGFloat = 60
@@ -34,8 +34,9 @@ public final class MessageTimesPull {
     /// Whether the times show: from the start of a pull until the bubbles are back.
     public private(set) var showsTimes = false
 
-    /// The width of each time showing, by message. A pull's times show, and are measured, in the
-    /// layout right after it begins, before the drag moves on.
+    /// The width of each time showing, by message. A pull's times show once it begins and are
+    /// measured as they lay out; until then the bubbles only stretch, and each measurement slides
+    /// them again for where the drag is.
     @ObservationIgnored private var timeWidths: [MessageID: CGFloat] = [:]
     /// Where the drag was, toward the leading edge, when the pull began. Nil between pulls.
     @ObservationIgnored private var start: CGFloat?
