@@ -16,7 +16,7 @@ struct BottomInsetHoldTests {
         return hold
     }
 
-    @Test func whileActiveNothingIsHeld() {
+    @Test func whileActiveBeforeLeavingNothingIsHeld() {
         let hold = activeWithKeyboard()
 
         #expect(hold.heldInset == nil)
@@ -55,8 +55,8 @@ struct BottomInsetHoldTests {
         #expect(!hold.isWaitingToLetGo)
     }
 
-    /// Active before the keyboard is back, as on an iPhone: letting go then dropped the bar behind
-    /// the keyboard until it came back.
+    /// Active before the keyboard is back: the order inferred from the bar dropping behind the
+    /// keyboard for a moment on an iPhone, when the hold let go as the app became active.
     @Test func becomingActiveBeforeTheKeyboardIsBackKeepsHolding() {
         var hold = activeWithKeyboard()
         hold.sceneIsActive(false)
@@ -79,6 +79,22 @@ struct BottomInsetHoldTests {
 
         #expect(hold.heldInset == nil)
         #expect(!hold.isWaitingToLetGo)
+    }
+
+    @Test func anotherInsetAfterActiveKeepsWaitingForTheHeldOne() {
+        var hold = activeWithKeyboard()
+        hold.sceneIsActive(false)
+        hold.measured(34)
+        hold.sceneIsActive(true)
+
+        hold.measured(352)
+
+        #expect(hold.heldInset == 328)
+        #expect(hold.isWaitingToLetGo)
+
+        hold.measured(328)
+
+        #expect(hold.heldInset == nil)
     }
 
     @Test func anInsetWithinAPointOfTheHeldOneIsBack() {

@@ -182,11 +182,12 @@ struct ChatScreen: View {
 }
 
 #if os(iOS)
-/// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, until it is
-/// active again, so the app switcher shows the bottom bar where it was. In the simulator, on the way
-/// to the background, UIKit reported the keyboard at another height just before the snapshot, which
-/// moved the bar; on an iPhone the bar showed hidden behind the keyboard, most likely for the same
-/// reason. Back in the foreground, it holds on until the keyboard is back. See `BottomInsetHold`.
+/// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, so the app
+/// switcher shows the bottom bar where it was, until the app is active again with the system's inset
+/// back to the held one, or a second after it is active if that doesn't happen. In the simulator, on
+/// the way to the background, UIKit reported the keyboard at another height just before the
+/// snapshot, which moved the bar; on an iPhone the bar showed hidden behind the keyboard, most
+/// likely for the same reason. See `BottomInsetHold`.
 private struct HoldsBottomInsetWhileInactive: ViewModifier {
     private static let log = Logger(label: "app.layout")
     /// How long to wait, once active, for the keyboard to come back before letting go anyway, in
@@ -207,6 +208,10 @@ private struct HoldsBottomInsetWhileInactive: ViewModifier {
                 hold.measured(inset)
             }
             .onChange(of: scenePhase, initial: true) {
+                // Whether the keyboard was already back as the app became active.
+                if scenePhase == .active, let held = hold.heldInset {
+                    Self.log.info("active with the bottom inset held", ["held": inset(held), "now": inset(hold.latestInset)])
+                }
                 hold.sceneIsActive(scenePhase == .active)
             }
             .task(id: hold.isWaitingToLetGo) {
