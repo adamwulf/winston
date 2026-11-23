@@ -85,6 +85,10 @@ struct ChatScreen: View {
                 .safeAreaInset(edge: .bottom) {
                     BottomBar(draft: $draft)
                 }
+                #if os(iOS)
+                // So the app switcher shows the bar above the keyboard.
+                .modifier(HoldsBottomInsetWhileInactive())
+                #endif
                 #if os(macOS)
                 // Files dropped from Finder anywhere on the chat are sent straight away, as from the
                 // + button. Each arrives as its URL, which keeps the file's name and, like the file
@@ -175,3 +179,30 @@ struct ChatScreen: View {
         }
     }
 }
+
+#if os(iOS)
+/// Keeps the bottom inset (the keyboard's space) the chat had while the app was active, until it is
+/// active again, so the app switcher shows the bottom bar where it was. In the simulator, on the way
+/// to the background, UIKit reported the keyboard at another height just before the snapshot, which
+/// moved the bar; on an iPhone the bar showed hidden behind the keyboard, most likely for the same
+/// reason. See `BottomInsetHold`.
+private struct HoldsBottomInsetWhileInactive: ViewModifier {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var hold = BottomInsetHold()
+
+    func body(content: Content) -> some View {
+        content
+            // While held, the system's bottom inset is ignored and the held one put in its place.
+            .safeAreaPadding(.bottom, hold.heldInset ?? 0)
+            .ignoresSafeArea(edges: hold.heldInset == nil ? [] : .bottom)
+            .onGeometryChange(for: CGFloat.self) { proxy in
+                proxy.safeAreaInsets.bottom
+            } action: { inset in
+                hold.measured(inset)
+            }
+            .onChange(of: scenePhase, initial: true) {
+                hold.sceneIsActive(scenePhase == .active)
+            }
+    }
+}
+#endif
