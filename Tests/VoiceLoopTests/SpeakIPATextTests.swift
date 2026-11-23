@@ -276,6 +276,11 @@ import Testing
         // Readings of them all: the first, then its words.
         #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/ or /rɛd/ /ðɪs/") == ["rid", "ðɪs"])
         #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/,") == ["rid", "ðɪs,"])
+        #expect(SpeakIPAText.joinedReadingWords(of: "/rid ðɪs/ (or /rɛd ðɪs/)") == ["rid", "ðɪs"])
+        let bracketedOr = SpeakIPAText.speech(of: "Read this now.", transcribed: words([
+            ("Read this", "/rid ðɪs/ (or /rɛd ðɪs/)"), ("now", "naʊ"),
+        ]), symbols: symbols)
+        #expect(bracketedOr.parts.prefix(3) == [.phonemes(word: "Read", phonemes: "ɹid"), .text(" "), .phonemes(word: "this", phonemes: "ðɪs")])
         // Fewer words of IPA than words: all of it, said together.
         let city = SpeakIPAText.speech(of: "New York City.", transcribed: words([("New York City", "/nuˈjɔɹk/ /ˈsɪti/")]), symbols: symbols)
         #expect(city.parts.first == .phonemes(word: "New York City", phonemes: "nujˈɔɹksˈɪti"))
@@ -407,6 +412,7 @@ import Testing
         #expect(SpeakIPAText.firstReading(of: "[ˈiːðər]") == "ˈiːðər")
         #expect(SpeakIPAText.firstReading(of: "ˈiːðər, ˈaɪðər") == "ˈiːðər")
         #expect(SpeakIPAText.firstReading(of: "ˈiːðər or ˈaɪðər") == "ˈiːðər")
+        #expect(SpeakIPAText.firstReading(of: "ˈiːðər (or ˈaɪðər)") == "ˈiːðər")
         // A comma after the only reading isn't a list: it stays, to be left out and recorded.
         #expect(SpeakIPAText.firstReading(of: "həˈloʊ,") == "həˈloʊ,")
         #expect(SpeakIPAText.firstReading(of: "/həˈloʊ/,") == "həˈloʊ,")

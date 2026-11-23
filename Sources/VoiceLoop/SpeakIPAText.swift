@@ -349,13 +349,15 @@ public enum SpeakIPAText {
         return words
     }
 
-    /// The first of the readings `ipa` lists, parted by a comma, semicolon, bar or "or" with a
-    /// reading on both sides; all of it if it lists one, so "həˈloʊ," keeps its comma.
+    /// The first of the readings `ipa` lists, parted by a comma, semicolon, bar or "or" (in
+    /// brackets too: "/rid ðɪs/ (or /rɛd ðɪs/)") with a reading on both sides; all of it if it
+    /// lists one, so "həˈloʊ," keeps its comma.
     private static func firstListed(_ ipa: Substring) -> Substring {
         let listed = ipa.split { ",;|".contains($0) }.filter(isReading)
         let reading = listed.count > 1 ? listed[0] : ipa
         let words = reading.split(whereSeparator: \.isWhitespace)
-        if let or = words.firstIndex(of: "or"), words[..<or].contains(where: isReading),
+        if let or = words.firstIndex(where: { $0.trimmingCharacters(in: .punctuationCharacters) == "or" }),
+           words[..<or].contains(where: isReading),
            words[(or + 1)...].contains(where: isReading) {
             return Substring(words[..<or].joined(separator: " "))
         }
