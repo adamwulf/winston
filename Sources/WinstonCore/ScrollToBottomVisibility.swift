@@ -4,7 +4,7 @@ import Foundation
 /// from the bottom of the list, and not while the list is at it.
 ///
 /// Two distances, so the button doesn't flicker on and off as the list moves about one: it shows
-/// once the list is further than `showDistance` from the bottom, hides once it is closer than
+/// once the list is further than `showDistance` from the bottom, hides once it is within
 /// `hideDistance`, and in between stays as it was. The view tells this which of those the list is
 /// in (`Zone`) only as it moves from one to another, not on every scroll.
 ///
@@ -15,8 +15,8 @@ public struct ScrollToBottomVisibility: Equatable, Sendable {
     /// Further than this from the bottom, in points, the button shows: the newest message, or a
     /// good part of it, is out of sight.
     public static let showDistance: CGFloat = 200
-    /// Closer than this the button hides: the newest message is in sight, or nearly. The list's
-    /// own padding under it is 16 points, so scrolling to it ends well inside.
+    /// This close or closer, the button hides: the newest message is in sight, or nearly. The
+    /// list's own padding under it is 16 points, so scrolling to it ends well inside.
     public static let hideDistance: CGFloat = 100
 
     /// Where the list is, for the button: near the bottom, away from it, or between the two.
@@ -27,7 +27,7 @@ public struct ScrollToBottomVisibility: Equatable, Sendable {
 
         /// The zone of a list `distance` points above its bottom.
         public init(distanceFromBottom distance: CGFloat) {
-            if distance < ScrollToBottomVisibility.hideDistance {
+            if distance <= ScrollToBottomVisibility.hideDistance {
                 self = .nearBottom
             } else if distance > ScrollToBottomVisibility.showDistance {
                 self = .awayFromBottom

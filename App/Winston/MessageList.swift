@@ -74,8 +74,8 @@ struct MessageList: View {
             .scrollDismissesKeyboard(.interactively)
             // Scrolled up, a button back down to the newest message. Inside the chat's `.id` below, so
             // each chat starts without it.
-            .modifier(ShowsScrollToNewestButton {
-                scrollToNewest(with: proxy, animated: true)
+            .modifier(ShowsScrollToNewestButton { animated in
+                scrollToNewest(with: proxy, animated: animated)
             })
             .onChange(of: model.currentMessages.last?.id) { oldID, newestID in
                 guard newestID != nil else { return }
@@ -164,7 +164,8 @@ private struct ShowsScrollToNewestButton: ViewModifier {
     @State private var visibility = ScrollToBottomVisibility()
     /// Where the list last said it was, which `visibility` takes once the update that said so is over.
     @State private var reportedZone = ScrollToBottomVisibility.Zone.nearBottom
-    let scrollToNewest: () -> Void
+    /// Scrolls to the newest message, animated or not.
+    let scrollToNewest: (_ animated: Bool) -> Void
 
     func body(content: Content) -> some View {
         content
@@ -177,11 +178,12 @@ private struct ShowsScrollToNewestButton: ViewModifier {
             } action: { _, zone in
                 reportedZone = zone
             }
-            // Once the update is over, the zone the list settled in, read then, which may not be
-            // the one that started this. A change of size, such as the keyboard opening, can be
-            // reported with the list away from its bottom (the inset is taller, the list hasn't
-            // moved yet), then, within the same update, back at it once the list has scrolled to
-            // keep its bottom in place.
+            // The zone reported last by the time the task runs, read then, which may not be the
+            // one that started it. A change of size, such as the keyboard opening, can be reported
+            // with the list away from its bottom (the inset is taller, the list hasn't moved yet),
+            // then back at it once the list has scrolled to keep its bottom in place. On the iOS
+            // simulator both came in the same update, before the task ran, so the button never
+            // showed; a report after that starts the task again.
             .task(id: reportedZone) {
                 withAnimation(Self.animation) {
                     visibility.scrolled(into: reportedZone)
@@ -201,7 +203,8 @@ private struct ShowsScrollToNewestButton: ViewModifier {
                         withAnimation(Self.animation) {
                             visibility.returnToNewest()
                         }
-                        scrollToNewest()
+                        // With Reduce Motion, straight there rather than past every screen between.
+                        scrollToNewest(!reduceMotion)
                     }
                     // It covers the messages under it, so it stops growing at the larger
                     // accessibility text sizes. Here, outside it, for its circle's size to stop too.
@@ -215,9 +218,10 @@ private struct ShowsScrollToNewestButton: ViewModifier {
 
     private static let animation = Animation.snappy(duration: 0.2)
 
-    /// From the list's trailing edge to the button's target, which is 2 points wider than its
-    /// circle. On iOS the circle then lines up with the bubbles, 16 points in. The Mac's is more,
-    /// to keep the target clear of a scroll bar shown all the time, about 15 points wide.
+    /// From the list's trailing edge to the button's target, which at the default text size is 2
+    /// points wider than its circle. On iOS the circle then lines up with the bubbles, 16 points
+    /// in. The Mac's is more, to keep the target clear of a scroll bar shown all the time, about 15
+    /// points wide.
     private static var trailingPadding: CGFloat {
         #if os(macOS)
         24
@@ -243,8 +247,10 @@ private struct ScrollToNewestButton: View {
                     Circle().strokeBorder(.separator)
                 }
                 .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
-                // A target at least 44 points across, though the circle is smaller.
+                // A target at least 44 points across, though the circle is smaller, and smaller
+                // still at the smaller text sizes.
                 .padding(2)
+                .frame(minWidth: 44, minHeight: 44)
                 .contentShape(.rect)
         }
         .buttonStyle(.plain)

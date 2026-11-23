@@ -51,8 +51,8 @@ struct ScrollToBottomVisibilityTests {
     @Test(arguments: [
         (CGFloat(-20), Zone.nearBottom),
         (0, .nearBottom),
-        (99, .nearBottom),
-        (100, .between),
+        (100, .nearBottom),
+        (101, .between),
         (150, .between),
         (200, .between),
         (201, .awayFromBottom),
@@ -135,9 +135,12 @@ struct ScrollToBottomVisibilityTests {
 
         // The scroll back passes through the distances that show the button.
         visibility.scrolled(into: .awayFromBottom)
-        visibility.scrolled(into: .between)
-        visibility.scrolled(into: .nearBottom)
+        #expect(!visibility.isShowing)
 
+        visibility.scrolled(into: .between)
+        #expect(!visibility.isShowing)
+
+        visibility.scrolled(into: .nearBottom)
         #expect(!visibility.isShowing)
     }
 
