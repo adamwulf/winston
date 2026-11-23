@@ -3,7 +3,7 @@ import Testing
 import TelegramLink
 import WinstonCore
 
-/// The times under the chat's bubbles: how they read, and which bubbles show one.
+/// The times for the chat's bubbles: how they read, and which bubbles show one.
 @Suite(.timeLimit(.minutes(1)))
 struct MessageTimesTests {
     // The spaces, punctuation and joining words ("at") between a time's parts come with the OS's
@@ -155,7 +155,40 @@ struct MessageTimesTests {
         #expect(Self.times().messagesShowingTime(in: []).isEmpty)
     }
 
+    // MARK: - The times a pull shows (iOS)
+
+    @Test func aPullShowsEachSentMessagesOwnTimeEvenInARun() {
+        let first = Self.date(2026, 11, 22, 15, 42, 5)
+        let second = Self.date(2026, 11, 22, 15, 42, 20)
+        let messages = [
+            Self.message(1, outgoing: true, at: first),
+            Self.message(2, outgoing: true, at: second),
+        ]
+        // Under the bubbles only the run's last shows a time.
+        #expect(Self.times().messagesShowingTime(in: messages) == [MessageID(2)])
+        #expect(Self.times().pulledCaption(for: messages[0]) == Self.times().caption(for: messages[0]))
+        #expect(Self.times().pulledCaption(for: messages[1]) == Self.times().caption(for: messages[1]))
+        let older = Self.message(3, outgoing: false, at: Self.date(2025, 11, 19, 15, 42))
+        #expect(Self.times().pulledCaption(for: older)?.text == Self.times().text(for: older.date))
+    }
+
+    @Test func aPullShowsNoTimeForAMessageSendingNotSentOrWithoutADate() {
+        let date = Self.date(2026, 11, 22, 15, 42)
+        #expect(Self.times().pulledCaption(for: Self.message(1, outgoing: true, at: date, sendState: .pending)) == nil)
+        #expect(Self.times().pulledCaption(for: Self.message(2, outgoing: true, at: date, sendState: .failed("Network"))) == nil)
+        #expect(Self.times().pulledCaption(for: Self.message(3, outgoing: false, at: Date(timeIntervalSince1970: 0))) == nil)
+    }
+
     // MARK: - VoiceOver
+
+    @Test func voiceOverHearsEachPulledTimeWithItsBubble() {
+        let today = Self.date(2026, 11, 22, 15, 42)
+        let sent = Self.times().pulledCaption(for: Self.message(1, outgoing: true, at: today))
+        #expect(sent?.accessibilityLabel == "Sent \(Self.times().text(for: today))")
+        let lastYear = Self.date(2025, 11, 19, 15, 42)
+        let received = Self.times().pulledCaption(for: Self.message(2, outgoing: false, at: lastYear))
+        #expect(received?.accessibilityLabel == "Received \(Self.times().text(for: lastYear))")
+    }
 
     @Test func voiceOverHearsWhoSentItAndWhen() {
         let today = Self.date(2026, 11, 22, 15, 42)

@@ -1,11 +1,13 @@
 import Foundation
 import TelegramLink
 
-/// The times the chat shows under its bubbles: when each message was sent or received, in the
-/// given calendar, time zone and locale (the app passes the user's, with their 12- or 24-hour
-/// setting). Today's show the time only; older ones the day too.
+/// The times the chat shows for its bubbles: when each message was sent or received, in the given
+/// calendar, time zone and locale (the app passes the user's, with their 12- or 24-hour setting).
+/// Today's show the time only; older ones the day too. On the Mac they show under the bubbles; on
+/// iOS beside them while the list is pulled aside (see `MessageTimesPull`), and VoiceOver reads
+/// them with the bubbles.
 public struct MessageTimes {
-    /// The time under one bubble: the text it shows, and what VoiceOver reads for it.
+    /// The time for one bubble: the text it shows, and what VoiceOver reads for it.
     public struct Caption: Equatable, Sendable {
         public let text: String
         public let accessibilityLabel: String
@@ -28,9 +30,10 @@ public struct MessageTimes {
         self.locale = locale
     }
 
-    /// The messages in `messages`, a chat's in order, whose bubble shows its time. A sent message
-    /// shows it unless the next message is from the same side, shows its time too, and was sent in
-    /// the same minute: then only the last bubble of that run shows the time, which is theirs too.
+    /// The messages in `messages`, a chat's in order, whose bubble shows its time under it (on the
+    /// Mac, where the times always show). A sent message shows it unless the next message is from
+    /// the same side, shows its time too, and was sent in the same minute: then only the last
+    /// bubble of that run shows the time, which is theirs too.
     /// A message still sending, or not sent, shows its send state instead (its date is only when
     /// this device tried to send it), and one without a date (TDLib's 0) shows none.
     public func messagesShowingTime(in messages: [ChatMessage]) -> Set<MessageID> {
@@ -50,6 +53,14 @@ public struct MessageTimes {
     public func caption(for message: ChatMessage) -> Caption {
         let text = text(for: message.date)
         return Caption(text: text, accessibilityLabel: "\(message.isOutgoing ? "Sent" : "Received") \(text)")
+    }
+
+    /// The time beside `message`'s bubble while the list is pulled aside (iOS), which VoiceOver
+    /// also reads with the bubble. There it takes no room, so every message shows its own, even
+    /// one in a run whose time under the bubbles shows once (`messagesShowingTime(in:)`). A message
+    /// still sending, or not sent, has none (it shows its send state), nor does one without a date.
+    public func pulledCaption(for message: ChatMessage) -> Caption? {
+        Self.hasTime(message) ? caption(for: message) : nil
     }
 
     /// `date` as the chat shows it: the time for today ("3:42 PM", or "15:42" in 24-hour time),
