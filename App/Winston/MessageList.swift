@@ -175,13 +175,6 @@ struct MessageRow: View {
                     ReactionsRow(reactions: message.reactions)
                         .id(ReactionsRow.ScrollID(messageID: message.id))
                 }
-                if let phase = model.speakIPA.phase(for: message) {
-                    SpeakIPAStatus(phase: phase) { model.speakIPA.stop() }
-                } else if let note = model.speakIPA.note(for: message) {
-                    SpeakIPANote(text: note, alignment: message.isOutgoing ? .trailing : .leading) {
-                        model.speakIPA.dismissNote()
-                    }
-                }
                 sendState
             }
             if !message.isOutgoing { Spacer(minLength: 48) }
@@ -202,20 +195,6 @@ struct MessageRow: View {
             if !message.spokenText.isEmpty {
                 Button("Speak", systemImage: "speaker.wave.2") {
                     model.readAloud(message)
-                }
-                // Says it with the on-device model's IPA, to hear its pronunciation rather than Kokoro's.
-                if model.speakIPA.phase(for: message) == nil {
-                    Button("Speak IPA", systemImage: "character.phonetic") {
-                        model.speakIPA.toggle(message)
-                    }
-                    .accessibilityLabel("Speak I P A")
-                    .accessibilityHint("Apple Intelligence writes how each word sounds, and the Kokoro voice says it.")
-                } else {
-                    // Stop only: the message may have finished while the menu was open.
-                    Button("Stop Speaking IPA", systemImage: "stop.circle") {
-                        model.speakIPA.stop(message)
-                    }
-                    .accessibilityLabel("Stop speaking I P A")
                 }
             }
         }
@@ -458,66 +437,6 @@ private struct PullGesture: UIGestureRecognizerRepresentable {
     }
 }
 #endif
-
-/// Speak IPA under a bubble while its message is said: preparing while the model writes the first
-/// part's IPA, then speaking, with a button that stops it.
-struct SpeakIPAStatus: View {
-    let phase: SpeakIPA.Phase
-    let stop: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            switch phase {
-            case .preparing:
-                ProgressView()
-                    .controlSize(.mini)
-                Text("Preparing IPA…")
-            case .speaking:
-                Image(systemName: "speaker.wave.2.fill")
-                    .accessibilityHidden(true)
-                Text("Speaking IPA…")
-            }
-            Button(action: stop) {
-                Image(systemName: "stop.circle.fill")
-                    .font(.title3)
-                    // A target big enough to hit, though the icon is small.
-                    .frame(minWidth: 44, minHeight: 32)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stop speaking I P A")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-}
-
-/// What Speak IPA tells Adam under a bubble: why it couldn't say the message, or, once it has
-/// played, how much was said from the model's IPA and what was changed, a line each. It stays
-/// until dismissed or Speak IPA says another message.
-struct SpeakIPANote: View {
-    let text: String
-    let alignment: TextAlignment
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(text)
-                .multilineTextAlignment(alignment)
-            Button(action: dismiss) {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title3)
-                    // A target big enough to hit, though the icon is small.
-                    .frame(minWidth: 44, minHeight: 32)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss")
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-}
 
 struct ReactionsRow: View {
     /// The ID the message list scrolls to, to show a message's reactions.

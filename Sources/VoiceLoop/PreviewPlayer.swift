@@ -24,8 +24,6 @@ final class PreviewPlayer {
         let playback: SpeechPlayback
         /// End the preview if the engine stops on its own or the session is interrupted.
         let watchers: [Task<Void, Never>]
-        /// Told once the preview has ended, whatever ended it: see `play(pitch:onEnded:)`.
-        let onEnded: (@MainActor (_ finished: Bool) -> Void)?
     }
 
     private let environment: VoiceEnvironment
@@ -44,22 +42,14 @@ final class PreviewPlayer {
     /// Starts a preview at `pitch` times the voice's own pitch (a `VoiceLoop.speechPitch`),
     /// cutting off the one playing, and returns the playback to
     /// feed its audio into. Throws when the engine or, on iOS, the audio session can't start.
-    /// `onEnded` is told once the preview has ended: `finished` when it played to the end, and
-    /// otherwise when it was stopped, cut off by another, or ended early by the engine or a call.
-    /// It isn't told when the preview fails to start. `onFirstScheduled` is told, on an arbitrary
-    /// thread, once the preview's first sound is scheduled.
-    func play(
-        pitch: Float,
-        onFirstScheduled: (@Sendable () -> Void)? = nil,
-        onEnded: (@MainActor (_ finished: Bool) -> Void)? = nil
-    ) throws -> SpeechPlayback {
+    func play(pitch: Float) throws -> SpeechPlayback {
         stop()
         let engine = try environment.makeEngine()
         let output = try SpeechOutput(engine: engine)
         output.connect()
         output.setPitch(pitch)
         // A preview is never queued again, so it needs no text.
-        let playback = output.makePlayback(text: "", onFirstScheduled: onFirstScheduled) { [weak self] playback in
+        let playback = output.makePlayback(text: "") { [weak self] playback in
             Task { @MainActor in self?.finished(playback) }
         }
         // Watching from before the start, so a change while starting isn't missed.
@@ -104,7 +94,7 @@ final class PreviewPlayer {
         #else
         let watchers = [engineWatcher]
         #endif
-        current = Preview(engine: engine, output: output, playback: playback, watchers: watchers, onEnded: onEnded)
+        current = Preview(engine: engine, output: output, playback: playback, watchers: watchers)
         return playback
     }
 
@@ -121,12 +111,6 @@ final class PreviewPlayer {
 
     /// Stops the preview playing, if there is one.
     func stop() {
-        end(finished: false)
-    }
-
-    /// Stops the preview playing, if there is one, and tells its `onEnded` whether it played to
-    /// the end.
-    private func end(finished: Bool) {
         guard let current else { return }
         self.current = nil
         for watcher in current.watchers { watcher.cancel() }
@@ -134,13 +118,12 @@ final class PreviewPlayer {
         current.output.player.stop()
         current.engine.stop()
         VoiceLoop.deactivateAudioSession()
-        current.onEnded?(finished)
     }
 
     private func finished(_ playback: SpeechPlayback) {
         // A preview that was cut off reports finishing too, when its player stops.
         guard current?.playback === playback else { return }
-        end(finished: true)
+        stop()
     }
 
     /// The engine stopped itself because the audio hardware changed, or a call or Siri took
