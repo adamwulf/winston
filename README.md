@@ -634,12 +634,13 @@ changed", "input mute handler called" and "input mute notification without a
 mute state", that is when the line was written, and it is their only time. On
 the "remote command …" lines, it is when the main actor took the command, the
 same on each of that command's lines, so an "input mute changed" between them
-can show a later time. They also carry how long the command took to reach the
-main actor from its receipt (`receiptToMainMs`) and from its own timestamp
-(`eventToReceiptMs`). Once a press has toggled the mute, "remote command
-handled" adds the times from each to `setInputMuted` returning and to the
-change being applied: `receiptToSetMutedMs`, `receiptToAppliedMs`,
-`eventToSetMutedMs` and `eventToAppliedMs`. The times from the timestamp are
+can show a later time. They also carry how long after its own timestamp
+MediaPlayer handed the command to the app (`eventToReceiptMs`), and how long it
+then took to reach the main actor (`receiptToMainMs`). Once a press has
+toggled the mute, "remote command handled" adds the times from the receipt and
+from the timestamp to `setInputMuted` returning and to the change being
+applied: `receiptToSetMutedMs`, `receiptToAppliedMs`, `eventToSetMutedMs` and
+`eventToAppliedMs`. The times from the timestamp are
 left out, with `eventTimestampOnUptime=false`, when the timestamp is 0 or less
 or more than a minute from the receipt: it can't be taken as on the uptime
 clock then, and a time from it could give the uptime away.
