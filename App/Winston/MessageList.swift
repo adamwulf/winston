@@ -20,13 +20,23 @@ struct MessageList: View {
     /// Holds the document Quick Look shows, which a document row sets.
     @Environment(Presentations.self) private var presentations
     #endif
+    // The user's, for the times under the bubbles. They follow changes in system settings.
+    @Environment(\.calendar) private var calendar
+    @Environment(\.timeZone) private var timeZone
+    @Environment(\.locale) private var locale
+    /// What "today" is for the times under the bubbles. Moves on as the day or the time zone
+    /// changes, and when the window becomes active again.
+    @State private var now = Date.now
 
     var body: some View {
+        let messages = model.currentMessages
+        let times = MessageTimes(now: now, calendar: calendar, timeZone: timeZone, locale: locale)
+        let timed = times.messagesShowingTime(in: messages)
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(model.currentMessages) { message in
-                        MessageRow(message: message)
+                    ForEach(messages) { message in
+                        MessageRow(message: message, time: timed.contains(message.id) ? times.caption(for: message) : nil)
                             .id(message.id)
                             .onAppear {
                                 if isActive { model.markRead(message) }
@@ -61,8 +71,11 @@ struct MessageList: View {
                 }
             }
             .onChange(of: isActive) {
+                guard isActive else { return }
+                // A day may have passed while the window was away.
+                now = .now
                 // Private-chat read state is a watermark, so marking the newest message covers the earlier ones.
-                if isActive, let newest = model.latestIncomingMessage {
+                if let newest = model.latestIncomingMessage {
                     model.markRead(newest)
                 }
             }
@@ -71,6 +84,18 @@ struct MessageList: View {
         // view kept the last chat's offset on a switch, then the newest-message change above animated
         // down from there.
         .id(model.selectedChatID)
+        .task {
+            // At midnight today's times become yesterday's.
+            for await _ in NotificationCenter.default.notifications(named: .NSCalendarDayChanged) {
+                now = .now
+            }
+        }
+        .task {
+            // A new time zone can put `now`, set hours ago, on another day than today.
+            for await _ in NotificationCenter.default.notifications(named: .NSSystemTimeZoneDidChange) {
+                now = .now
+            }
+        }
         #if os(iOS)
         // Here rather than on the document's row, which can scroll away, and be unloaded, while
         // the preview shows.
@@ -95,10 +120,13 @@ struct MessageList: View {
     }
 }
 
-/// One message: a bubble (incoming on the left, outgoing on the right), its reactions, and its send state.
+/// One message: a bubble (incoming on the left, outgoing on the right), the time under it, its reactions,
+/// and its send state.
 struct MessageRow: View {
     @Environment(AppModel.self) private var model
     let message: ChatMessage
+    /// Nil for no time under the bubble: see `MessageTimes.messagesShowingTime(in:)`.
+    let time: MessageTimes.Caption?
 
     var body: some View {
         HStack {
@@ -113,6 +141,14 @@ struct MessageRow: View {
                         guard message.sendState == .sent else { return }
                         Task { await model.toggleThumbsUp(on: message) }
                     })
+                // After the bubble, so VoiceOver reads it next.
+                if let time {
+                    Text(time.text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(message.isOutgoing ? .trailing : .leading)
+                        .accessibilityLabel(time.accessibilityLabel)
+                }
                 if !message.reactions.isEmpty {
                     ReactionsRow(reactions: message.reactions)
                         .id(ReactionsRow.ScrollID(messageID: message.id))
@@ -228,7 +264,8 @@ struct PhotoView: View {
     var body: some View {
         Group {
             if let image {
-                Image(decorative: image, scale: 1)
+                // Labelled, so VoiceOver says what a photo without a caption is before its time.
+                Image(image, scale: 1, label: Text("Photo"))
                     .resizable()
             } else if failed {
                 Button {
@@ -243,6 +280,7 @@ struct PhotoView: View {
             } else {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("Loading photo")
             }
         }
         .aspectRatio(aspectRatio, contentMode: .fit)
