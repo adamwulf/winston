@@ -80,10 +80,9 @@ let package = Package(
                 "LogSupport",
             ]
         ),
-        // The hand-off between the iOS app and its share extension, through their App Group
-        // container: the agent list the extension shows, and the outbox of files shared to an
-        // agent that the app sends. Foundation and swift-log only, since the extension links it
-        // and can't run TDLib.
+        // The hand-off from the iOS share extension to the app, through their App Group
+        // container: the files shared to Winston, which the app opens as Open in's files are.
+        // Foundation and swift-log only, since the extension links it and can't run TDLib.
         .target(
             name: "ShareOutbox",
             dependencies: [

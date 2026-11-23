@@ -385,24 +385,27 @@ TDLib, nor open Winston, so it only saves them for Winston, and their agent is
 picked in Winston's [Send to Agent sheet](#opening-files-in-winston), as for a
 file from Open in:
 
-1. The extension's sheet saves what can be sent at once ("Preparing…"), then
-   says to open Winston to choose the agent. Done closes it; Cancel, at any
-   point, removes what it saved. A folder, nothing sendable (a web link alone)
-   or a file it couldn't read says so, with Cancel. VoiceOver reads each change.
-2. It saves through the App Group `group.com.milestonemade.winston`, with
-   `ShareOutbox`: each file is copied into `Share/Staging` (a file by its URL,
-   security scoped and coordinated, so an iCloud Drive file downloads first,
-   or else its content), then all are moved, each alone in a folder of its own,
-   into `Share/Outbox`, so Winston never sees one half copied. If one can't be
-   saved, none is.
+1. The extension's sheet copies what can be sent at once ("Preparing…"), then
+   says to tap Done and open Winston to choose the agent. Done hands the files
+   to Winston and closes; Cancel, at any point, removes them, and Winston never
+   sees them. A folder, nothing sendable (a web link alone) or a file it
+   couldn't read says so, with Cancel. VoiceOver reads each change.
+2. It goes through the App Group `group.com.milestonemade.winston`, with
+   `ShareOutbox`: each file is copied, alone in a folder of its own, into a
+   batch folder in `Share/Staging` (a file by its URL, security scoped and
+   coordinated, so an iCloud Drive file downloads first, or else its content).
+   If one can't be copied, none is. Done moves the batch into `Share/Outbox` in
+   one rename, so Winston sees all of a share or none of it, never one half
+   copied or not yet confirmed.
 3. Each time Winston becomes active, the launch included, `openSharedFiles()`
-   opens each waiting file with `openFile`, the path a file from Open in takes:
-   copied into `tmp/OpenedFiles`, shown in the Send to Agent sheet once logged
-   in with the bot chats, sent to the agent picked (a still image as a photo,
-   anything else, an animated GIF included, as a document), with its upload
-   followed. Once Winston's copy is made, or on Cancel, the extension's goes, so
-   nothing opens twice. A file whose copy fails stays for Try Again.
-4. Each activation also removes what an interrupted save left in
+   reads the outbox off the main actor and opens each waiting file with
+   `openFile`, the path a file from Open in takes: copied into
+   `tmp/OpenedFiles`, shown in the Send to Agent sheet once logged in with the
+   bot chats, sent to the agent picked (a still image as a photo, anything else,
+   an animated GIF included, as a document), with its upload followed. Once
+   Winston's copy is made, or on Cancel, the extension's goes, so nothing opens
+   twice. A file whose copy fails stays for Try Again.
+4. Each activation also removes what an interrupted or cancelled share left in
    `Share/Staging`, an hour old or more.
 
 No agent is chosen at share time, so a file saved before a logout goes only to
@@ -420,12 +423,18 @@ chat window cover it.
 
 ### Signing setup
 
-Like push, an entitlement the App ID doesn't have fails signing and Xcode
-Cloud's App Store export. Both iOS targets sign in the App Group, the app
-included (`App/Config/iOS.entitlements`), so until these steps are done every
-signed iOS build fails, the app's too, not only the extension's. The Mac
-build, a Simulator build and a build without signing aren't affected. Do this
-before a signed iOS build:
+Both iOS targets sign in the App Group, the app included
+(`App/Config/iOS.entitlements`), so a signed iOS build needs two provisioning
+profiles that grant it: the app's, for `com.milestonemade.winston`, and the
+extension's, for `com.milestonemade.winston.share`. Like push, an entitlement a
+profile doesn't grant fails signing and Xcode Cloud's App Store export, the
+app's too, not only the extension's. The Mac build, a Simulator build and a
+build without signing aren't affected.
+
+Xcode's automatic signing can set this up itself on a Mac, signed in with an
+account allowed to edit identifiers. Xcode Cloud didn't add Push to the App ID
+by itself (see [Turning push back on](#turning-push-back-on)), so before an
+Xcode Cloud build, set it up by hand:
 
 1. In the Apple Developer account, go to Certificates, IDs & Profiles →
    Identifiers → App Groups, and register `group.com.milestonemade.winston`.
@@ -433,8 +442,8 @@ before a signed iOS build:
    choose that group, and Save.
 3. Register a new App ID (App IDs → App) with the explicit bundle ID
    `com.milestonemade.winston.share`. Check App Groups and choose the same group.
-4. Xcode Cloud's automatic signing makes the new profiles, for the extension
-   too, on its next build. On a Mac, build to an iPhone with automatic signing.
+4. Xcode Cloud's automatic signing then makes both profiles, with the group, on
+   its next build. On a Mac, build to an iPhone with automatic signing.
 
 App Store Connect needs no change: the extension ships inside the app. Both
 targets take their version from `App/Config/Shared.xcconfig`, so the build
