@@ -277,6 +277,8 @@ import Testing
         #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/ or /rɛd/ /ðɪs/") == ["rid", "ðɪs"])
         #expect(SpeakIPAText.joinedReadingWords(of: "/rid/ /ðɪs/,") == ["rid", "ðɪs,"])
         #expect(SpeakIPAText.joinedReadingWords(of: "/rid ðɪs/ (or /rɛd ðɪs/)") == ["rid", "ðɪs"])
+        // "or" in slashes is a word of IPA, not a choice.
+        #expect(SpeakIPAText.joinedReadingWords(of: "/trɪk/ /or/ /trit/") == ["trɪk", "or", "trit"])
         let bracketedOr = SpeakIPAText.speech(of: "Read this now.", transcribed: words([
             ("Read this", "/rid ðɪs/ (or /rɛd ðɪs/)"), ("now", "naʊ"),
         ]), symbols: symbols)
