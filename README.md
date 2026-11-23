@@ -189,7 +189,7 @@ can't see them.
 | Permission prompts and the speech model | `requestPermissions` and `makeRecognizer` in `VoiceEnvironment`, and the `Recognizer` it makes: `start(inputs:)`, `results`, `finalize(through:)` and `cancel()` | `VoiceTestBed` and `ScriptedRecognizer`: a test says what was heard. Asked to finalize, it waits until it has read that far and reports its last volatile result again as final, as the analyzer does. It notes where the audio it is fed was loud (`soundHeard`) |
 | A microphone and a speaker | `makeEngine` and `enableVoiceProcessing` in `VoiceEnvironment` | `OfflineAudio`: real `AVAudioEngine`s in offline rendering mode, with a meter on what was played |
 | The Kokoro voices' 335 MB model | `KokoroEngine`, as `kokoro` in `VoiceEnvironment` | `FakeKokoro`: loads when the test says so, renders each sentence as a 0.2 s tone, keeps track of whether its model is stored, and has the dictionary words and phoneme symbols the test gives it |
-| Apple's on-device language model | `PronunciationSuggester`, as `pronunciationSuggester` in `AppModel`'s package init | `FakePronunciationSuggester`: available unless the test gives a reason it isn't, answers each request with the next answer the test gave it, can hold each answer back until the test lets it go, and notes which requests were cancelled |
+| Apple's on-device language model | `PronunciationSuggester` and `IPATranscriber`, as `pronunciationSuggester` and `ipaTranscriber` in `AppModel`'s package init | `FakePronunciationSuggester` and `FakeIPATranscriber`: available unless the test gives a reason it isn't, answer each request with the next answer the test gave them (the transcriber, once they run out, with "ə" for each word), can hold each answer back until the test lets it go, and note which requests were cancelled |
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
@@ -223,6 +223,11 @@ touch .build/suggester-real-model
 swift test --filter OnDevicePronunciationSuggesterRealModelTests
 rm .build/suggester-real-model
 ```
+
+`OnDeviceIPATranscriberRealModelTests` does the same for Speak IPA: it
+transcribes a reply chunk by chunk and prints each word's IPA, its Kokoro
+phonemes and each chunk's time. Ask for it with
+`WINSTON_SPEAKIPA_REAL_MODEL=1` or `.build/speakipa-real-model`.
 
 `VoiceLoop.playsSoundCues` is a `package` switch as well. The sound cues (taps
 when listening starts and stops, a chime for any reaction from the bot, and low
@@ -261,9 +266,11 @@ system:
   clock and the standard user defaults.
 - `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
   `KokoroRealModelTests` runs.
-- `OnDevicePronunciationSuggester.generatedPronunciations(for:request:started:)`: Apple's
+- `OnDevicePronunciationSuggester.generatedPronunciations(for:request:started:)`
+  and `OnDeviceIPATranscriber.transcribe(_:request:chunkIndex:)`: Apple's
   on-device model. Covered only when
-  `OnDevicePronunciationSuggesterRealModelTests` runs.
+  `OnDevicePronunciationSuggesterRealModelTests` or
+  `OnDeviceIPATranscriberRealModelTests` runs.
 - `TDLibClientManager.makeClient` and the `TDLibClientManager()` default in
   `TelegramLink.init(config:)`: the real TDLib, which would use the network.
 - A few defensive `throw`s that the system never triggers, such as
@@ -596,6 +603,180 @@ again. Its guardrails declined "Nguyen" once and answered it the other times
 on writing until the token cap cut it off.
 `OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
 for a few words, when asked for (see [What the tests run](#what-the-tests-run)).
+
+### Speak IPA
+
+Long-pressing a bubble, Adam's or the agent's, offers Speak IPA next to Speak:
+Apple's on-device model writes the IPA for every word of the message, and the
+Kokoro voice says it, so the model's pronunciation can be heard rather than
+Kokoro's own. Under the bubble, "Preparing IPA" shows while the model writes
+the first part, then "Speaking IPA", each with a stop button; meanwhile the
+menu item is Stop Speaking IPA. `SpeakIPA` (in `AppModel`, as `speakIPA`) runs
+it:
+
+- The message's spoken text is readied as plain words
+  (`SpeakIPAText.normalized`): markdown, code blocks and links as when spoken,
+  emoji left out, numbers as words (`KokoroNumbers`), "e.g.", "i.e.", "etc."
+  and a lowercase "vs." written out, a hyphen, slash or underscore between
+  letters as a space, and a full stop after a line without punctuation (one
+  ending with a comma or dash keeps it).
+- It is cut into chunks (`SpeakIPAText.chunks`): the first at most 80
+  characters so it plays soon, each later limit 1.25 times the one before, up
+  to 200 (the limit grows, not the chunk: one that ends early, at a sentence,
+  can be followed by one up to the next limit). A chunk takes as many words as
+  fit, then ends at the strongest break in its second half: a sentence end,
+  then a comma, semicolon, colon or dash, then any word; it takes the rest of
+  the message instead if that is at most a quarter over, and a word longer
+  than a chunk is a chunk of its own. Lines stay lines within a chunk, so a
+  lowercase list item still ends where it did; a line ending with a comma or
+  dash, as hard-wrapped prose does, is joined to the next with a space, so
+  Kokoro says them as one sentence. On a Mac the model writes about 0.24 s a
+  word after about 0.75 s to start, and Kokoro says about 0.33 s a word, so a
+  chunk much longer than the one before would still be being written when that
+  one had played.
+- `OnDeviceIPATranscriber` asks the model for each chunk in turn, in a session
+  of its own, for a list of its words, each with standard IPA for American
+  English (`@Generable`). Each chunk plays as soon as it is ready and the one
+  before has played (`VoiceLoop.startIPASpeech`).
+- The model's words are matched back to the chunk's in order, whatever their
+  case, accents or apostrophes; a word it split or joined is matched too (words
+  it joined with IPA that can't be split word by word, such as "well-known"
+  for "well known", are said together from it, if only spaces lie between),
+  and one it added or left out is skipped, preferring the way back in step that
+  the next words bear out (so "US" isn't taken for an "us" the model left
+  out). Each word is always said from the model's IPA, whatever it holds: it is
+  converted to Kokoro's notation (`MisakiPhonemes.fromIPA`, as Suggest does:
+  diphthongs and affricates joined, r as ɹ, and length, aspiration, nasal and
+  other diacritics, tie bars and syllable dots dropped, as misaki writes
+  American English; not recorded, being notation, not a change), and each symbol
+  Kokoro can't say now (`VoiceLoop.kokoroPhonemeSymbols`: the loaded model's
+  vocabulary, else misaki's US symbols) is put as the closest one it can
+  (`ClosestPhonemes`, below), or left out if nothing is close; a symbol it can
+  say is kept as written, including ones misaki's US set lacks that the loaded
+  model has, such as ʔ and ʲ. Only a word the
+  model wrote no IPA for (left out, or another word in its place), or whose IPA
+  has no sound left, is said as Kokoro reads it; each such word and change is
+  recorded (`SpeakIPAText.speech`). The chunk's own punctuation stays, so it is
+  said with the message's pauses, except a full stop and a space after a word
+  with IPA that doesn't end a sentence ("Mr. Smith"), which Kokoro would take
+  for one; an ellipsis and a dot inside a word ("README.md") stay.
+- `ClosestPhonemes.table` lists, for each symbol Kokoro may lack, what to say
+  in its place, closest first by how it is made; the first Kokoro has every
+  symbol of is used. Fricatives go to the nearest stop or fricative (x and χ
+  to k, ɣ to ɡ, ç, ɕ and ʂ to ʃ, β to v, ɸ to f, ħ and ʕ to h, ɬ to l);
+  rhotics to ɹ (r, ʁ, ʀ, ɻ), ɾ to d should Kokoro lack it; palatals and other
+  nasals to English ones (ʎ to j, ɲ to nj, ɴ to ŋ, ɱ to m); stops made further
+  forward or back, implosives and clicks to the English stop (c and q to k, ɟ
+  and ɢ to ɡ, ʈ to t, ɖ to d, ɓ to b); affricates to their two sounds (ʦ to ts,
+  ʨ to ʧ); vowels to the nearest English one, rounding kept where it can be
+  (y to u, ʏ to ʊ, ø and œ to ɜ, ɯ to u, ɤ to ʌ, ɨ to ᵻ, ɐ and ɘ to ə, ɒ to
+  ɑ); misaki's own symbols, should a Kokoro lack one, to the next nearest
+  (diphthongs to their two vowels). A symbol not in the table is put as its
+  letter without diacritics or in lowercase ("ã" as ɑ). What the conversion
+  leaves of the glottal stop, secondary marks such as ʲ, tone letters and
+  prosodic breaks is left out when Kokoro lacks it, and punctuation always
+  (Kokoro has it, but in a word it would be a pause). Stress is placed before
+  the table is used, on the vowel the model stressed, whatever it is put as.
+- A chunk is said as written only when there is no IPA for it: the model
+  failed on it (declined, busy, failed, its own timeout, or cancelled by the
+  system) or answered with no words; the next chunk is still asked. A chunk
+  Speak IPA has waited a minute for is given up on and cancelled, and the rest
+  of the message is said as written, as it is once the model stops being
+  available.
+- If the model writes several readings for a word ("/ˈiːðər/ /ˈaɪðər/", or
+  with a comma, semicolon, bar or "or" between two of them), the first is
+  used; a comma after the only reading isn't a list, and is left out.
+- Text said as written has the pronunciations in settings, applied to the
+  whole chunk once its words with IPA are placeholders, so a pronunciation of
+  several words still matches and its punctuation is read in the chunk's
+  sentences; a placeholder is never let touch a letter. A pronunciation whose
+  word the normalizing changed (one with a digit, a hyphen or an abbreviation,
+  such as "GPT-4") doesn't match: the message is normalized before it is cut
+  into chunks.
+- Each word with IPA goes to Kokoro as a phonetic pronunciation's word does,
+  through placeholders (`PhoneticPlaceholders`), but a set of the message's
+  own (starting "zqv"): the next message gives their names out again, with its
+  own phonemes, so nothing builds up message after message.
+- What the model wrote for each chunk with a word said from its IPA is kept in
+  memory for the last 20 messages, and a chunk kept is queued without asking
+  again: saying a message again starts at once if its first chunk is kept. A
+  chunk said as written, or with none of the model's words matched, isn't
+  kept: the next answer may do better. A message
+  whose every chunk is kept needs no model, and plays even while Apple
+  Intelligence is unavailable; one with a chunk to ask about again needs it.
+
+One message is said at a time. Another message's Speak IPA replaces it, and
+the same message's stops it, as do the stop button, another chat being shown,
+logging out, and anything that cuts off a voice preview: Speak, a preview in
+settings, voice mode starting, the audio hardware changing, or a call. Stop
+Speaking IPA only stops: chosen after the message has finished, it does
+nothing. A message Adam sent keeps its status once Telegram confirms it and
+gives it a new ID. It plays as a preview does while voice mode is off, on the
+preview player's engine: voice mode's engine has replies, barge-in and echo
+cancellation to look after, so Speak IPA plays only while voice mode is off
+(the app's, too, which can show Resume Listening while the loop is off), and
+says so otherwise. "Speaking IPA" shows once the first sound is scheduled,
+whichever voice made it. If Kokoro fails partway, or its model is freed, the
+system voice says the rest of the chunk it was on and the message ends there;
+a chunk the model answers after that is neither counted nor kept.
+
+A note under the bubble says why Speak IPA couldn't start (voice mode on, no
+Kokoro voice ready and what would fix it, Apple Intelligence off, not ready
+or not supported, or nothing to say, such as a message of only code) or, once
+a message has played to the end, how many of its words were said from the
+model's IPA, then a line for each that happened: the symbols put as the
+closest Kokoro has ("x → k ×2 (Bach, Bloch)"), the symbols left out, the words
+the model wrote no IPA for, the words whose IPA had no sound left, and the
+chunks said as written, each with why. If Kokoro stopped partway, it says so
+instead, and that either the rest wasn't said or, on the last chunk, the
+system voice said it. It stays until dismissed or Speak IPA says another
+message.
+
+The model's IPA isn't held to Kokoro's symbols by guided generation. Measured
+on macOS 27 with sentences of 14 to 17 words: a pattern guide takes no
+character class or anchors; an alternation of the IPA symbols made a sentence
+take 69 s rather than about 4.5 (and as one string about 220 s, then declined
+by the guardrails); an array of symbols each held to a fixed set (`.anyOf`)
+took 5.5 to 8 s when it worked, but ran on for about 31 s and came back broken
+on 3 of 6 sentences, and wrote noticeably worse IPA (no stress, wrong vowels).
+One string of IPA for a whole sentence was declined by the guardrails every
+time (4 of 4) as possibly unsafe; the word list passed every time (15 of 15).
+`.permissiveContentTransformations` avoids that only for a plain string, whose
+words then couldn't be matched: the model dropped and merged words. So the
+answer's symbols are mapped to Kokoro's afterwards instead. The model's context is 4,096
+tokens on iOS 26 and macOS 26 and 8,192 on macOS 27; a chunk's request is
+about 350 tokens before the answer (instructions 127, the schema about 150),
+and the answer about 15 tokens a word.
+
+`label=app.speakipa` is Speak IPA: `requested` (the request's number, counted
+across messages, the message's size, chunks, words, the model's availability
+or `notNeeded`, whether the message's IPA is kept), `can't start` with a
+reason, `chunk transcribed` for each chunk (words, the model's words, words
+with IPA, symbols changed and which, as `x>k:2,ʔ>:1`, words without IPA,
+words with no sound left, and whether it came from memory), `chunk answered
+with no words`, `chunk failed` or `chunk timed out`, `chunk not queued` when
+the speech had already ended and took no more, `chunks queued`, `first
+sound`, `stopped` with why, `answer dropped` for an answer that came after
+Speak IPA stopped waiting, and `ended`, with how it ended (`finished`,
+`stopped` or `kokoroFailed`), the chunks said as written and why (`0:declined`),
+and the same counts and changes for the whole message. Those counts are of the
+chunks queued, not of what was heard: a message stopped before its first sound
+can count every chunk already queued, as a replay from memory queues them all
+at once.
+`label=voice.speakipa` is the model (`model checked`, `session created`,
+`request started`, `answer started`, then `answer generated` with token
+counts, `request failed` or `request cancelled`) and the playback (`playback
+started` with the voice, model, speed and pitch, `chunk rendered`, `first
+sound`, `chunk handed to the system voice`, `playback ended`). Counts, sizes,
+settings, codes, single symbols changed and times only, never the text, a
+word's IPA, or the words the note names.
+
+The model's IPA is often wrong ("they" as θeɪ, "Done" as ðən), and now and
+then it writes another word in a word's place, which is no IPA for the word
+(said as Kokoro reads it), or leaves JSON in a word's IPA, whose punctuation is
+left out and whose letters, if any, are said as IPA; with none, the word is
+said as Kokoro reads it. `OnDeviceIPATranscriberRealModelTests`
+prints what it writes for a sample reply, when asked for.
 
 ## Logging
 

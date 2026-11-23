@@ -302,8 +302,13 @@ public final class VoiceLoop {
     /// Renders the message being spoken with Kokoro, a sentence at a time. Nil when the message
     /// is spoken by the system synthesizer, or when not speaking.
     @ObservationIgnored private var kokoroSynthesis: Task<Void, Never>?
-    /// The same, for a preview played while the loop is off.
+    /// The same, for a preview played while the loop is off, and for Speak IPA's message (see
+    /// `startIPASpeech(request:onFirstSound:onEnded:)`), whose chunks it renders as they come.
     @ObservationIgnored private var previewKokoroSynthesis: Task<Void, Never>?
+    /// Speak IPA's message, from `startIPASpeech(request:onFirstSound:onEnded:)` until it ends.
+    @ObservationIgnored private var ipaSpeech: IPASpeechState?
+    /// The number of the latest `IPASpeech`, so a handle to one that has ended does nothing.
+    @ObservationIgnored private var lastIPASpeechID = 0
     @ObservationIgnored private var speechQueue: [String] = []
     /// The message being rendered and played; nil when not speaking.
     @ObservationIgnored private var currentSpeech: SpeechPlayback?
@@ -861,6 +866,237 @@ public final class VoiceLoop {
         previewKokoroSynthesis = nil
         previewSynthesizer.stopSpeaking(at: .immediate)
         previewPlayer.stop()
+    }
+
+    // MARK: - Speak IPA
+
+    /// Speak IPA's message while it is said: see `startIPASpeech(request:onFirstSound:onEnded:)`.
+    private struct IPASpeechState {
+        let id: Int
+        /// Speak IPA's number for the request, for the logs.
+        let request: Int
+        /// Takes each chunk, ready to say, to the task rendering them (`previewKokoroSynthesis`).
+        let chunks: AsyncStream<String>.Continuation
+        let onFirstSound: @MainActor () -> Void
+        let onEnded: @MainActor (IPASpeechEnd) -> Void
+        let started: ContinuousClock.Instant
+        /// The placeholders of this message's words said with the model's phonemes. A set of
+        /// their own for each message, so they go with it rather than stay for the run, as the
+        /// phonetic pronunciations' do; the next message gives their names out again, and Kokoro
+        /// takes their new phonemes. Only one message renders at a time, and Kokoro renders in
+        /// turn, so a name is never needed with two sets of phonemes at once.
+        var placeholders = PhoneticPlaceholders(prefix: VoiceLoop.ipaPlaceholderPrefix)
+        /// The chunks queued so far.
+        var queued = 0
+        /// Whether its first sound has been told.
+        var toldFirstSound = false
+        /// Whether `IPASpeech.finish()` has said no more chunks are coming.
+        var finishRequested = false
+        /// Set once Kokoro failed partway and the system voice took over the chunk it was on:
+        /// whether later chunks were then left unsaid. Nil while Kokoro says it all.
+        var skippedLaterChunksAfterHandoff: Bool?
+    }
+
+    /// What Speak IPA's placeholders start with: three letters no word starts with, and not the
+    /// phonetic pronunciations' "zqx", so the two sets never meet.
+    nonisolated static let ipaPlaceholderPrefix = "zqv"
+
+    /// Starts saying a message whose chunks come later, for Speak IPA: each chunk, once given to
+    /// the returned `IPASpeech`, is rendered by Kokoro in the chosen voice, speed and pitch and
+    /// plays after the one before, as one preview: on the preview player's engine, straight to the
+    /// speaker, as a message's Speak does while voice mode is off. It cuts off any preview, or
+    /// Speak IPA message, playing. Anything that would cut off a preview ends it: another
+    /// preview, `stopPreview()`, voice mode starting, the audio hardware changing, or on iOS a
+    /// call. `request` numbers it in the `voice.speakipa` logs, as Speak IPA numbers it.
+    ///
+    /// `onFirstSound` is told once its first sound is about to play, whichever voice made it;
+    /// `onEnded` once the message has ended, and how (`IPASpeechEnd`). If Kokoro fails partway,
+    /// or its model is freed, the system voice says the rest of the chunk it was on, no later
+    /// chunk is taken, and the message ends there, as `.kokoroFailed`.
+    ///
+    /// Throws `IPASpeechError.voiceModeOn` while the loop runs or starts, and
+    /// `IPASpeechError.kokoroNotReady` unless a Kokoro voice is chosen and its model is ready, and
+    /// passes on why the preview player's engine couldn't start.
+    public func startIPASpeech(
+        request: Int,
+        onFirstSound: @escaping @MainActor () -> Void,
+        onEnded: @escaping @MainActor (IPASpeechEnd) -> Void
+    ) throws -> IPASpeech {
+        guard state == .off, !isStarting else { throw IPASpeechError.voiceModeOn }
+        guard let voice = readyKokoroVoice() else { throw IPASpeechError.kokoroNotReady }
+        stopPreviewPlayer()
+        lastIPASpeechID += 1
+        let id = lastIPASpeechID
+        let playback = try previewPlayer.play(pitch: speechPitch) { [weak self] in
+            Task { @MainActor in self?.ipaSpeechFirstSound(id) }
+        } onEnded: { [weak self] finished in
+            self?.ipaSpeechEnded(id, finished: finished)
+        }
+        let (chunks, continuation) = AsyncStream.makeStream(of: String.self)
+        ipaSpeech = IPASpeechState(
+            id: id,
+            request: request,
+            chunks: continuation,
+            onFirstSound: onFirstSound,
+            onEnded: onEnded,
+            started: .now
+        )
+        Self.speakIPALog.notice("speak ipa playback started", [
+            "request": request,
+            "voice": voice,
+            "kokoroModel": kokoroModelVariant?.rawValue ?? "none",
+            "kokoroSpeed": KokoroSpeed.speed(forRate: speechRate),
+            "speechPitch": speechPitch,
+        ])
+        // The message's own placeholders as well as the phonetic pronunciations', which a word
+        // said as written can have.
+        let render = kokoroRenderer(voice: voice) { [self] spoken in
+            let own = ipaSpeech?.id == id ? ipaSpeech?.placeholders.phonemes(in: spoken) ?? [:] : [:]
+            return phoneticPlaceholders.phonemes(in: spoken).merging(own) { $1 }
+        }
+        previewKokoroSynthesis = Task { [self] in
+            var nextChunk = 0
+            for await text in chunks {
+                let chunk = nextChunk
+                nextChunk += 1
+                let started = ContinuousClock.now
+                let rendered = await render(text, playback) { [self] rest in
+                    // Kokoro failed or its model went: the system voice says the rest of this
+                    // chunk, with the message's own placeholders as their words, ends the
+                    // message, and no later chunk is taken.
+                    Self.speakIPALog.warning("speak ipa chunk handed to the system voice; the message ends there", [
+                        "request": request,
+                        "chunk": chunk,
+                    ])
+                    continuation.finish()
+                    var written = rest
+                    if var speech = ipaSpeech, speech.id == id {
+                        written = speech.placeholders.written(rest)
+                        // Later chunks are left unsaid unless this one was the last.
+                        speech.skippedLaterChunksAfterHandoff = !speech.finishRequested || chunk < speech.queued - 1
+                        ipaSpeech = speech
+                    }
+                    previewWithSystemVoice(written, into: playback)
+                }
+                guard rendered else { return }
+                Self.speakIPALog.notice("speak ipa chunk rendered", [
+                    "request": request,
+                    "chunk": chunk,
+                    "ms": Self.milliseconds(since: started),
+                ])
+            }
+            guard !Task.isCancelled else { return }
+            playback.synthesisFinished()
+        }
+        return IPASpeech(id: id, loop: self)
+    }
+
+    /// Queues `parts`, one chunk of IPA speech `id`, if that speech is still being said and not
+    /// finished. Returns whether it was queued.
+    func sayIPAChunk(_ parts: [IPASpeechPart], speech id: Int) -> Bool {
+        guard var speech = ipaSpeech, speech.id == id else { return false }
+        let text = ipaSpeechText(parts, placeholders: &speech.placeholders)
+        ipaSpeech = speech
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        guard case .enqueued = speech.chunks.yield(text) else { return false }
+        speech.queued += 1
+        ipaSpeech = speech
+        return true
+    }
+
+    /// IPA speech `id`'s first sound is about to play: tells it, once.
+    private func ipaSpeechFirstSound(_ id: Int) {
+        guard var speech = ipaSpeech, speech.id == id, !speech.toldFirstSound else { return }
+        speech.toldFirstSound = true
+        ipaSpeech = speech
+        Self.speakIPALog.notice("speak ipa first sound", [
+            "request": speech.request,
+            "ms": Self.milliseconds(since: speech.started),
+        ])
+        speech.onFirstSound()
+    }
+
+    /// No more chunks for IPA speech `id`: it ends once those queued have played.
+    func finishIPASpeech(_ id: Int) {
+        guard var speech = ipaSpeech, speech.id == id else { return }
+        speech.finishRequested = true
+        ipaSpeech = speech
+        speech.chunks.finish()
+    }
+
+    /// Stops IPA speech `id` now, if it is still being said.
+    func stopIPASpeech(_ id: Int) {
+        guard ipaSpeech?.id == id else { return }
+        stopPreviewPlayer()
+    }
+
+    /// The preview player has ended IPA speech `id`: told once, whatever ended it.
+    private func ipaSpeechEnded(_ id: Int, finished: Bool) {
+        guard let speech = ipaSpeech, speech.id == id else { return }
+        ipaSpeech = nil
+        speech.chunks.finish()
+        // Still this speech's: anything else that plays stops the preview player first, which
+        // ends this speech before it starts.
+        previewKokoroSynthesis?.cancel()
+        previewKokoroSynthesis = nil
+        let end: IPASpeechEnd = if !finished {
+            .stopped
+        } else if let skipped = speech.skippedLaterChunksAfterHandoff {
+            .kokoroFailed(skippedLaterChunks: skipped)
+        } else {
+            .finished
+        }
+        Self.speakIPALog.notice("speak ipa playback ended", [
+            "request": speech.request,
+            "end": end.logName,
+            "chunks": speech.queued,
+            "ms": Self.milliseconds(since: speech.started),
+        ])
+        speech.onEnded(end)
+    }
+
+    /// `parts` as text ready to say: each word with phonemes as its placeholders in
+    /// `placeholders`, which never touch a letter or digit (a space goes between them and one
+    /// that would), then the pronunciations in settings applied to the whole chunk, as a reply
+    /// has them: a pronunciation of several words said as written still matches, and whether a
+    /// word's punctuation ends a sentence is read from the whole chunk. A placeholder matches no
+    /// pronunciation's word.
+    private func ipaSpeechText(_ parts: [IPASpeechPart], placeholders: inout PhoneticPlaceholders) -> String {
+        var text = ""
+        // Whether `text` ends with a placeholder.
+        var endsWithPlaceholder = false
+        func append(_ piece: String, isPlaceholders: Bool) {
+            guard let first = piece.first else { return }
+            if isPlaceholders || endsWithPlaceholder, let last = text.last,
+               last.isLetter || last.isNumber, first.isLetter || first.isNumber {
+                text.append(" ")
+            }
+            text += piece
+            endsWithPlaceholder = isPlaceholders
+        }
+        for part in parts {
+            switch part {
+            case .phonemes(let word, let phonemes):
+                let trimmedWord = word.trimmingCharacters(in: .whitespacesAndNewlines)
+                let trimmedPhonemes = phonemes.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedWord.isEmpty, !trimmedPhonemes.isEmpty else {
+                    append(word, isPlaceholders: false)
+                    continue
+                }
+                append(placeholders.add(word: trimmedWord, phonemes: trimmedPhonemes), isPlaceholders: true)
+            case .text(let written):
+                append(written, isPlaceholders: false)
+            }
+        }
+        return pronunciationReplacer.replaced(in: text)
+    }
+
+    /// The `voice.speakipa` log: Speak IPA's message as the loop renders and plays it. Counts and
+    /// times only, never the text or phonemes.
+    nonisolated static let speakIPALog = Logger(label: "voice.speakipa")
+
+    private static func milliseconds(since start: ContinuousClock.Instant) -> Int {
+        Int(start.duration(to: .now) / .milliseconds(1))
     }
 
     /// Plays `cue` through the loop's engine, mixed with any reply being spoken, so echo
@@ -2023,20 +2259,37 @@ public final class VoiceLoop {
         into playback: SpeechPlayback,
         systemVoice: @escaping @MainActor (String) -> Void
     ) -> Task<Void, Never> {
-        let sentences = KokoroText.sentences(in: text)
+        let render = kokoroRenderer(voice: voice)
+        return Task {
+            guard await render(text, playback, systemVoice), !Task.isCancelled else { return }
+            playback.synthesisFinished()
+        }
+    }
+
+    /// Renders text into a playback with Kokoro in `voice`, at the speed chosen now, a sentence
+    /// at a time, as `synthesizeWithKokoro` does, without ending the playback: Speak IPA renders
+    /// each of its chunks into one. Returns whether every sentence was rendered: false once its
+    /// task is cancelled, or once the system voice took over the rest. `pronunciations` gives
+    /// each sentence's placeholders their phonemes: the phonetic pronunciations' unless the caller
+    /// has others too, as Speak IPA has.
+    private func kokoroRenderer(
+        voice: String,
+        pronunciations: (@MainActor (String) -> [String: String])? = nil
+    ) -> @MainActor (String, SpeechPlayback, @escaping @MainActor (String) -> Void) async -> Bool {
         let speed = KokoroSpeed.speed(forRate: speechRate)
         let engine = kokoroModel.engine
         let acronyms = KokoroAcronyms(dictionaryWords: kokoroModel.dictionaryWords)
-        return Task {
+        return { [self] text, playback, systemVoice in
+            let sentences = KokoroText.sentences(in: text)
             // Kokoro can't pronounce digits, or acronyms its dictionary doesn't have. Only its
             // text is changed: the system voice gets the sentences as written.
             let numbers = KokoroNumbers()
             for (index, sentence) in sentences.enumerated() {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return false }
                 guard kokoroModel.state == .ready else {
                     // Another voice was chosen, which freed the model.
                     systemVoice(sentences[index...].joined(separator: " "))
-                    return
+                    return false
                 }
                 let samples: [Float]
                 do {
@@ -2049,25 +2302,24 @@ public final class VoiceLoop {
                         spoken,
                         voice: voice,
                         speed: speed,
-                        pronunciations: phoneticPlaceholders.phonemes(in: spoken)
+                        pronunciations: pronunciations?(spoken) ?? phoneticPlaceholders.phonemes(in: spoken)
                     )
                 } catch {
-                    guard !Task.isCancelled else { return }
+                    guard !Task.isCancelled else { return false }
                     // Codes only: KokoroTTS's messages can list voices and paths.
                     Self.log.error(
                         "kokoro synthesis failed; speaking with the system voice",
                         error.logCodes(["sentence": "\(index)", "sentences": "\(sentences.count)"])
                     )
                     systemVoice(sentences[index...].joined(separator: " "))
-                    return
+                    return false
                 }
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled else { return false }
                 for buffer in KokoroAudio.buffers(samples) {
                     playback.receive(buffer)
                 }
             }
-            guard !Task.isCancelled else { return }
-            playback.synthesisFinished()
+            return !Task.isCancelled
         }
     }
 

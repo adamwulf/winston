@@ -11,14 +11,15 @@ import WinstonCore
 
 /// An `AppModel` as the app builds it, except for the four things a test can't have: TDLib is
 /// `FakeTDLib` behind the real `TelegramLink`, the voice loop is the real `VoiceLoop` on a
-/// `VoiceTestBed` (offline audio, scripted recognizer), the pronunciation suggester is
-/// `FakePronunciationSuggester` rather than Apple's on-device model, and the settings go to user
-/// defaults of the harness's own.
+/// `VoiceTestBed` (offline audio, scripted recognizer), the pronunciation suggester and the IPA
+/// transcriber are `FakePronunciationSuggester` and `FakeIPATranscriber` rather than Apple's
+/// on-device model, and the settings go to user defaults of the harness's own.
 @MainActor
 final class Harness {
     let fake: FakeTDLib
     let bed = VoiceTestBed()
     let suggester = FakePronunciationSuggester()
+    let transcriber = FakeIPATranscriber()
     let model: AppModel
     private let testDefaults = TestDefaults()
 
@@ -27,6 +28,7 @@ final class Harness {
     ///   - settings: values already in the user defaults when the model starts up.
     ///   - soundCues: whether the voice loop plays its sound cues. Off by default, so the only
     ///     sound in voice mode is what is spoken.
+    ///   - speakIPATimeout: how long Speak IPA waits for the transcriber on a chunk.
     ///   - openedFileInboxes: the folders standing in for iOS's Documents/Inbox and
     ///     tmp/<bundle ID>-Inbox, where the system puts a file it opens in Winston. None by
     ///     default, as on the Mac.
@@ -34,6 +36,7 @@ final class Harness {
         fake: FakeTDLib = FakeTDLib(),
         settings: [String: Any] = [:],
         soundCues: Bool = false,
+        speakIPATimeout: Duration = SpeakIPA.defaultTimeout,
         openedFileInboxes: [URL] = []
     ) {
         self.fake = fake
@@ -45,6 +48,8 @@ final class Harness {
             voiceLoop: bed.makeLoop(soundCues: soundCues),
             defaults: testDefaults.defaults,
             pronunciationSuggester: suggester,
+            ipaTranscriber: transcriber,
+            speakIPATimeout: speakIPATimeout,
             openedFileInboxes: openedFileInboxes
         )
     }
