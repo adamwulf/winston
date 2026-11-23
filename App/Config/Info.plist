@@ -27,7 +27,7 @@
 			</array>
 		</dict>
 	</array>
-	<!-- The share extension opens Winston with this scheme once Done has saved the files
+	<!-- The share extension opens Winston with this scheme once it has saved the files
 	     (ShareOutbox.urlScheme, which must match). -->
 	<key>CFBundleURLTypes</key>
 	<array>

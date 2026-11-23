@@ -28,8 +28,8 @@ private func provider(_ name: String, _ data: Data, in folder: URL) throws -> NS
     return try #require(NSItemProvider(contentsOf: file))
 }
 
-/// Shares a file named `name` holding `data`, as the share extension does once Adam taps Done,
-/// and returns where it waits for Winston.
+/// Shares a file named `name` holding `data`, as the share extension does before it opens
+/// Winston, and returns where it waits for Winston.
 @discardableResult
 private func share(_ name: String, _ data: Data, to outbox: ShareOutbox, from folder: URL) async throws -> URL {
     let staged = try await outbox.stage([try provider(name, data, in: folder)])
@@ -152,13 +152,35 @@ struct AppModelShareTests {
         #expect(documents.map { URL(filePath: $0.path).pathExtension } == ["gif"])
     }
 
-    @Test func aShareNotYetConfirmedIsNotOpened() async throws {
+    @Test func theExtensionsURLOpensWhatItSharedWhileWinstonIsActive() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         #expect(await harness.startAndLoadChats())
-        // Copied, but Adam hasn't tapped Done: he switched to Winston with the share sheet open.
+        try await share(uniqueName("notes", "txt"), Data("hello".utf8), to: outbox, from: folder)
+
+        // Winston active already, beside the app shared from on an iPad: no activation, only the
+        // URL the extension opens it with.
+        model.open(try #require(ShareOutbox.openURL))
+        await model.waitForSharedFiles()
+
+        #expect(await copied(1, in: model))
+        #expect(model.isPickingAgentForOpenedFiles)
+        // The activation that comes with the URL when Winston wasn't active opens nothing more.
+        await comeBack(to: model)
+        #expect(model.openedFiles.count == 1)
+        model.cancelOpenedFiles()
+    }
+
+    @Test func aShareNotYetHandedOverIsNotOpened() async throws {
+        let folder = try makeTemporaryFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (harness, outbox) = twoBots(sharingIn: folder)
+        let model = harness.model
+        #expect(await harness.startAndLoadChats())
+        // Copied, but not yet handed over, as while the extension's sheet is still coming up and
+        // Winston is active beside it on an iPad.
         let staged = try await outbox.stage([try provider(uniqueName("notes", "txt"), Data("hello".utf8), in: folder)])
 
         await comeBack(to: model)
@@ -286,16 +308,16 @@ struct AppModelShareTests {
         #expect(await outbox.files().isEmpty)
     }
 
-    @Test func whatAnInterruptedShareLeftADayAgoIsRemovedButAShareWaitingSinceLunchStays() async throws {
+    @Test func whatAnInterruptedShareLeftADayAgoIsRemovedButAShareStillCopyingStays() async throws {
         let folder = try makeTemporaryFolder()
         defer { try? FileManager.default.removeItem(at: folder) }
         let (harness, outbox) = twoBots(sharingIn: folder)
         let model = harness.model
         let staging = outbox.folder.appending(path: "Staging", directoryHint: .isDirectory)
         let old = staging.appending(path: "old/000", directoryHint: .isDirectory)
-        // A share sheet left open over lunch, its files waiting for Done.
-        let waiting = staging.appending(path: "waiting/000", directoryHint: .isDirectory)
-        for batch in [old, waiting] {
+        // A share begun ten minutes ago, still copying a big iCloud Drive file as it downloads.
+        let copying = staging.appending(path: "copying/000", directoryHint: .isDirectory)
+        for batch in [old, copying] {
             try FileManager.default.createDirectory(at: batch, withIntermediateDirectories: true)
             try Data("half".utf8).write(to: batch.appending(path: "big.zip"))
         }
@@ -304,14 +326,14 @@ struct AppModelShareTests {
             ofItemAtPath: staging.appending(path: "old").path(percentEncoded: false)
         )
         try FileManager.default.setAttributes(
-            [.creationDate: Date(timeIntervalSinceNow: -2 * 60 * 60)],
-            ofItemAtPath: staging.appending(path: "waiting").path(percentEncoded: false)
+            [.creationDate: Date(timeIntervalSinceNow: -10 * 60)],
+            ofItemAtPath: staging.appending(path: "copying").path(percentEncoded: false)
         )
 
         await comeBack(to: model)
 
         #expect(!exists(staging.appending(path: "old")))
-        #expect(exists(waiting))
+        #expect(exists(copying))
         // Nothing half copied is opened.
         #expect(model.openedFiles.isEmpty)
     }

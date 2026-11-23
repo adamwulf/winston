@@ -7,8 +7,8 @@ import UIKit
 /// `Config/WinstonShare-Info.plist`), over the app Adam shared from: Photos, the screenshot
 /// editor, Files, Mail.
 ///
-/// The extension can't run TDLib, so it saves the shared files in the App Group (`ShareOutbox`),
-/// and Done opens Winston. Winston opens each as a file from Open in
+/// The extension can't run TDLib, so it saves the shared files in the App Group (`ShareOutbox`)
+/// and, once they're saved, opens Winston and closes. Winston opens each as a file from Open in
 /// (`AppModel.openSharedFiles()`), and its Send to Agent sheet asks which agent it goes to.
 final class ShareViewController: UIViewController {
     private static let log = Logger(subsystem: "com.milestonemade.winston.share", category: "share")
@@ -17,18 +17,18 @@ final class ShareViewController: UIViewController {
     private let state = ShareState(phase: .saving(count: 0))
     /// The copy under way, which Cancel stops.
     private var stageTask: Task<Void, Never>?
-    /// The files copied for Winston, which Done hands over and Cancel removes.
+    /// The files copied for Winston, waiting for the sheet to be in its window (`handOff()`).
     private var staged: ShareOutbox.Staged?
     /// Set by Cancel, so a copy that ends anyway is removed rather than kept.
     private var isCancelled = false
+    /// Set once the sheet is in its window, where `openWinston()` finds the application up the
+    /// responder chain. A small file can be copied before then.
+    private var hasAppeared = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
         let panel = UIHostingController(rootView: SharePanel(
             state: state,
-            done: { [weak self] in
-                self?.done()
-            },
             cancel: { [weak self] in
                 self?.cancel()
             }
@@ -41,6 +41,12 @@ final class ShareViewController: UIViewController {
         save()
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        hasAppeared = true
+        handOff()
+    }
+
     /// Everything the share sheet handed over. The activation rule allows up to 10 images and
     /// 10 files.
     private var attachments: [NSItemProvider] {
@@ -48,9 +54,8 @@ final class ShareViewController: UIViewController {
         return items.flatMap { $0.attachments ?? [] }
     }
 
-    /// Copies what can be sent at once, so Done can hand it over as soon as Adam taps it. Winston
-    /// doesn't see it until then. Anything else that came with it, such as a web link, is left
-    /// out.
+    /// Copies what can be sent at once, then hands it over (`handOff()`). Winston doesn't see it
+    /// until then. Anything else that came with it, such as a web link, is left out.
     private func save() {
         guard let outbox else {
             state.phase = .unavailable("Sharing isn't set up in this build of Winston.")
@@ -72,7 +77,7 @@ final class ShareViewController: UIViewController {
                     return
                 }
                 self.staged = staged
-                state.phase = .saved(count: staged.count)
+                handOff()
             } catch {
                 // Cancel stopped it, and it left nothing behind.
                 guard !isCancelled else { return }
@@ -96,31 +101,31 @@ final class ShareViewController: UIViewController {
         log.error("\(step, privacy: .public) shared files failed: \(nsError.domain, privacy: .public) \(nsError.code, privacy: .public)")
     }
 
-    /// Hands the copied files to Winston, opens it, and closes. If they're gone, as when the sheet
-    /// was left open for a day and Winston removed them as leftovers, it says to share again: the
-    /// originals are still where they were shared from.
-    private func done() {
-        guard let outbox, let staged else { return }
+    /// Hands the copied files to Winston, opens it, and closes, once they're copied and the sheet
+    /// is in its window, whichever comes last. If they can't be handed over, it says to share
+    /// again: the originals are still where they were shared from.
+    private func handOff() {
+        guard hasAppeared, let outbox, let staged else { return }
+        self.staged = nil
         do {
             try outbox.publish(staged)
         } catch {
             Self.logFailure("publishing", error)
             state.phase = .failed("Winston couldn't keep \(staged.count == 1 ? "that file" : "those files"). Try sharing again.")
             outbox.discard(staged)
-            self.staged = nil
             return
         }
-        self.staged = nil
-        Self.log.notice("share done")
+        Self.log.notice("share handed over")
         openWinston()
         extensionContext?.completeRequest(returningItems: nil)
     }
 
     /// Opens Winston, whose Send to Agent sheet then asks for the agent. `NSExtensionContext`'s
     /// `open(_:completionHandler:)` opens an app only from a Today or iMessage extension, so this
-    /// asks the extension's `UIApplication`, found up the responder chain. Found before the
-    /// request completes, while the view is still in its window. If Winston doesn't open, the
-    /// files wait in the outbox until Adam next opens it.
+    /// asks the extension's `UIApplication`, found up the responder chain: the sheet's view, in
+    /// its window, leads to the window's scene and then the application. Called before the
+    /// request completes, while the view is still there. If Winston doesn't open, the files wait
+    /// in the outbox until Adam next opens it.
     private func openWinston() {
         guard let url = ShareOutbox.openURL else { return }
         var responder: UIResponder? = self
@@ -137,8 +142,8 @@ final class ShareViewController: UIViewController {
     }
 
     /// Removes the copied files, or stops the copy under way, which removes what it copied, and
-    /// closes. Winston never sees them: only Done hands them over. If iOS ends the extension
-    /// first, what it copied stays in `Staging` until Winston removes it, a day later.
+    /// closes. Winston never sees them: they're handed over only once copied. If iOS ends the
+    /// extension first, what it copied stays in `Staging` until Winston removes it, a day later.
     private func cancel() {
         Self.log.notice("share cancelled")
         isCancelled = true

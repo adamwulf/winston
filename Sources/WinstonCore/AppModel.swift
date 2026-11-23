@@ -1042,7 +1042,7 @@ public final class AppModel {
     }
 
     /// A URL Winston was handed (`onOpenURL`): the share extension's (`ShareOutbox.openURL`),
-    /// which opens Winston once Done has saved files for it, or a file from another app, which
+    /// which opens Winston once it has saved files for it, or a file from another app, which
     /// goes to `openFile(at:)`. The extension's scans the outbox here too, not only on
     /// activation: Winston may be active already, beside the app shared from on an iPad.
     public func open(_ url: URL) {
@@ -1083,8 +1083,8 @@ public final class AppModel {
             for file in waiting {
                 openFile(at: file, sharedFolder: file.deletingLastPathComponent())
             }
-            // A day, as for opened files' leftovers: a share sheet left open, its files waiting for
-            // Done, is in Staging too.
+            // A day, as for opened files' leftovers: a share still being copied, as while an
+            // iCloud Drive file downloads, is in Staging too.
             await shareOutbox.removeLeftovers(before: Date(timeIntervalSinceNow: -24 * 60 * 60))
         }
     }
