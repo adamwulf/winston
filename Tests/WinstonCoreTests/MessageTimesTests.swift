@@ -85,7 +85,9 @@ struct MessageTimesTests {
         let text = Self.times().text(for: lastYear)
         #expect(text == lastYear.formatted(Self.style().year().month(.abbreviated).day().hour().minute()))
         #expect(text.contains("2025"))
-        #expect(Self.times().text(for: Self.date(2025, 12, 31, 23, 59)).contains("2025"))
+        let newYearsEve = Self.date(2025, 12, 31, 23, 59)
+        #expect(Self.times().text(for: newYearsEve)
+            == newYearsEve.formatted(Self.style().year().month(.abbreviated).day().hour().minute()))
     }
 
     @Test func theTimeAndTheDayAreTheTimeZones() {
