@@ -50,30 +50,84 @@ private func exists(_ url: URL) -> Bool {
 }
 
 /// A file presenter that holds each coordinated read of its file until `release()`, as an iCloud
-/// Drive file still downloading holds one, and says when one is waiting.
+/// Drive file still downloading holds one, and says when one is waiting. It lets them go by
+/// itself after `deadline`, so a read that nothing else stops can't hang the tests; whether that
+/// happened is `wasReleasedByDeadline`.
 private final class ReadHold: NSObject, NSFilePresenter, @unchecked Sendable {
     let presentedItemURL: URL?
     let presentedItemOperationQueue = OperationQueue()
     /// Yields once a coordinated read is waiting on this presenter.
     let readWaiting = AsyncStream<Void>.makeStream()
-    private let readers = Mutex<[(@Sendable ((@Sendable () -> Void)?) -> Void)]>([])
+    private let state = Mutex<(readers: [@Sendable ((@Sendable () -> Void)?) -> Void], isReleased: Bool, byDeadline: Bool)>(([], false, false))
 
-    init(on url: URL) {
+    init(on url: URL, deadline: Duration = .seconds(10)) {
         presentedItemURL = url
         super.init()
         NSFileCoordinator.addFilePresenter(self)
+        let seconds = Double(deadline.components.seconds)
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) { [weak self] in
+            self?.release(byDeadline: true)
+        }
+    }
+
+    var wasReleasedByDeadline: Bool {
+        state.withLock { $0.byDeadline }
     }
 
     func relinquishPresentedItem(toReader reader: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
-        readers.withLock { $0.append(reader) }
-        readWaiting.continuation.yield()
+        let isReleased = state.withLock { state in
+            if !state.isReleased { state.readers.append(reader) }
+            return state.isReleased
+        }
+        if isReleased {
+            reader(nil)
+        } else {
+            readWaiting.continuation.yield()
+        }
     }
 
+    /// Lets the reads go, once.
     func release() {
+        release(byDeadline: false)
+    }
+
+    private func release(byDeadline: Bool) {
+        let readers = state.withLock { state -> [@Sendable ((@Sendable () -> Void)?) -> Void]? in
+            guard !state.isReleased else { return nil }
+            state.isReleased = true
+            state.byDeadline = byDeadline
+            defer { state.readers = [] }
+            return state.readers
+        }
+        guard let readers else { return }
         NSFileCoordinator.removeFilePresenter(self)
-        for reader in readers.withLock({ $0 }) {
+        for reader in readers {
             reader(nil)
         }
+    }
+}
+
+/// Holds an item provider's load until the test hands it its result, and says when it starts and
+/// when its progress is cancelled.
+private final class HeldLoad: @unchecked Sendable {
+    private let completion = Mutex<(@Sendable (Data?, (any Error)?) -> Void)?>(nil)
+    let started = AsyncStream<Void>.makeStream()
+    let cancelled = AsyncStream<Void>.makeStream()
+
+    /// The load's progress, which the provider hands back to its caller.
+    func hold(_ completion: @escaping @Sendable (Data?, (any Error)?) -> Void) -> Progress {
+        self.completion.withLock { $0 = completion }
+        let progress = Progress(totalUnitCount: 1)
+        let cancelled = cancelled.continuation
+        progress.cancellationHandler = {
+            cancelled.yield()
+        }
+        started.continuation.yield()
+        return progress
+    }
+
+    func deliver(_ data: Data) {
+        completion.withLock { $0 }?(data, nil)
     }
 }
 
@@ -257,21 +311,16 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         let folder = TestFolder()
         let outbox = folder.outbox
         let source = try folder.sourceFile("big.zip", "zip bytes")
-        let loadStarted = AsyncStream<Void>.makeStream()
-        let started = loadStarted.continuation
+        let load = HeldLoad()
         let contentLoads = AsyncStream<Void>.makeStream()
         let contentLoaded = contentLoads.continuation
 
         let stage = Task {
             // As an app slow to hand over its file, with the file's content to fall back on. Its
-            // URL arrives after Cancel.
+            // URL arrives once the test says, after Cancel.
             let provider = NSItemProvider()
             provider.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) { completion in
-                started.yield()
-                DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) {
-                    completion(source.dataRepresentation, nil)
-                }
-                return nil
+                load.hold(completion)
             }
             provider.registerDataRepresentation(forTypeIdentifier: UTType.zip.identifier, visibility: .all) { completion in
                 contentLoaded.yield()
@@ -281,8 +330,12 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
             provider.suggestedName = source.lastPathComponent
             return try await outbox.stage([provider])
         }
-        for await _ in loadStarted.stream { break }
+        for await _ in load.started.stream { break }
         stage.cancel()
+        // Cancel reaches the provider's load.
+        for await _ in load.cancelled.stream { break }
+        // An app that hands its URL over anyway.
+        load.deliver(source.dataRepresentation)
 
         await #expect(throws: (any Error).self) {
             try await stage.value
@@ -313,6 +366,8 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         await #expect(throws: (any Error).self) {
             try await stage.value
         }
+        // Cancel stopped the read, not the hold's own deadline.
+        #expect(!hold.wasReleasedByDeadline)
         #expect(folder.contents(of: "Staging").isEmpty)
     }
 

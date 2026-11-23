@@ -61,6 +61,8 @@ extension ShareOutbox {
                 try FileManager.default.createDirectory(at: itemFolder, withIntermediateDirectories: true)
                 paths.append("\(item)/\(try await copy(provider, into: itemFolder))")
             }
+            // A last item that came in after Cancel doesn't make it a share.
+            try Task.checkCancellation()
         } catch {
             // Codes only: a file error's description names the file.
             Self.log.error("staging shared files failed", error.logCodes(["count": String(providers.count)]))
