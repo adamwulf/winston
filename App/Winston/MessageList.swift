@@ -492,8 +492,9 @@ struct SpeakIPAStatus: View {
     }
 }
 
-/// What Speak IPA tells Adam under a bubble: why it couldn't say the message, or how much of it
-/// was said as written. It stays until dismissed or Speak IPA says another message.
+/// What Speak IPA tells Adam under a bubble: why it couldn't say the message, or, once it has
+/// played, how much was said from the model's IPA and what was changed, a line each. It stays
+/// until dismissed or Speak IPA says another message.
 struct SpeakIPANote: View {
     let text: String
     let alignment: TextAlignment

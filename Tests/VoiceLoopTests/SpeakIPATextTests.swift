@@ -47,14 +47,25 @@ import Testing
         #expect(SpeakIPAText.normalized("Apples, etc. and pears.") == "Apples, et cetera and pears.")
         #expect(SpeakIPAText.normalized("She said “bring pens, paper, etc.” Then we left.")
             == "She said “bring pens, paper, et cetera.” Then we left.")
+        // The next sentence may open with a bracket or a quote.
+        #expect(SpeakIPAText.normalized("It reads PDFs, images, etc. (The full list is below.)")
+            == "It reads PDFs, images, et cetera. (The full list is below.)")
+        #expect(SpeakIPAText.normalized("It prints warnings, errors, etc. “Done” comes last.")
+            == "It prints warnings, errors, et cetera. “Done” comes last.")
         #expect(SpeakIPAText.normalized("Swift vs. Kotlin") == "Swift versus Kotlin.")
         // In capitals, it's more often Visual Studio.
         #expect(SpeakIPAText.normalized("Open VS Code.") == "Open VS Code.")
     }
 
     @Test func aLineEndingWithACommaOrADashGoesOnIntoTheNext() {
-        #expect(SpeakIPAText.normalized("I fixed the parser,\nincluding its tests") == "I fixed the parser,\nincluding its tests.")
-        #expect(SpeakIPAText.normalized("Two things —\nthis and that") == "Two things —\nthis and that.")
+        let comma = SpeakIPAText.normalized("I fixed the parser,\nincluding its tests")
+        #expect(comma == "I fixed the parser,\nincluding its tests.")
+        let dash = SpeakIPAText.normalized("Two things —\nthis and that")
+        #expect(dash == "Two things —\nthis and that.")
+        // Joined in its chunk, so Kokoro says it as one sentence, not two.
+        #expect(SpeakIPAText.chunks(in: comma) == ["I fixed the parser, including its tests."])
+        #expect(SpeakIPAText.chunks(in: dash) == ["Two things — this and that."])
+        #expect(KokoroText.sentences(in: SpeakIPAText.chunks(in: comma)[0]).count == 1)
     }
 
     @Test func aLineWithoutEndingPunctuationEndsWithAFullStop() {
@@ -123,10 +134,10 @@ import Testing
 
     @Test func aLowercaseListItemDoesntRunIntoTheLineBefore() {
         let normalized = SpeakIPAText.normalized("- check the build\n- run the tests")
-        let chunk = try? #require(SpeakIPAText.chunks(in: normalized).first)
+        let chunk = SpeakIPAText.chunks(in: normalized).first ?? ""
         #expect(chunk == "check the build.\nrun the tests.")
         let transcribed = words([("check", "tʃɛk"), ("the", "ðə"), ("build", "bɪld"), ("run", "rʌn"), ("the", "ðə"), ("tests", "tɛsts")])
-        let speech = SpeakIPAText.speech(of: chunk ?? "", transcribed: transcribed, symbols: symbols)
+        let speech = SpeakIPAText.speech(of: chunk, transcribed: transcribed, symbols: symbols)
         // The full stop after "build" stays: the line ends there.
         #expect(speech.parts[5] == .text(".\n"))
     }
@@ -193,7 +204,8 @@ import Testing
         ])
         #expect(speech.words == 3)
         #expect(speech.wordsWithIPA == 3)
-        #expect(speech.usesIPA)
+        #expect(speech.changes.isEmpty)
+        #expect(speech.wordsWithoutIPA.isEmpty)
     }
 
     @Test func wordsMatchWhateverTheirCaseAccentsOrApostrophes() {
@@ -228,7 +240,8 @@ import Testing
             .phonemes(word: "this", phonemes: "ðɪs"), .text(" "),
             .phonemes(word: "now", phonemes: "nW"), .text("."),
         ])
-        // Two words, one word of IPA: neither can be told apart, so both are said as written.
+        // Two words, one word of IPA: neither can be told apart, so the model wrote no IPA for
+        // either that can be said.
         let unsplit = SpeakIPAText.speech(
             of: "Read this now.",
             transcribed: words([("Read this", "ridðɪs"), ("now", "naʊ")]),
@@ -236,10 +249,10 @@ import Testing
         )
         #expect(unsplit.parts.prefix(3) == [.text("Read"), .text(" "), .text("this")])
         #expect(unsplit.wordsWithIPA == 1)
-        #expect(unsplit.unmatchedWords == 2)
+        #expect(unsplit.wordsWithoutIPA == ["Read", "this"])
     }
 
-    @Test func aWordTheModelAddedIsSkippedAndOneItLeftOutIsSaidAsWritten() {
+    @Test func aWordTheModelAddedIsSkippedAndOneItLeftOutIsSaidAsKokoroReadsIt() {
         let added = SpeakIPAText.speech(
             of: "Tests passed today.",
             transcribed: words([("Tests", "tɛsts"), ("all", "ɔl"), ("passed", "pæst"), ("today", "təˈdeɪ")]),
@@ -256,7 +269,7 @@ import Testing
         #expect(leftOut.parts[2] == .text("really"))
         #expect(leftOut.parts[4] == .phonemes(word: "passed", phonemes: "pæst"))
         #expect(leftOut.wordsWithIPA == 3)
-        #expect(leftOut.unmatchedWords == 1)
+        #expect(leftOut.wordsWithoutIPA == ["really"])
     }
 
     @Test func aWordLeftOutIsNotMatchedToALaterWordSpelledTheSame() {
@@ -292,28 +305,27 @@ import Testing
         #expect(us.parts[6] == .phonemes(word: "US", phonemes: "jˌuˈɛs"))
     }
 
-    @Test func aWordTheModelSplitIsSaidAsWrittenIfAnyPartHasNoIPAOrIsJustItsSpelling() {
+    @Test func aWordTheModelSplitIsSaidFromWhatIPAItHasWhateverItIs() {
+        // Always the model's IPA: a part with none, or just its spelling, is said as it is.
         let empty = SpeakIPAText.speech(
             of: "A worktree.",
             transcribed: words([("A", "ə"), ("work", "wɜrk"), ("tree", "")]),
             symbols: symbols
         )
-        #expect(empty.parts[2] == .text("worktree"))
-        #expect(empty.emptyWords == 1)
+        #expect(empty.parts[2] == .phonemes(word: "worktree", phonemes: "wɜɹk"))
         let echoed = SpeakIPAText.speech(
             of: "A notebook.",
             transcribed: words([("A", "ə"), ("note", "note"), ("book", "bʊk")]),
             symbols: symbols
         )
-        #expect(echoed.parts[2] == .text("notebook"))
-        #expect(echoed.echoedWords == 1)
+        #expect(echoed.parts[2] == .phonemes(word: "notebook", phonemes: "nOtɛbʊk"))
     }
 
-    @Test func ipaWithPunctuationIsSaidAsWrittenThoughKokoroHasTheSymbol() {
+    @Test func punctuationInAWordsIPAIsLeftOutThoughKokoroHasTheSymbol() {
         // A loaded model's vocabulary has punctuation; in a word's phonemes it would be a pause.
         let speech = SpeakIPAText.speech(of: "Hello", transcribed: words([("Hello", "həˈloʊ!")]), symbols: symbols.union(["!"]))
-        #expect(speech.parts == [.text("Hello")])
-        #expect(speech.unknownSymbolWords == 1)
+        #expect(speech.parts == [.phonemes(word: "Hello", phonemes: "həlˈO")])
+        #expect(speech.changes == [.init(word: "Hello", from: "!", to: "")])
     }
 
     @Test func ofSeveralReadingsTheFirstIsSaid() {
@@ -321,6 +333,8 @@ import Testing
         #expect(SpeakIPAText.firstReading(of: "[ˈiːðər]") == "ˈiːðər")
         #expect(SpeakIPAText.firstReading(of: "ˈiːðər, ˈaɪðər") == "ˈiːðər")
         #expect(SpeakIPAText.firstReading(of: "ˈiːðər or ˈaɪðər") == "ˈiːðər")
+        // A comma after the only reading isn't a list: it stays, to be left out and recorded.
+        #expect(SpeakIPAText.firstReading(of: "həˈloʊ,") == "həˈloʊ,")
         // A space between syllables of one reading stays.
         #expect(SpeakIPAText.firstReading(of: "ˈwɪn stən") == "ˈwɪn stən")
         let speech = SpeakIPAText.speech(of: "either", transcribed: words([("either", "/ˈiːðər/ /ˈaɪðər/")]), symbols: symbols)
@@ -354,7 +368,7 @@ import Testing
         #expect(speech.parts[5] == .text("."))
     }
 
-    @Test func anotherWordInAWordsPlaceIsSaidAsWritten() {
+    @Test func anotherWordInAWordsPlaceIsNoIPAForIt() {
         let speech = SpeakIPAText.speech(
             of: "The colour is red.",
             transcribed: words([("The", "ðə"), ("color", "ˈkʌlɚ"), ("is", "ɪz"), ("red", "rɛd")]),
@@ -362,28 +376,39 @@ import Testing
         )
         #expect(speech.parts[2] == .text("colour"))
         #expect(speech.wordsWithIPA == 3)
+        #expect(speech.wordsWithoutIPA == ["colour"])
     }
 
-    @Test func ipaKokoroCantSayIsSaidAsWritten() {
-        // x and ʔ aren't misaki symbols; an empty answer and the word itself are no IPA.
+    @Test func everyWordIsSaidFromItsIPAWithSymbolsKokoroLacksPutAsTheClosestAndRecorded() {
+        // x and ʔ aren't misaki symbols: x is put as k, and ʔ, with nothing close, left out. The
+        // word itself as its "IPA" is still said from it; an empty answer has no sound to say.
         let speech = SpeakIPAText.speech(
             of: "Bach, uh-oh, why, Kokoro.",
             transcribed: words([("Bach", "bɑx"), ("uh", "ʔʌ"), ("oh", ""), ("why", "waɪ"), ("Kokoro", "kokoro")]),
             symbols: symbols
         )
-        #expect(speech.parts[0] == .text("Bach"))
-        #expect(speech.unknownSymbolWords == 2)
-        #expect(speech.emptyWords == 1)
-        #expect(speech.echoedWords == 1)
-        #expect(speech.wordsWithIPA == 1)
-        // One word of five: the model's answer has gone wrong.
-        #expect(!speech.usesIPA)
+        #expect(speech.parts[0] == .phonemes(word: "Bach", phonemes: "bɑk"))
+        #expect(speech.parts[2] == .phonemes(word: "uh", phonemes: "ʌ"))
+        #expect(speech.parts[4] == .text("oh"))
+        #expect(speech.parts[8] == .phonemes(word: "Kokoro", phonemes: "kOkɔɹO"))
+        #expect(speech.changes == [.init(word: "Bach", from: "x", to: "k"), .init(word: "uh", from: "ʔ", to: "")])
+        #expect(speech.wordsWithNothingToSay == ["oh"])
+        #expect(speech.wordsWithIPA == 4)
     }
 
-    @Test func theCheckIsAgainstTheSymbolsKokoroHasNow() {
+    @Test func theSymbolsCheckedAreTheOnesKokoroHasNow() {
         let transcribed = words([("Bach", "bɑx")])
-        #expect(SpeakIPAText.speech(of: "Bach", transcribed: transcribed, symbols: symbols).wordsWithIPA == 0)
-        #expect(SpeakIPAText.speech(of: "Bach", transcribed: transcribed, symbols: symbols.union(["x"])).wordsWithIPA == 1)
+        #expect(SpeakIPAText.speech(of: "Bach", transcribed: transcribed, symbols: symbols).parts == [.phonemes(word: "Bach", phonemes: "bɑk")])
+        let withX = SpeakIPAText.speech(of: "Bach", transcribed: transcribed, symbols: symbols.union(["x"]))
+        #expect(withX.parts == [.phonemes(word: "Bach", phonemes: "bɑx")])
+        #expect(withX.changes.isEmpty)
+    }
+
+    @Test func aWordWhoseIPAIsOnlyMarksHasNoSoundAndIsSaidAsKokoroReadsIt() {
+        let speech = SpeakIPAText.speech(of: "Hm", transcribed: words([("Hm", "ˈʔ")]), symbols: symbols)
+        #expect(speech.parts == [.text("Hm")])
+        #expect(speech.wordsWithNothingToSay == ["Hm"])
+        #expect(speech.changes == [.init(word: "Hm", from: "ʔ", to: "")])
     }
 
     @Test func optionalSoundsAreKept() {
@@ -391,9 +416,9 @@ import Testing
         #expect(speech.parts == [.phonemes(word: "Siobhan", phonemes: "ʃˈɪvɔhn")])
     }
 
-    @Test func halfTheWordsWithIPAIsEnoughToSayTheChunkSo() {
-        let speech = SpeakIPAText.speech(of: "One two", transcribed: words([("One", "wʌn")]), symbols: symbols)
-        #expect(speech.usesIPA)
-        #expect(!SpeakIPAText.speech(of: "One two", transcribed: [], symbols: symbols).usesIPA)
+    @Test func noWordsFromTheModelLeavesEveryWordWithoutIPA() {
+        let speech = SpeakIPAText.speech(of: "One two", transcribed: [], symbols: symbols)
+        #expect(speech.parts == [.text("One"), .text(" "), .text("two")])
+        #expect(speech.wordsWithoutIPA == ["One", "two"])
     }
 }

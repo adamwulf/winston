@@ -28,7 +28,8 @@ public enum SpeakIPAText {
     /// a hyphen, slash or underscore between letters said as a space ("well-known" is "well
     /// known"), since KokoroTTS glues the words around one together. A line that doesn't end in
     /// punctuation (a list item, a heading) ends with a full stop, so it is said as a sentence;
-    /// one that ends with a comma or a dash, as hard-wrapped prose does, goes on into the next.
+    /// one that ends with a comma or a dash, as hard-wrapped prose does, keeps it, and
+    /// `chunks(in:)` joins it to the next line.
     public static func normalized(_ text: String) -> String {
         let numbers = KokoroNumbers()
         return SpokenText.speakable(text)
@@ -56,6 +57,8 @@ public enum SpeakIPAText {
     /// that is at most a quarter over its limit, so the last chunk isn't a word or two. A word
     /// longer than a chunk is a chunk of its own. Lines stay lines in a chunk: Kokoro says each
     /// as a sentence, and a lowercase list item after a full stop doesn't run into the line before.
+    /// A line ending with a comma or a dash, as hard-wrapped prose does, is joined to the next
+    /// with a space instead.
     public static func chunks(
         in normalized: String,
         firstChunkLimit: Int = firstChunkLimit,
@@ -67,19 +70,22 @@ public enum SpeakIPAText {
         // is still a sentence of its own to the sentence splitters.
         var words: [(text: Substring, breakStrength: Int, endsLine: Bool)] = []
         for line in normalized.split(whereSeparator: \.isNewline) {
+            // A line ending with a comma or dash goes on into the next, on the same line.
+            let continues = line.last.map { ",-–—".contains($0) } ?? false
             let sentences = KokoroText.sentences(in: String(line))
             for (sentenceIndex, sentence) in sentences.enumerated() {
                 let sentenceWords = sentence.split(separator: " ")
                 for (index, word) in sentenceWords.enumerated() {
                     let endsSentence = index == sentenceWords.count - 1
-                    let strength = if endsSentence {
+                    let endsLine = endsSentence && sentenceIndex == sentences.count - 1
+                    let strength = if endsSentence && !(endsLine && continues) {
                         3
-                    } else if let last = word.last, ",;:—–".contains(last) {
+                    } else if let last = word.last, ",;:—–-".contains(last) {
                         2
                     } else {
                         1
                     }
-                    words.append((word, strength, endsSentence && sentenceIndex == sentences.count - 1))
+                    words.append((word, strength, endsLine && !continues))
                 }
             }
         }
@@ -165,49 +171,51 @@ public enum SpeakIPAText {
     // MARK: - The model's IPA
 
     /// A chunk as Speak IPA says it, made from the model's words (`speech(of:transcribed:symbols:)`),
-    /// with counts for the logs.
+    /// with what had to change, for the note under the bubble and the logs.
     public struct ChunkSpeech: Equatable, Sendable {
-        /// The chunk's parts, in order: each word with IPA Kokoro can say as its phonemes, and
-        /// everything else (punctuation, spaces, words without usable IPA) as written.
+        /// A symbol of a word's IPA that Kokoro doesn't have, put as the closest it has (`to`), or
+        /// left out (`to` empty).
+        public struct Change: Hashable, Sendable {
+            public let word: String
+            public let from: Character
+            public let to: String
+        }
+
+        /// The chunk's parts, in order: each word the model wrote IPA for as its phonemes, and
+        /// everything else (punctuation, spaces, words with no IPA to say) as written.
         public let parts: [IPASpeechPart]
         /// The chunk's words.
         public let words: Int
         /// The entries the model wrote.
         public let generated: Int
-        /// Words said with the model's IPA.
+        /// Words said from the model's IPA, some perhaps with a symbol changed (`changes`).
         public let wordsWithIPA: Int
-        /// Words the model gave no IPA for: it left them out, or wrote another word in their place.
-        public let unmatchedWords: Int
-        /// Words whose IPA, converted to Kokoro's notation, has a symbol Kokoro doesn't have.
-        public let unknownSymbolWords: Int
-        /// Words whose IPA converted to nothing.
-        public let emptyWords: Int
-        /// Words whose "IPA" was the word itself, as written.
-        public let echoedWords: Int
-
-        /// Whether at least half the chunk's words have IPA Kokoro can say. Speak IPA says a chunk
-        /// that doesn't as written instead: the model's answer has gone wrong.
-        public var usesIPA: Bool {
-            words > 0 && wordsWithIPA * 2 >= words
-        }
+        /// Each symbol changed in a word said from the model's IPA, in order.
+        public let changes: [Change]
+        /// Words the model wrote no IPA for (it left them out, or wrote another word in their
+        /// place): said as Kokoro reads them.
+        public let wordsWithoutIPA: [String]
+        /// Words whose IPA held no sound Kokoro could say once converted (empty, or only symbols
+        /// left out): said as Kokoro reads them.
+        public let wordsWithNothingToSay: [String]
     }
 
     /// `chunk` with the model's IPA in place of its words. Each of the model's words is matched to
     /// the chunk's in order, whatever their case, accents or apostrophes; a word the model split
     /// in two or three ("itsy bitsy" for "itsybitsy") gets their IPA as one word, and words it
     /// joined into one get its IPA's words, if it has as many. A word the model added is skipped,
-    /// and one it left out is said as written, as long as the two get back in step within three
+    /// and one it left out has no IPA, as long as the two get back in step within three
     /// words, and stay in step for the word after: in "Tell us how US rates changed" with "us"
     /// left out, "US" isn't taken for "us". Past that, each word is matched to the model's word in
     /// its place, only if they are the same.
     ///
     /// Each matched word's IPA, its first reading if the model wrote several
     /// (`firstReading(of:)`), without any parentheses, is converted to Kokoro's notation as one
-    /// word (`MisakiPhonemes.fromIPA(_:asOneWord:)`). It is said as written instead if that is
-    /// empty, if it has punctuation or a symbol not in `symbols` (the ones Kokoro has,
-    /// `VoiceLoop.kokoroPhonemeSymbols`), or if the "IPA" is just the word, which the conversion
-    /// would otherwise read letter by letter; for a word the model split, if any part's is empty
-    /// or just that part.
+    /// word (`MisakiPhonemes.fromIPA(_:asOneWord:)`), and each symbol not in `symbols` (the ones
+    /// Kokoro has, `VoiceLoop.kokoroPhonemeSymbols`) is put as the closest one Kokoro has, or left
+    /// out if none is close (`ClosestPhonemes`). The word is said from that, whatever the model
+    /// wrote; only a word the model wrote no IPA for, or whose IPA holds no sound once converted,
+    /// is said as Kokoro reads it. Each is recorded.
     ///
     /// A full stop right after a word said with IPA that doesn't end a sentence of the chunk, as
     /// in "Mr. Smith", goes with the word: Kokoro would otherwise take it for the end of one. An
@@ -216,25 +224,20 @@ public enum SpeakIPAText {
         let words = words(of: chunk)
         let ipa = matchedIPA(words: words, transcribed: transcribed)
         var phonemes: [Int: String] = [:]
-        var unknownSymbolWords = 0
-        var emptyWords = 0
-        var echoedWords = 0
-        for (index, parts) in ipa {
-            let cleanedParts = parts.map {
-                TranscribedWord(word: $0.word, ipa: firstReading(of: $0.ipa).filter { $0 != "(" && $0 != ")" })
-            }
-            let converted = MisakiPhonemes.fromIPA(cleanedParts.map(\.ipa).joined(separator: " "), asOneWord: true)
-            if converted.isEmpty || cleanedParts.contains(where: { MisakiPhonemes.fromIPA($0.ipa).isEmpty }) {
-                emptyWords += 1
-            } else if cleanedParts.contains(where: { key($0.ipa) == key($0.word) }) {
-                echoedWords += 1
-            } else if !MisakiPhonemes.unknownSymbols(in: converted, symbols: symbols).isEmpty
-                        || converted.contains(where: { $0.isPunctuation || $0.isSymbol }) {
-                // Kokoro has punctuation among its symbols, but in a word's phonemes it would be
-                // a pause.
-                unknownSymbolWords += 1
+        var changes: [ChunkSpeech.Change] = []
+        var wordsWithNothingToSay: [String] = []
+        for (index, parts) in ipa.sorted(by: { $0.key < $1.key }) {
+            let ipaText = parts
+                .map { firstReading(of: $0.ipa).filter { $0 != "(" && $0 != ")" } }
+                .joined(separator: " ")
+            let converted = MisakiPhonemes.fromIPA(ipaText, asOneWord: true)
+            let closest = ClosestPhonemes.closest(converted, symbols: symbols)
+            changes += closest.changes.map { ChunkSpeech.Change(word: words[index], from: $0.from, to: $0.to) }
+            // A sound, not only stress marks.
+            if closest.phonemes.contains(where: { $0 != "ˈ" && $0 != "ˌ" }) {
+                phonemes[index] = closest.phonemes
             } else {
-                phonemes[index] = converted
+                wordsWithNothingToSay.append(words[index])
             }
         }
         let sentenceEnds = Self.sentenceEnds(in: chunk)
@@ -268,22 +271,30 @@ public enum SpeakIPAText {
             words: words.count,
             generated: transcribed.count,
             wordsWithIPA: phonemes.count,
-            unmatchedWords: words.count - ipa.count,
-            unknownSymbolWords: unknownSymbolWords,
-            emptyWords: emptyWords,
-            echoedWords: echoedWords
+            changes: changes,
+            wordsWithoutIPA: words.indices.filter { ipa[$0] == nil }.map { words[$0] },
+            wordsWithNothingToSay: wordsWithNothingToSay
         )
     }
 
     /// The first reading of `ipa`, the IPA the model wrote for one word, when it wrote several:
     /// "/ˈiːðər/ /ˈaɪðər/", "ˈiːðər, ˈaɪðər" or "ˈiːðər or ˈaɪðər" are all ˈiːðər. Slashes and
-    /// brackets around a transcription go, as do commas, semicolons and bars between readings.
+    /// brackets around a transcription go. A comma, semicolon, bar or "or" counts only between two
+    /// readings: one after the only reading stays, for `ClosestPhonemes` to leave out, and record.
     static func firstReading(of ipa: String) -> String {
-        let first = ipa.split { "/[]|,;".contains($0) }
-            .first { !$0.allSatisfy(\.isWhitespace) } ?? ""
-        let words = first.split(whereSeparator: \.isWhitespace)
-        let reading = words.firstIndex(of: "or").map { words[..<$0] } ?? words[...]
-        return reading.joined(separator: " ")
+        func nonBlank(_ pieces: [Substring]) -> [Substring] {
+            pieces.filter { !$0.allSatisfy(\.isWhitespace) }
+        }
+        var reading = nonBlank(ipa.split { "/[]".contains($0) }).first ?? ""
+        let listed = nonBlank(reading.split { ",;|".contains($0) })
+        if listed.count > 1 {
+            reading = listed[0]
+        }
+        let words = reading.split(whereSeparator: \.isWhitespace)
+        if let or = words.firstIndex(of: "or"), or > 0, or < words.count - 1 {
+            return words[..<or].joined(separator: " ")
+        }
+        return words.joined(separator: " ")
     }
 
     /// Where each of `chunk`'s sentences ends, without the spaces after it, as a UTF-16 offset:
@@ -413,7 +424,7 @@ public enum SpeakIPAText {
     private static let abbreviations: [(NSRegularExpression, String)] = [
         (pattern(#"(?<![\p{L}.])(?i:e\.g\.)(?!\p{L})"#), "for example"),
         (pattern(#"(?<![\p{L}.])(?i:i\.e\.)(?!\p{L})"#), "that is"),
-        (pattern(#"(?<![\p{L}.])(?i:etc)\.(?=["'”’»)\]]*(?:\s*$|\s+\p{Lu}))"#), "et cetera."),
+        (pattern(#"(?<![\p{L}.])(?i:etc)\.(?=["'”’»)\]]*(?:\s*$|\s+["'“‘«(\[]*\p{Lu}))"#), "et cetera."),
         (pattern(#"(?<![\p{L}.])(?i:etc)\.(?!\p{L})"#), "et cetera"),
         // Lowercase only: "VS" is more often Visual Studio, as in "VS Code".
         (pattern(#"(?<![\p{L}.])vs\.?(?![\p{L}.])"#), "versus"),

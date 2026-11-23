@@ -26,8 +26,10 @@ private let realTranscriberRequested: Bool = {
 /// Kokoro phonemes and how long each chunk took, for a person to judge. The phonemes are checked
 /// against misaki's US symbols, as they are while the Kokoro model isn't loaded.
 ///
-/// It fails only if a chunk fails, or if fewer than half of all the words got IPA Kokoro can say:
-/// a mistake of ours, such as a schema the model doesn't take, fails every chunk.
+/// It fails if more than one chunk fails, or if fewer than half the words of the chunks answered
+/// got IPA from the model: a mistake of ours, such as a schema the model doesn't take, fails every
+/// chunk. One failure is allowed: the guardrails now and then decline a harmless chunk (the one
+/// with Siobhan and Joaquin, once), which Speak IPA says as written.
 @Suite(
     .serialized,
     .enabled(if: realTranscriberRequested, "neither WINSTON_SPEAKIPA_REAL_MODEL=1 nor .build/speakipa-real-model asks for it"),
@@ -53,16 +55,26 @@ struct OnDeviceIPATranscriberRealModelTests {
         var report = ["", "Speak IPA on the on-device model (\(chunks.count) chunks):"]
         var words = 0
         var wordsWithIPA = 0
+        var failedChunks = 0
         for (index, chunk) in chunks.enumerated() {
             let started = ContinuousClock.now
-            let transcribed = try await transcriber.transcribe(chunk, request: 1, chunkIndex: index)
+            let transcribed: [TranscribedWord]
+            do {
+                transcribed = try await transcriber.transcribe(chunk, request: 1, chunkIndex: index)
+            } catch {
+                // The transcriber's log line, above the report, has the model's error code.
+                report.append("chunk \(index): failed, \(error): \(chunk)")
+                failedChunks += 1
+                continue
+            }
             let seconds = Double(started.duration(to: .now) / .milliseconds(1)) / 1000
             let speech = SpeakIPAText.speech(of: chunk, transcribed: transcribed, symbols: MisakiPhonemes.usSymbols)
             words += speech.words
             wordsWithIPA += speech.wordsWithIPA
+            let changes = speech.changes.map { "\($0.from)>\($0.to)" }.joined(separator: " ")
             report.append("chunk \(index) (\(seconds.formatted(.number.precision(.fractionLength(1)))) s, "
                 + "\(speech.words) words, \(speech.generated) written, \(speech.wordsWithIPA) with IPA, "
-                + "said \(speech.usesIPA ? "as IPA" : "as written")): \(chunk)")
+                + "changed [\(changes)]): \(chunk)")
             report.append("  " + transcribed.map { "\($0.word)=\($0.ipa)" }.joined(separator: " "))
             report.append("  " + speech.parts.map { part in
                 switch part {
@@ -72,6 +84,7 @@ struct OnDeviceIPATranscriberRealModelTests {
             }.joined())
         }
         print(report.joined(separator: "\n"))
-        #expect(wordsWithIPA * 2 >= words, "only \(wordsWithIPA) of \(words) words got IPA Kokoro can say")
+        #expect(failedChunks <= 1, "\(failedChunks) of \(chunks.count) chunks failed")
+        #expect(wordsWithIPA * 2 >= words, "only \(wordsWithIPA) of \(words) words got IPA from the model")
     }
 }

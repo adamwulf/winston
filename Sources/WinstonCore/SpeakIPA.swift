@@ -12,24 +12,26 @@ import VoiceLoop
 /// The message is readied as plain words (`SpeakIPAText.normalized(_:)`) and cut into chunks
 /// (`SpeakIPAText.chunks(in:)`), a small first one so it starts soon. The model transcribes them
 /// one at a time, in order, each in a minute at most, and each chunk plays as soon as it is ready
-/// and the one before has played (`VoiceLoop.startIPASpeech(request:onFirstSound:onEnded:)`). A
-/// word whose IPA Kokoro can't say is said as written, as is a chunk with less than half its
-/// words said so, or one the model failed on (`SpeakIPAText.speech(of:transcribed:symbols:)`),
-/// including a timeout of the model's own. When Speak IPA's own minute runs out, the rest of the
-/// message is said as written: a model that stalled once would likely stall again. What the
-/// model wrote for a message is kept for the last `cachedMessages` messages, so saying one again
-/// starts at once; with every chunk kept, it needs no model at all.
+/// and the one before has played (`VoiceLoop.startIPASpeech(request:onFirstSound:onEnded:)`).
+/// Every chunk the model answers is said from its IPA, whatever it holds
+/// (`SpeakIPAText.speech(of:transcribed:symbols:)`): a symbol Kokoro lacks is put as the closest
+/// it has, or left out; only a word the model wrote no IPA for, or whose IPA has no sound left,
+/// is said as Kokoro reads it. A chunk is said as written only when there is no IPA for it: the
+/// model failed on it (its own timeout too) or answered with no words. When Speak IPA's own
+/// minute runs out, the rest of the message is said as written: a model that stalled once would
+/// likely stall again. What the model wrote for a message is kept for the last `cachedMessages`
+/// messages: a chunk kept is queued at once, and a message with every chunk kept needs no model.
 ///
 /// One message is said at a time: another message's Speak IPA replaces it, and the same
 /// message's stops it, as does `stop()`, another chat being shown, logging out, or anything that
 /// cuts off a preview, such as Speak or voice mode starting. It plays only while voice mode is
 /// off, and only with a Kokoro voice ready; otherwise, or when the model can't run, the message
-/// says why (`note(for:)`), as it does once a message has played with some of it said as
-/// written.
+/// says why (`note(for:)`). Once a message has played, the note says how much of it was said
+/// from the model's IPA and every change made (`note(for:chunks:)`).
 ///
 /// Each step is logged under `app.speakipa` at notice level, and a failure or a timeout at
-/// warning, with the request's number (counted across messages), chunk numbers, counts and times:
-/// never the text or the IPA.
+/// warning, with the request's number (counted across messages), chunk numbers, counts, the
+/// symbols changed and times: never the text, a word's IPA, or the words the note names.
 @MainActor
 @Observable
 public final class SpeakIPA {
@@ -82,7 +84,8 @@ public final class SpeakIPA {
     /// Numbers the requests from 1, for the logs.
     @ObservationIgnored private var requestCount = 0
     /// What the model wrote for each chunk it was asked about, by message and chunk, for the
-    /// messages in `cacheOrder`. Only answers that were said as IPA are kept.
+    /// messages in `cacheOrder`: each answer the speech took with a word said from its IPA. An
+    /// answer with none, or a failure, isn't kept: the next may be better.
     @ObservationIgnored private var cache: [MessageKey: [String: [TranscribedWord]]] = [:]
     /// The messages in `cache`, the one used longest ago first.
     @ObservationIgnored private var cacheOrder: [MessageKey] = []
@@ -99,11 +102,69 @@ public final class SpeakIPA {
         var chunkStarted = ContinuousClock.now
         var request: Task<Void, Never>?
         var deadline: Task<Void, Never>?
+        /// What was queued, for the note and the logs.
+        var tally = Tally()
+    }
+
+    /// What a message's queued chunks hold: how much is said from the model's IPA, and every
+    /// way it couldn't be. Counts of what the speech took, not of what was heard: a message
+    /// stopped partway counts the chunks queued by then.
+    struct Tally {
         var words = 0
         var wordsWithIPA = 0
-        var writtenChunks = 0
-        /// The first failure that put a chunk back to its written form, for the note.
-        var failure: PronunciationSuggestionError?
+        /// Each symbol changed in a word said from IPA: put as the closest Kokoro has, or left out.
+        var changes: [SpeakIPAText.ChunkSpeech.Change] = []
+        /// Words the model wrote no IPA for, said as Kokoro reads them.
+        var wordsWithoutIPA: [String] = []
+        /// Words whose IPA held no sound Kokoro could say, said as Kokoro reads them.
+        var wordsWithNothingToSay: [String] = []
+        /// The chunks said as written, by number, and why.
+        var writtenChunks: [(chunk: Int, reason: WrittenReason)] = []
+
+        mutating func add(_ speech: SpeakIPAText.ChunkSpeech) {
+            words += speech.words
+            wordsWithIPA += speech.wordsWithIPA
+            changes += speech.changes
+            wordsWithoutIPA += speech.wordsWithoutIPA
+            wordsWithNothingToSay += speech.wordsWithNothingToSay
+        }
+
+        /// Each change made, "x>k" or "ʔ>" for one left out, with how many times, in the order
+        /// first made: symbols only, for the logs.
+        var changesForLog: String {
+            var counts: [String: Int] = [:]
+            var order: [String] = []
+            for change in changes {
+                let name = "\(change.from)>\(change.to)"
+                if counts[name] == nil {
+                    order.append(name)
+                }
+                counts[name, default: 0] += 1
+            }
+            return order.map { "\($0):\(counts[$0] ?? 0)" }.joined(separator: ",")
+        }
+    }
+
+    /// Why a chunk was said as written rather than from the model's IPA.
+    enum WrittenReason: Equatable {
+        /// The model failed on it: declined, busy, its own timeout, unavailable, or another error.
+        case modelFailed(PronunciationSuggestionError)
+        /// The model answered with no words.
+        case noAnswer
+        /// Speak IPA's minute ran out waiting for it.
+        case timedOut
+        /// Not asked, after Speak IPA's minute ran out on a chunk before, or Apple Intelligence
+        /// stopped being available.
+        case notAsked
+
+        var logName: String {
+            switch self {
+            case .modelFailed(let error): error.logName
+            case .noAnswer: "noAnswer"
+            case .timedOut: "deadlinePassed"
+            case .notAsked: "notAsked"
+            }
+        }
     }
 
     init(voiceLoop: VoiceLoop, transcriber: any IPATranscriber, timeout: Duration = defaultTimeout) {
@@ -118,8 +179,8 @@ public final class SpeakIPA {
         return current.phase
     }
 
-    /// What to tell Adam under `message`, if anything: why Speak IPA couldn't say it, or how much
-    /// of it was said as written.
+    /// What to tell Adam under `message`, if anything: why Speak IPA couldn't say it, or, once it
+    /// has played, how much was said from the model's IPA and what was changed or said as written.
     public func note(for message: ChatMessage) -> String? {
         guard let currentNote, currentNote.key == MessageKey(message) else { return nil }
         return currentNote.text
@@ -331,7 +392,7 @@ public final class SpeakIPA {
                 "reason": reason.logName,
                 "ms": "\(Self.milliseconds(since: run.chunkStarted))",
             ]))
-            guard sayAsWritten(chunk: index, failure: reason) else { return }
+            guard sayAsWritten(chunk: index, reason: .modelFailed(reason)) else { return }
             if case .unavailable = reason {
                 // The model has gone: the rest would fail too.
                 sayRestAsWritten()
@@ -356,18 +417,23 @@ public final class SpeakIPA {
         run.request = nil
         run.deadline = nil
         self.run = run
-        guard sayAsWritten(chunk: index, failure: .timedOut) else { return }
+        guard sayAsWritten(chunk: index, reason: .timedOut) else { return }
         sayRestAsWritten()
     }
 
-    /// Says chunk `index` from `transcribed`, the model's words for it, and keeps them if they
-    /// were said as IPA. Returns whether the speech is still going.
+    /// Says chunk `index` from `transcribed`, the model's words for it, always from their IPA
+    /// (`SpeakIPAText.speech(of:transcribed:symbols:)`), and keeps them if any matched; only an
+    /// answer with no words is said as written. Returns whether the speech is still going.
     private func say(chunk index: Int, transcribed: [TranscribedWord], cached: Bool) -> Bool {
         guard var run else { return false }
         let chunk = run.chunks[index]
+        guard !transcribed.isEmpty else {
+            Self.log.warning("speak ipa chunk answered with no words", ["request": run.number, "chunk": index])
+            return sayAsWritten(chunk: index, reason: .noAnswer)
+        }
         let speech = SpeakIPAText.speech(of: chunk, transcribed: transcribed, symbols: voiceLoop.kokoroPhonemeSymbols)
-        // Counts only: the words and their IPA are the user's. `sayAs` is what is asked of the
-        // speech; "chunk not queued" follows if it has ended.
+        // Counts, and the symbols changed: the words and their IPA are the user's. "chunk not
+        // queued" follows if the speech has ended.
         Self.log.notice("speak ipa chunk transcribed", [
             "request": run.number,
             "chunk": index,
@@ -375,51 +441,44 @@ public final class SpeakIPA {
             "words": speech.words,
             "generated": speech.generated,
             "withIPA": speech.wordsWithIPA,
-            "unmatched": speech.unmatchedWords,
-            "unknownSymbols": speech.unknownSymbolWords,
-            "empty": speech.emptyWords,
-            "echoed": speech.echoedWords,
-            "sayAs": speech.usesIPA ? "ipa" : "written",
+            "changed": speech.changes.count,
+            "changes": Tally(changes: speech.changes).changesForLog,
+            "withoutIPA": speech.wordsWithoutIPA.count,
+            "nothingToSay": speech.wordsWithNothingToSay.count,
             "cached": cached,
             "ms": Self.milliseconds(since: run.chunkStarted),
             "totalMs": Self.milliseconds(since: run.started),
         ])
-        guard speech.usesIPA else {
-            return sayAsWritten(chunk: index, failure: nil)
-        }
         // Counted and kept only once the speech has taken it.
         guard queue(chunk: index, { run.speech.say(speech.parts) }) else { return false }
-        run.words += speech.words
-        run.wordsWithIPA += speech.wordsWithIPA
+        run.tally.add(speech)
         run.next = index + 1
         self.run = run
-        if !cached {
+        // An answer none of whose words matched the chunk's isn't kept: the next may.
+        if !cached, speech.wordsWithIPA > 0 {
             keep(transcribed, for: chunk, of: run.key)
         }
         return true
     }
 
-    /// Says chunk `index` as written, because of `failure`, or because the model's IPA didn't
-    /// suit Kokoro when it is nil. Returns whether the speech is still going.
-    private func sayAsWritten(chunk index: Int, failure: PronunciationSuggestionError?) -> Bool {
+    /// Says chunk `index` as written, because of `reason`. Returns whether the speech is still
+    /// going.
+    private func sayAsWritten(chunk index: Int, reason: WrittenReason) -> Bool {
         guard var run else { return false }
         let chunk = run.chunks[index]
         // Counted only once the speech has taken it.
         guard queue(chunk: index, { run.speech.sayAsWritten(chunk) }) else { return false }
-        run.words += SpeakIPAText.words(of: chunk).count
-        run.writtenChunks += 1
-        if run.failure == nil {
-            run.failure = failure
-        }
+        run.tally.words += SpeakIPAText.words(of: chunk).count
+        run.tally.writtenChunks.append((index, reason))
         run.next = index + 1
         self.run = run
         return true
     }
 
-    /// Says every chunk still to come as written.
+    /// Says every chunk still to come as written: not asked.
     private func sayRestAsWritten() {
         while let run, run.next < run.chunks.count {
-            guard sayAsWritten(chunk: run.next, failure: nil) else { return }
+            guard sayAsWritten(chunk: run.next, reason: .notAsked) else { return }
         }
         finishQueueing()
     }
@@ -442,7 +501,7 @@ public final class SpeakIPA {
         Self.log.notice("speak ipa chunks queued", [
             "request": run.number,
             "chunks": run.chunks.count,
-            "writtenChunks": run.writtenChunks,
+            "writtenChunks": run.tally.writtenChunks.count,
             "ms": Self.milliseconds(since: run.started),
         ])
         run.speech.finish()
@@ -474,23 +533,30 @@ public final class SpeakIPA {
         run.deadline?.cancel()
         self.run = nil
         current = nil
+        // Counts of what the speech took, and the symbols changed: never the words.
+        let tally = run.tally
         Self.log.notice("speak ipa ended", [
             "request": number,
             "end": end.logName,
             "chunks": run.chunks.count,
             "chunksQueued": run.next,
-            "writtenChunks": run.writtenChunks,
-            "words": run.words,
-            "wordsWithIPA": run.wordsWithIPA,
+            "writtenChunks": tally.writtenChunks.count,
+            "writtenReasons": tally.writtenChunks.map { "\($0.chunk):\($0.reason.logName)" }.joined(separator: ","),
+            "words": tally.words,
+            "wordsWithIPA": tally.wordsWithIPA,
+            "changed": tally.changes.count,
+            "changes": tally.changesForLog,
+            "withoutIPA": tally.wordsWithoutIPA.count,
+            "nothingToSay": tally.wordsWithNothingToSay.count,
             "ms": Self.milliseconds(since: run.started),
         ])
         switch end {
-        case .finished where run.wordsWithIPA < run.words:
-            currentNote = (run.key, Self.note(wordsWithIPA: run.wordsWithIPA, words: run.words, failure: run.failure))
+        case .finished:
+            currentNote = (run.key, Self.note(for: tally, chunks: run.chunks.count))
         case .kokoroFailed(let skippedLaterChunks):
             // Not the counts: they are of what was queued, and the system voice said some of it.
             currentNote = (run.key, skippedLaterChunks ? Self.kokoroFailedNote : Self.kokoroFailedOnLastChunkNote)
-        case .finished, .stopped:
+        case .stopped:
             break
         }
     }
@@ -507,19 +573,74 @@ public final class SpeakIPA {
 
     // MARK: - What Adam is told
 
-    /// How much of a message that played to the end was said as written, and why, if a chunk
-    /// failed.
-    static func note(wordsWithIPA: Int, words: Int, failure: PronunciationSuggestionError?) -> String {
-        var note = "\(wordsWithIPA) of \(words) words were said from Apple Intelligence's IPA; the rest as Kokoro reads them."
-        switch failure {
-        case nil: break
-        case .timedOut: note += " Apple Intelligence didn't answer in time."
-        case .declined: note += " The model declined part of the message."
-        case .busy: note += " The model was busy."
-        case .unavailable: note += " Apple Intelligence stopped being available."
-        case .failed: note += " The model failed on part of the message."
+    /// What Adam is told once a message of `chunks` chunks has played to the end: how many of its
+    /// words were said from the model's IPA, each symbol put as the closest Kokoro has or left
+    /// out, with the words it was in, the words said as Kokoro reads them and why, and the chunks
+    /// said as written and why. One line each, only those that happened.
+    static func note(for tally: Tally, chunks: Int) -> String {
+        var lines = ["\(tally.wordsWithIPA) of \(tally.words) words were said from Apple Intelligence's IPA."]
+        let substituted = grouped(tally.changes.filter { !$0.to.isEmpty })
+        if !substituted.isEmpty {
+            lines.append("Put as the closest sound Kokoro has: " + substituted.joined(separator: "; ") + ".")
         }
-        return note
+        let leftOut = grouped(tally.changes.filter(\.to.isEmpty))
+        if !leftOut.isEmpty {
+            lines.append("Left out, with nothing close: " + leftOut.joined(separator: "; ") + ".")
+        }
+        if !tally.wordsWithoutIPA.isEmpty {
+            lines.append("No IPA from the model, so said as Kokoro reads them: \(listed(tally.wordsWithoutIPA)).")
+        }
+        if !tally.wordsWithNothingToSay.isEmpty {
+            lines.append("No sound left in the model's IPA, so said as Kokoro reads them: \(listed(tally.wordsWithNothingToSay)).")
+        }
+        if !tally.writtenChunks.isEmpty {
+            let parts = tally.writtenChunks.map { "part \($0.chunk + 1) of \(chunks) (\(text(for: $0.reason)))" }
+            lines.append("Said as written: " + parts.joined(separator: "; ") + ".")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// `changes` as "x → k ×2 (Bach, Loch)", one entry for each symbol and what it was put as, in
+    /// the order first made; "ʔ ×1 (uh)" for one left out.
+    private static func grouped(_ changes: [SpeakIPAText.ChunkSpeech.Change]) -> [String] {
+        var order: [SpeakIPAText.ChunkSpeech.Change] = []
+        var words: [String: [String]] = [:]
+        for change in changes {
+            let name = "\(change.from)>\(change.to)"
+            if words[name] == nil {
+                order.append(change)
+            }
+            words[name, default: []].append(change.word)
+        }
+        return order.map { change in
+            let inWords = words["\(change.from)>\(change.to)"] ?? []
+            let symbols = change.to.isEmpty ? "\(change.from)" : "\(change.from) → \(change.to)"
+            return "\(symbols) ×\(inWords.count) (\(listed(inWords)))"
+        }
+    }
+
+    /// `words`, each once, in order, the first five and how many more.
+    private static func listed(_ words: [String]) -> String {
+        var unique: [String] = []
+        for word in words where !unique.contains(word) {
+            unique.append(word)
+        }
+        let shown = unique.prefix(5).joined(separator: ", ")
+        return unique.count > 5 ? "\(shown) and \(unique.count - 5) more" : shown
+    }
+
+    /// Why a chunk was said as written, for the note.
+    private static func text(for reason: WrittenReason) -> String {
+        switch reason {
+        case .modelFailed(.declined): "the model declined it"
+        case .modelFailed(.busy): "the model was busy"
+        case .modelFailed(.timedOut): "the model timed out"
+        case .modelFailed(.unavailable): "Apple Intelligence wasn't available"
+        case .modelFailed(.failed): "the model failed on it"
+        case .noAnswer: "the model wrote no IPA for it"
+        case .timedOut: "Apple Intelligence didn't answer in time"
+        case .notAsked: "not asked after that"
+        }
     }
 
     /// What Adam is told when Kokoro failed partway (`IPASpeechEnd.kokoroFailed`), with later
