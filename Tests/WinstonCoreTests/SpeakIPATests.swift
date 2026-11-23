@@ -87,26 +87,125 @@ struct SpeakIPATests {
         #expect(harness.bed.audio.playedFrames == 0)
     }
 
-    @Test func anotherMessageReplacesTheOneBeingSaid() async throws {
+    @Test func anotherMessageReplacesTheOneBeingSaidAndTheFirstsLateAnswerIsDropped() async throws {
         let harness = await harnessWithKokoro()
         let speakIPA = harness.model.speakIPA
         let first = message(twoChunks, id: 11)
         let second = message("Second message.", id: 12)
+        // Told apart by their IPA. The first answer's words are the second message's, so only
+        // the request it answers keeps it out.
+        harness.transcriber.answers = [
+            .success([TranscribedWord(word: "Second", ipa: "fˈɜɹst"), TranscribedWord(word: "message", ipa: "fˈɜɹst")]),
+            .success([TranscribedWord(word: "Second", ipa: "sˈɛkənd"), TranscribedWord(word: "message", ipa: "mˈɛsəʤ")]),
+        ]
         harness.transcriber.holdsAnswers = true
         speakIPA.toggle(first)
         #expect(await eventually { harness.transcriber.heldAnswers == 1 })
 
-        harness.transcriber.holdsAnswers = false
         speakIPA.toggle(second)
-
         #expect(speakIPA.phase(for: first) == nil)
+        #expect(await eventually { harness.transcriber.heldAnswers == 2 })
+        #expect(harness.transcriber.cancelledRequests == [0])
+
+        // The first message's answer comes first, late: dropped.
+        harness.transcriber.releaseAnswer(0)
+        try await settle()
         #expect(speakIPA.phase(for: second) == .preparing)
-        #expect(await eventually { harness.transcriber.cancelledRequests == [0] })
-        harness.transcriber.releaseAnswers()
+        #expect(harness.bed.kokoro.requests.isEmpty)
+
+        harness.transcriber.releaseAnswer(1)
         #expect(await eventually { speakIPA.phase(for: second) == nil })
         #expect(harness.transcriber.chunks == [firstSentence, "Second message."])
-        // The first message's late answer was dropped: only the second was said.
+        #expect(harness.bed.kokoro.requests.map { Set($0.pronunciations.values) } == [["sˈɛkənd", "mˈɛsəʤ"]])
+    }
+
+    @Test func stopSpeakingIPAOnAMessageThatHasFinishedDoesNothing() async throws {
+        let harness = await harnessWithKokoro()
+        let speakIPA = harness.model.speakIPA
+        let message = message("Short one.")
+        speakIPA.toggle(message)
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+
+        // As from a menu opened while it played.
+        speakIPA.stop(message)
+
+        #expect(speakIPA.phase(for: message) == nil)
+        try await settle()
+        #expect(harness.transcriber.chunks.count == 1)
         #expect(harness.bed.kokoro.requests.count == 1)
+    }
+
+    @Test func aMessageSentWhileItIsSaidKeepsItsStatusUnderItsNewID() async throws {
+        let harness = Harness.withTwoBots()
+        #expect(await harness.startAndLoadChats())
+        let model = harness.model
+        model.voiceIdentifier = "kokoro.af_heart"
+        #expect(await eventually { model.voiceLoop.kokoroModelState == .ready })
+        #expect(await model.sendText("Run the tests."))
+        #expect(await eventually { model.currentMessages.last?.text == "Run the tests." })
+        let pending = try #require(model.currentMessages.last)
+        #expect(pending.sendState == .pending)
+        harness.transcriber.holdsAnswers = true
+        model.speakIPA.toggle(pending)
+        #expect(await eventually { harness.transcriber.heldAnswers == 1 })
+
+        harness.fake.confirmSend(of: pending.id.rawValue, in: 1, as: 13)
+        #expect(await eventually { model.currentMessages.last?.id == MessageID(13) })
+        let sent = try #require(model.currentMessages.last)
+
+        #expect(model.speakIPA.phase(for: sent) == .preparing)
+        model.speakIPA.stop(sent)
+        #expect(model.speakIPA.phase(for: sent) == nil)
+        #expect(await eventually { harness.transcriber.cancelledRequests == [0] })
+        harness.transcriber.releaseAnswers()
+    }
+
+    @Test func aCancelThatDidntComeFromSpeakIPAIsAChunkFailureAndTheMessageGoesOn() async throws {
+        let harness = await harnessWithKokoro()
+        let speakIPA = harness.model.speakIPA
+        let message = message(twoChunks)
+        harness.transcriber.answers = [.failure(CancellationError())]
+
+        speakIPA.toggle(message)
+
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+        #expect(harness.transcriber.chunks.count == 2)
+        #expect(harness.bed.kokoro.requests.first?.text == firstSentence)
+        #expect(harness.bed.kokoro.requests.count == 2)
+        #expect(speakIPA.note(for: message)?.hasSuffix("The model failed on part of the message.") == true)
+    }
+
+    @Test func ifKokoroFailsTheNoteSaysTheRestWasntSaid() async throws {
+        let harness = await harnessWithKokoro()
+        let speakIPA = harness.model.speakIPA
+        let message = message(twoChunks)
+        harness.bed.kokoro.failingRequest = 0
+
+        speakIPA.toggle(message)
+
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+        #expect(speakIPA.note(for: message)
+            == "The Kokoro voice stopped partway: the system voice finished the part it was on, and the rest wasn't said.")
+        #expect(harness.bed.kokoro.requests.count == 1)
+    }
+
+    @Test func aMessageWhoseIPAIsKeptIsSaidAgainWithoutTheModel() async throws {
+        let harness = await harnessWithKokoro()
+        let speakIPA = harness.model.speakIPA
+        let message = message(twoChunks)
+        speakIPA.toggle(message)
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+
+        harness.transcriber.availability = .unavailable(.modelNotReady)
+        speakIPA.toggle(message)
+
+        #expect(speakIPA.note(for: message) == nil)
+        #expect(await eventually { speakIPA.phase(for: message) == nil })
+        #expect(harness.bed.kokoro.requests.count == 4)
+        // Another message needs the model, and says why it can't have it.
+        let other = self.message("Something new.", id: 12)
+        speakIPA.toggle(other)
+        #expect(speakIPA.note(for: other)?.hasPrefix("Apple Intelligence isn't ready yet") == true)
     }
 
     @Test func showingAnotherChatStopsIt() async throws {
@@ -148,7 +247,7 @@ struct SpeakIPATests {
         let harness = await harnessWithKokoro()
         let speakIPA = harness.model.speakIPA
         let message = message(twoChunks)
-        harness.transcriber.answers = [.failure(.declined)]
+        harness.transcriber.answers = [.failure(PronunciationSuggestionError.declined)]
 
         speakIPA.toggle(message)
 

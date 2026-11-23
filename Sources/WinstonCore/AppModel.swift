@@ -271,6 +271,10 @@ public final class AppModel {
         voiceLoop.onStoppedForDeviceChange = { [weak self] in
             self?.leaveVoiceMode()
         }
+        speakIPA.isVoiceModeOn = { [weak self] in
+            guard let self else { return false }
+            return isVoiceMode || isStartingVoice
+        }
     }
 
     isolated deinit {
@@ -861,6 +865,8 @@ public final class AppModel {
             settleUpload(of: PendingMessage(chat: chat, id: oldID), .sent)
             guard isBotChat(chat) else { return }
             let isNew = upsert(message, replacing: oldID)
+            // A pending message being said goes on being said, and shown so, under its new ID.
+            speakIPA.messageIDChanged(in: chat, from: oldID, to: message.id)
             Self.log.info("sent message confirmed", [
                 "chatID": chat,
                 "oldID": oldID,

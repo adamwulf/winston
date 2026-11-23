@@ -815,7 +815,7 @@ struct KokoroIPASpeechTests {
     @MainActor
     private final class Ends {
         var firstSounds = 0
-        var ended: [Bool] = []
+        var ended: [IPASpeechEnd] = []
     }
 
     private func offLoopWithKokoro(on bed: VoiceTestBed) async -> VoiceLoop {
@@ -828,9 +828,15 @@ struct KokoroIPASpeechTests {
     private func start(on loop: VoiceLoop, noting ends: Ends) throws -> IPASpeech {
         try loop.startIPASpeech(request: 1) {
             ends.firstSounds += 1
-        } onEnded: { finished in
-            ends.ended.append(finished)
+        } onEnded: { end in
+            ends.ended.append(end)
         }
+    }
+
+    /// Speak IPA's placeholder numbered `number`: a set of the message's own, from 0 for each.
+    private func ipaPlaceholder(_ number: Int, capital: Bool = false) -> String {
+        let placeholder = PhoneticPlaceholders.placeholder(number: number, prefix: VoiceLoop.ipaPlaceholderPrefix)
+        return capital ? placeholder.prefix(1).uppercased() + placeholder.dropFirst() : placeholder
     }
 
     @Test func eachChunkPlaysWithItsWordsPhonemesInOrderThenTheSpeechEnds() async throws {
@@ -846,15 +852,15 @@ struct KokoroIPASpeechTests {
         #expect(speech.sayAsWritten("Second one."))
         speech.finish()
 
-        #expect(await eventually { ends.ended == [true] })
+        #expect(await eventually { ends.ended == [.finished] })
         #expect(ends.firstSounds == 1)
         #expect(loop.state == .off)
         #expect(bed.kokoro.requests == [
             FakeKokoro.Request(
-                text: "\(placeholder(0, capital: true)) \(placeholder(1)).",
+                text: "\(ipaPlaceholder(0, capital: true)) \(ipaPlaceholder(1)).",
                 voice: "af_heart",
                 speed: 1,
-                pronunciations: [placeholder(0): "həlˈO", placeholder(1): "ðˈɛɹ"]
+                pronunciations: [ipaPlaceholder(0): "həlˈO", ipaPlaceholder(1): "ðˈɛɹ"]
             ),
             FakeKokoro.Request(text: "Second one.", voice: "af_heart", speed: 1),
         ])
@@ -879,7 +885,7 @@ struct KokoroIPASpeechTests {
 
         speech.sayAsWritten("Second.")
         speech.finish()
-        #expect(await eventually { ends.ended == [true] })
+        #expect(await eventually { ends.ended == [.finished] })
         #expect(!engine.isRunning)
         #expect(bed.kokoro.requests.map(\.text) == ["First.", "Second."])
     }
@@ -894,8 +900,59 @@ struct KokoroIPASpeechTests {
         speech.say([.text("The "), .phonemes(word: "Heart", phonemes: "hˈɑɹt"), .text(" voice is Heart.")])
         speech.finish()
 
-        #expect(await eventually { ends.ended == [true] })
-        #expect(bed.kokoro.requests.map(\.text) == ["The \(placeholder(0, capital: true)) voice is Hart."])
+        #expect(await eventually { ends.ended == [.finished] })
+        #expect(bed.kokoro.requests.map(\.text) == ["The \(ipaPlaceholder(0, capital: true)) voice is Hart."])
+    }
+
+    @Test func wordsSaidAsWrittenBetweenTwoWithIPAMatchAPronunciationOfSeveralWords() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.pronunciations = [Pronunciation(word: "New York", replacement: "Noo Yawk")]
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.say([
+            .phonemes(word: "Hi", phonemes: "hˈI"), .text(" "), .text("New"), .text(" "), .text("York"), .text(", "),
+            .phonemes(word: "Bob", phonemes: "bˈɑb"), .text("."),
+        ])
+        speech.finish()
+
+        #expect(await eventually { ends.ended == [.finished] })
+        #expect(bed.kokoro.requests.map(\.text) == ["\(ipaPlaceholder(0, capital: true)) Noo Yawk, \(ipaPlaceholder(1, capital: true))."])
+    }
+
+    @Test func aPronunciationSaidBetweenTwoWordsWithIPANeverTouchesTheirPlaceholders() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        loop.pronunciations = [Pronunciation(word: "&", replacement: "and")]
+        let ends = Ends()
+        let speech = try start(on: loop, noting: ends)
+
+        speech.say([.phonemes(word: "R", phonemes: "ˈɑɹ"), .text("&"), .phonemes(word: "D", phonemes: "dˈi")])
+        speech.finish()
+
+        #expect(await eventually { ends.ended == [.finished] })
+        #expect(bed.kokoro.requests.map(\.text) == ["\(ipaPlaceholder(0, capital: true)) and \(ipaPlaceholder(1, capital: true))"])
+    }
+
+    @Test func eachMessageGivesItsPlaceholdersOutAgainAndKokoroTakesTheirNewPhonemes() async throws {
+        let bed = VoiceTestBed()
+        let loop = await offLoopWithKokoro(on: bed)
+        let firstEnds = Ends()
+        let first = try start(on: loop, noting: firstEnds)
+        first.say([.phonemes(word: "read", phonemes: "ɹˈid")])
+        first.finish()
+        #expect(await eventually { firstEnds.ended == [.finished] })
+
+        let secondEnds = Ends()
+        let second = try start(on: loop, noting: secondEnds)
+        second.say([.phonemes(word: "read", phonemes: "ɹˈɛd")])
+        second.finish()
+        #expect(await eventually { secondEnds.ended == [.finished] })
+
+        // The same name, each time with that message's phonemes: nothing builds up message after
+        // message.
+        #expect(bed.kokoro.requests.map(\.pronunciations) == [[ipaPlaceholder(0): "ɹˈid"], [ipaPlaceholder(0): "ɹˈɛd"]])
     }
 
     @Test func stoppingItEndsItAndDropsWhatIsStillRendering() async throws {
@@ -909,7 +966,7 @@ struct KokoroIPASpeechTests {
 
         speech.stop()
 
-        #expect(ends.ended == [false])
+        #expect(ends.ended == [.stopped])
         #expect(!speech.sayAsWritten("Second."))
         bed.kokoro.holdsSynthesis = false
         bed.kokoro.releaseSyntheses()
@@ -926,7 +983,7 @@ struct KokoroIPASpeechTests {
 
         loop.preview("Something else.")
 
-        #expect(ends.ended == [false])
+        #expect(ends.ended == [.stopped])
         #expect(!speech.sayAsWritten("First."))
         loop.stopPreview()
     }
@@ -939,13 +996,13 @@ struct KokoroIPASpeechTests {
         let secondEnds = Ends()
         let second = try start(on: loop, noting: secondEnds)
 
-        #expect(firstEnds.ended == [false])
+        #expect(firstEnds.ended == [.stopped])
         #expect(!first.sayAsWritten("First."))
         #expect(second.sayAsWritten("Second."))
         // The old handle can't stop the new speech.
         first.stop()
         second.finish()
-        #expect(await eventually { secondEnds.ended == [true] })
+        #expect(await eventually { secondEnds.ended == [.finished] })
         #expect(bed.kokoro.requests.map(\.text) == ["Second."])
     }
 
@@ -958,7 +1015,7 @@ struct KokoroIPASpeechTests {
         try await loop.start()
         defer { loop.stop() }
 
-        #expect(ends.ended == [false])
+        #expect(ends.ended == [.stopped])
     }
 
     @Test func itDoesntStartWhileVoiceModeIsOn() async throws {
@@ -994,11 +1051,14 @@ struct KokoroIPASpeechTests {
         let ends = Ends()
         let speech = try start(on: loop, noting: ends)
 
-        speech.sayAsWritten("First.")
-        #expect(await eventually { bed.systemVoiceTexts == ["First."] })
+        // Its words with IPA as their words, for the system voice.
+        speech.say([.phonemes(word: "First", phonemes: "fˈɜɹst"), .text(" one.")])
+        #expect(await eventually { bed.systemVoiceTexts == ["First one."] })
         #expect(!speech.sayAsWritten("Second."))
-        #expect(await eventually { ends.ended == [true] })
-        #expect(bed.kokoro.requests.map(\.text) == ["First."])
+        // Not told it finished: the rest wasn't said. Its first sound was the system voice's.
+        #expect(await eventually { ends.ended == [.kokoroFailed] })
+        #expect(ends.firstSounds == 1)
+        #expect(bed.kokoro.requests.count == 1)
     }
 }
 

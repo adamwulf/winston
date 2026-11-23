@@ -9,7 +9,7 @@ import VoiceLoop
 final class FakeIPATranscriber: IPATranscriber {
     private struct State {
         var availability = PronunciationSuggesterAvailability.available
-        var answers: [Result<[TranscribedWord], PronunciationSuggestionError>] = []
+        var answers: [Result<[TranscribedWord], any Error>] = []
         var chunks: [String] = []
         var requestNumbers: [Int] = []
         var holdsAnswers = false
@@ -26,7 +26,7 @@ final class FakeIPATranscriber: IPATranscriber {
     }
 
     /// What the requests get, in order: the first request the first answer, and on.
-    var answers: [Result<[TranscribedWord], PronunciationSuggestionError>] {
+    var answers: [Result<[TranscribedWord], any Error>] {
         get { state.withLock { $0.answers } }
         set { state.withLock { $0.answers = newValue } }
     }
@@ -37,7 +37,12 @@ final class FakeIPATranscriber: IPATranscriber {
     /// Speak IPA's number for each request, oldest first.
     var requestNumbers: [Int] { state.withLock { $0.requestNumbers } }
 
-    /// While true, each answer waits until `releaseAnswers()`.
+    /// Lets the held answer of request `number` (the first is 0) go.
+    func releaseAnswer(_ number: Int) {
+        state.withLock { $0.heldAnswers.removeValue(forKey: number) }?.resume()
+    }
+
+    /// While true, each answer waits until `releaseAnswer(_:)` or `releaseAnswers()`.
     var holdsAnswers: Bool {
         get { state.withLock { $0.holdsAnswers } }
         set { state.withLock { $0.holdsAnswers = newValue } }

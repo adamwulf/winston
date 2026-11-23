@@ -53,14 +53,20 @@ final class SpeechOutput {
     }
 
     /// A playback for one message on this player, at the pitch set last.
-    /// `onFinished` is called, on an arbitrary thread, once the message has played.
-    func makePlayback(text: String, onFinished: @escaping @Sendable (SpeechPlayback) -> Void) -> SpeechPlayback {
+    /// `onFinished` is called, on an arbitrary thread, once the message has played, and
+    /// `onFirstScheduled` once its first buffer is scheduled.
+    func makePlayback(
+        text: String,
+        onFirstScheduled: (@Sendable () -> Void)? = nil,
+        onFinished: @escaping @Sendable (SpeechPlayback) -> Void
+    ) -> SpeechPlayback {
         SpeechPlayback(
             text: text,
             player: player,
             format: format,
             completion: completion,
             trailingSilence: pitchShift.bypass ? 0 : AVAudioFrameCount(format.sampleRate * Self.pitchShiftTail),
+            onFirstScheduled: onFirstScheduled,
             onFinished: onFinished
         )
     }

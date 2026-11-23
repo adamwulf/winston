@@ -46,6 +46,13 @@ import Testing
         #expect(SpeakIPAText.normalized("Apples, pears, etc. Then lunch.") == "Apples, pears, et cetera. Then lunch.")
         #expect(SpeakIPAText.normalized("Apples, etc. and pears.") == "Apples, et cetera and pears.")
         #expect(SpeakIPAText.normalized("Swift vs. Kotlin") == "Swift versus Kotlin.")
+        // In capitals, it's more often Visual Studio.
+        #expect(SpeakIPAText.normalized("Open VS Code.") == "Open VS Code.")
+    }
+
+    @Test func aLineEndingWithACommaOrADashGoesOnIntoTheNext() {
+        #expect(SpeakIPAText.normalized("I fixed the parser,\nincluding its tests") == "I fixed the parser,\nincluding its tests.")
+        #expect(SpeakIPAText.normalized("Two things —\nthis and that") == "Two things —\nthis and that.")
     }
 
     @Test func aLineWithoutEndingPunctuationEndsWithAFullStop() {
@@ -238,6 +245,45 @@ import Testing
         #expect(leftOut.parts[4] == .phonemes(word: "passed", phonemes: "pæst"))
         #expect(leftOut.wordsWithIPA == 3)
         #expect(leftOut.unmatchedWords == 1)
+    }
+
+    @Test func aWordLeftOutIsNotMatchedToALaterWordSpelledTheSame() {
+        // "us" left out: "US" comes soon after, but the words after it don't follow.
+        let speech = SpeakIPAText.speech(
+            of: "Tell us how US rates changed.",
+            transcribed: words([("Tell", "tɛl"), ("how", "haʊ"), ("US", "ˌjuˈɛs"), ("rates", "reɪts"), ("changed", "tʃeɪndʒd")]),
+            symbols: symbols
+        )
+        #expect(speech.parts[2] == .text("us"))
+        #expect(speech.parts[6] == .phonemes(word: "US", phonemes: "jˌuˈɛs"))
+        #expect(speech.wordsWithIPA == 5)
+    }
+
+    @Test func aWordTheModelSplitIsSaidAsWrittenIfAnyPartHasNoIPA() {
+        let speech = SpeakIPAText.speech(
+            of: "A worktree.",
+            transcribed: words([("A", "ə"), ("work", "wɜrk"), ("tree", "")]),
+            symbols: symbols
+        )
+        #expect(speech.parts[2] == .text("worktree"))
+        #expect(speech.emptyWords == 1)
+    }
+
+    @Test func aFullStopThatDoesntEndASentenceGoesWithItsWord() {
+        let speech = SpeakIPAText.speech(
+            of: "Mr. Smith likes Bach. He plays.",
+            transcribed: words([
+                ("Mr", "ˈmɪstər"), ("Smith", "smɪθ"), ("likes", "laɪks"), ("Bach", "bɑk"), ("He", "hi"), ("plays", "pleɪz"),
+            ]),
+            symbols: symbols
+        )
+        // "Mr." keeps no full stop, which Kokoro would take for a sentence's end; "Bach." keeps its.
+        #expect(speech.parts.prefix(3) == [.phonemes(word: "Mr", phonemes: "mˈɪstəɹ"), .text(" "), .phonemes(word: "Smith", phonemes: "smɪθ")])
+        #expect(speech.parts[7] == .text(". "))
+        #expect(speech.parts.last == .text("."))
+        // Said as written, a word's full stop stays: Kokoro reads "Mr." itself.
+        let written = SpeakIPAText.speech(of: "Mr. Smith.", transcribed: [], symbols: symbols)
+        #expect(written.parts.prefix(2) == [.text("Mr"), .text(". ")])
     }
 
     @Test func anotherWordInAWordsPlaceIsSaidAsWritten() {

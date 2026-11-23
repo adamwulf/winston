@@ -211,8 +211,9 @@ struct MessageRow: View {
                     .accessibilityLabel("Speak I P A")
                     .accessibilityHint("Apple Intelligence writes how each word sounds, and the Kokoro voice says it.")
                 } else {
+                    // Stop only: the message may have finished while the menu was open.
                     Button("Stop Speaking IPA", systemImage: "stop.circle") {
-                        model.speakIPA.toggle(message)
+                        model.speakIPA.stop(message)
                     }
                     .accessibilityLabel("Stop speaking I P A")
                 }

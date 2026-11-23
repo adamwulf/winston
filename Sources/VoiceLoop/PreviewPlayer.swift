@@ -46,15 +46,20 @@ final class PreviewPlayer {
     /// feed its audio into. Throws when the engine or, on iOS, the audio session can't start.
     /// `onEnded` is told once the preview has ended: `finished` when it played to the end, and
     /// otherwise when it was stopped, cut off by another, or ended early by the engine or a call.
-    /// It isn't told when the preview fails to start.
-    func play(pitch: Float, onEnded: (@MainActor (_ finished: Bool) -> Void)? = nil) throws -> SpeechPlayback {
+    /// It isn't told when the preview fails to start. `onFirstScheduled` is told, on an arbitrary
+    /// thread, once the preview's first sound is scheduled.
+    func play(
+        pitch: Float,
+        onFirstScheduled: (@Sendable () -> Void)? = nil,
+        onEnded: (@MainActor (_ finished: Bool) -> Void)? = nil
+    ) throws -> SpeechPlayback {
         stop()
         let engine = try environment.makeEngine()
         let output = try SpeechOutput(engine: engine)
         output.connect()
         output.setPitch(pitch)
         // A preview is never queued again, so it needs no text.
-        let playback = output.makePlayback(text: "") { [weak self] playback in
+        let playback = output.makePlayback(text: "", onFirstScheduled: onFirstScheduled) { [weak self] playback in
             Task { @MainActor in self?.finished(playback) }
         }
         // Watching from before the start, so a change while starting isn't missed.

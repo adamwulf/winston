@@ -53,10 +53,18 @@ public final class SpeakIPA {
         let message: MessageID
 
         init(_ message: ChatMessage) {
-            chat = message.chatID
-            self.message = message.id
+            self.init(chat: message.chatID, message: message.id)
+        }
+
+        init(chat: ChatID, message: MessageID) {
+            self.chat = chat
+            self.message = message
         }
     }
+
+    /// Whether the app is in voice mode, which the loop alone doesn't say: after a failure it
+    /// can be off while the app still offers to resume. `AppModel` sets it.
+    @ObservationIgnored var isVoiceModeOn: @MainActor () -> Bool = { false }
 
     /// The message being said, and where it is; nil while none is.
     private var current: (key: MessageKey, phase: Phase)?
@@ -80,7 +88,7 @@ public final class SpeakIPA {
     /// One message being said.
     private struct Run {
         let number: Int
-        let key: MessageKey
+        var key: MessageKey
         let chunks: [String]
         let speech: IPASpeech
         let started: ContinuousClock.Instant
@@ -135,10 +143,38 @@ public final class SpeakIPA {
         stop(reason: "stopButton")
     }
 
+    /// Stops `message` if it is being said, and does nothing otherwise, for the Stop Speaking IPA
+    /// menu item: the message may have finished while the menu was open.
+    public func stop(_ message: ChatMessage) {
+        guard run?.key == MessageKey(message) else { return }
+        stop(reason: "stopMenuItem")
+    }
+
     /// Stops the message being said if it isn't in `chat`, for when another chat is shown.
     func stop(unlessIn chat: ChatID?) {
         guard let run, run.key.chat != chat else { return }
         stop(reason: "chatChanged")
+    }
+
+    /// The message `oldID` in `chat` is now `newID`, as a message Adam sent has once Telegram
+    /// confirms it: its speech, note and IPA follow it.
+    func messageIDChanged(in chat: ChatID, from oldID: MessageID, to newID: MessageID) {
+        let old = MessageKey(chat: chat, message: oldID)
+        let new = MessageKey(chat: chat, message: newID)
+        if var run, run.key == old {
+            run.key = new
+            self.run = run
+        }
+        if let current, current.key == old {
+            self.current = (new, current.phase)
+        }
+        if let currentNote, currentNote.key == old {
+            self.currentNote = (new, currentNote.text)
+        }
+        if let kept = cache.removeValue(forKey: old) {
+            cache[new] = kept
+            cacheOrder = cacheOrder.map { $0 == old ? new : $0 }
+        }
     }
 
     /// Stops, and forgets the note and every message's IPA, for a logout.
@@ -175,7 +211,9 @@ public final class SpeakIPA {
         }
         Self.log.notice("speak ipa requested", fields)
 
-        if let reason = reasonCantSpeak(availability: availability, chunks: chunks) {
+        // A message whose every chunk is kept needs no model.
+        let needsModel = chunks.contains { cache[key]?[$0] == nil }
+        if let reason = reasonCantSpeak(availability: needsModel ? availability : .available, chunks: chunks) {
             Self.log.warning("speak ipa can't start", ["request": number, "reason": reason.logName])
             currentNote = (key, reason.message)
             return
@@ -184,8 +222,8 @@ public final class SpeakIPA {
         do {
             speech = try voiceLoop.startIPASpeech(request: number) { [weak self] in
                 self?.firstSound(request: number)
-            } onEnded: { [weak self] finished in
-                self?.ended(request: number, finished: finished)
+            } onEnded: { [weak self] end in
+                self?.ended(request: number, end: end)
             }
         } catch {
             let reason: CantSpeak = switch error as? IPASpeechError {
@@ -210,7 +248,7 @@ public final class SpeakIPA {
     /// Why Speak IPA can't say a message with `chunks` now, if it can't: checked before anything
     /// plays, in the order Adam would fix them.
     private func reasonCantSpeak(availability: PronunciationSuggesterAvailability, chunks: [String]) -> CantSpeak? {
-        if voiceLoop.state != .off {
+        if isVoiceModeOn() || voiceLoop.state != .off {
             return .voiceModeOn
         }
         let playback = SuggestionPlayback(voiceLoop)
@@ -279,7 +317,9 @@ public final class SpeakIPA {
         case .success(let transcribed):
             guard say(chunk: index, transcribed: transcribed, cached: false) else { return }
         case .failure(let error):
-            if error is CancellationError { return }
+            // A cancel of Speak IPA's own leaves no request awaited, so its answer stops at the
+            // guard above. One that passes it came from elsewhere (the system can cancel a
+            // request): a failure like any other, so the message goes on.
             let reason = error as? PronunciationSuggestionError ?? .failed
             // Codes only: a transcriber's error can quote the text.
             Self.log.warning("speak ipa chunk failed; said as written", error.logCodes([
@@ -419,8 +459,8 @@ public final class SpeakIPA {
         self.current = (current.key, .speaking)
     }
 
-    /// The speech of request `number` has ended: played to the end if `finished`, or cut off.
-    private func ended(request number: Int, finished: Bool) {
+    /// The speech of request `number` has ended, as `end` says.
+    private func ended(request number: Int, end: IPASpeechEnd) {
         guard let run, run.number == number else { return }
         run.request?.cancel()
         run.deadline?.cancel()
@@ -428,7 +468,7 @@ public final class SpeakIPA {
         current = nil
         Self.log.notice("speak ipa ended", [
             "request": number,
-            "finished": finished,
+            "end": end.logName,
             "chunks": run.chunks.count,
             "chunksQueued": run.next,
             "writtenChunks": run.writtenChunks,
@@ -436,18 +476,24 @@ public final class SpeakIPA {
             "wordsWithIPA": run.wordsWithIPA,
             "ms": Self.milliseconds(since: run.started),
         ])
-        if finished, run.wordsWithIPA < run.words {
+        switch end {
+        case .finished where run.wordsWithIPA < run.words:
             currentNote = (run.key, Self.note(wordsWithIPA: run.wordsWithIPA, words: run.words, failure: run.failure))
+        case .kokoroFailed:
+            // The counts are of what was queued, not of what was heard.
+            currentNote = (run.key, Self.kokoroFailedNote)
+        case .finished, .stopped:
+            break
         }
     }
 
     private func stop(reason: String) {
         guard let run else { return }
         Self.log.notice("speak ipa stopped", ["request": run.number, "reason": reason, "ms": Self.milliseconds(since: run.started)])
-        // Ends the speech, which tells `ended(request:finished:)`; then nothing of it is left.
+        // Ends the speech, which tells `ended(request:end:)`; then nothing of it is left.
         run.speech.stop()
         if self.run?.number == run.number {
-            ended(request: run.number, finished: false)
+            ended(request: run.number, end: .stopped)
         }
     }
 
@@ -467,6 +513,9 @@ public final class SpeakIPA {
         }
         return note
     }
+
+    /// What Adam is told when Kokoro failed partway (`IPASpeechEnd.kokoroFailed`).
+    static let kokoroFailedNote = "The Kokoro voice stopped partway: the system voice finished the part it was on, and the rest wasn't said."
 
     /// Why Speak IPA can't start.
     private enum CantSpeak {

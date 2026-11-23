@@ -251,6 +251,15 @@ struct PhoneticPlaceholders: Sendable {
     private var writtenWords: [String: String] = [:]
     /// Each placeholder's phonemes: one of the phonemes' words.
     private var phonemes: [String: String] = [:]
+    /// What each placeholder starts with: see `placeholder(number:prefix:)`.
+    private let prefix: String
+
+    /// Placeholders that start with `prefix`, three lowercase letters no word starts with: the
+    /// phonetic pronunciations' "zqx", or another for a set of placeholders of its own, whose
+    /// names can be given out again without meeting these.
+    init(prefix: String = "zqx") {
+        self.prefix = prefix
+    }
 
     /// What a message holds in place of `word` said with `phonemes`, once `add(word:phonemes:)`
     /// has given them placeholders. `keepingPunctuation` puts the sentence punctuation the word
@@ -291,7 +300,7 @@ struct PhoneticPlaceholders: Sendable {
         }
         let phonemeWords = key.phonemes.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !phonemeWords.isEmpty else { return key.word }
-        let placeholders = phonemeWords.indices.map { Self.placeholder(number: phonemes.count + $0) }
+        let placeholders = phonemeWords.indices.map { Self.placeholder(number: phonemes.count + $0, prefix: prefix) }
         for (placeholder, phonemeWord) in zip(placeholders, phonemeWords) {
             phonemes[placeholder] = phonemeWord
         }
@@ -343,17 +352,22 @@ struct PhoneticPlaceholders: Sendable {
         String(word.reversed().prefix { ".!?…‼⁇⁈⁉。！？".contains($0) }.reversed())
     }
 
-    /// The placeholder numbered `number`, 0 or more: "zqx", the number in letters (a to z, then
-    /// aa, ab and on), and "q". Kokoro's phonemizer expands a contraction written anywhere, even
-    /// inside a word, so the last letter ends none ("he's", "it's", "can't"), and the first
-    /// starts none.
+    /// The placeholder numbered `number`, 0 or more: "zqx" (or another set's prefix), the number
+    /// in letters (a to z, then aa, ab and on), and "q". Kokoro's phonemizer expands a
+    /// contraction written anywhere, even inside a word, so the last letter ends none ("he's",
+    /// "it's", "can't"), and the first starts none.
     static func placeholder(number: Int) -> String {
+        placeholder(number: number, prefix: "zqx")
+    }
+
+    /// The placeholder numbered `number` with `prefix`: see `placeholder(number:)`.
+    static func placeholder(number: Int, prefix: String) -> String {
         var letters = ""
         var rest = number
         repeat {
             letters.insert(Character(Unicode.Scalar(UInt8(ascii: "a") + UInt8(rest % 26))), at: letters.startIndex)
             rest = rest / 26 - 1
         } while rest >= 0
-        return "zqx" + letters + "q"
+        return prefix + letters + "q"
     }
 }
