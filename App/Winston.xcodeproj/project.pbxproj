@@ -12,7 +12,7 @@
 		A10000000000000000000026 /* WinstonLogging in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000025 /* WinstonLogging */; };
 		A10000000000000000000028 /* WinstonCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000027 /* WinstonCore */; };
 		A1000000000000000000004A /* ShareOutbox in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000049 /* ShareOutbox */; };
-		A1000000000000000000004B /* WinstonShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000041 /* WinstonShare.appex */; platformFilters = (ios, ); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A1000000000000000000004B /* WinstonShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000041 /* WinstonShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,7 +42,6 @@
 /* Begin PBXFileReference section */
 		A10000000000000000000005 /* Winston.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Winston.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000006 /* Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Shared.xcconfig; sourceTree = "<group>"; };
-		A10000000000000000000052 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000008 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Winston.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Winston.xctestplan; sourceTree = "<group>"; };
@@ -50,6 +49,7 @@
 		A10000000000000000000042 /* WinstonShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "WinstonShare-Info.plist"; sourceTree = "<group>"; };
 		A10000000000000000000043 /* WinstonShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WinstonShare.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000044 /* iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iOS.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000052 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -254,7 +254,7 @@
 /* Begin PBXTargetDependency section */
 		A1000000000000000000004E /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			platformFilters = (ios, );
+			platformFilter = ios;
 			target = A10000000000000000000045 /* WinstonShare */;
 			targetProxy = A1000000000000000000004D /* PBXContainerItemProxy */;
 		};
@@ -416,7 +416,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/WinstonShare-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Winston;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -444,7 +448,11 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/WinstonShare-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Winston;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston.share;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
