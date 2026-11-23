@@ -33,6 +33,8 @@ import Testing
     @Test func aStressMarkGoesBeforeAnIPAVowelMisakiDoesntUseToo() {
         // Lübeck: Kokoro's vocabulary has y.
         #expect(misaki("ˈlyːbɛk") == "lˈybɛk")
+        // Müller: the stress goes before ʏ too, though Kokoro's vocabulary lacks it.
+        #expect(misaki("ˈmʏlɐ") == "mˈʏlə")
     }
 
     @Test func rAndGAreMisakis() {

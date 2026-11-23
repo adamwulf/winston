@@ -304,12 +304,11 @@ final class SpeechPlayback: Sendable {
         /// When the first buffer was scheduled on the player, in host time, for the timeline log.
         var firstScheduled: UInt64?
 
-        /// Call before scheduling a buffer. Returns whether it is the first.
-        @discardableResult
-        mutating func noteScheduling() -> Bool {
-            guard firstScheduled == nil else { return false }
-            firstScheduled = TimelineClock.now()
-            return true
+        /// Call before scheduling a buffer.
+        mutating func noteScheduling() {
+            if firstScheduled == nil {
+                firstScheduled = TimelineClock.now()
+            }
         }
     }
 
@@ -323,9 +322,6 @@ final class SpeechPlayback: Sendable {
     /// Frames of silence played after the last buffer, before the message counts as finished.
     private let trailingSilence: AVAudioFrameCount
     private let onFinished: @Sendable (SpeechPlayback) -> Void
-    /// Told once, on whichever thread scheduled it, when the message's first buffer is
-    /// scheduled: its sound is about to start, whichever synthesizer made it.
-    private let onFirstScheduled: (@Sendable () -> Void)?
     /// How many times a buffer has been scheduled as the message's last. A buffer that arrives
     /// after the synthesizer said it was done becomes the last one, and only the completion of
     /// the latest one finishes the message. An atomic rather than part of `state`: the
@@ -335,49 +331,43 @@ final class SpeechPlayback: Sendable {
     /// `format` is the player's connection format. `trailingSilence` frames of silence follow
     /// the last buffer, for an effect after the player whose sound runs on past its input (see
     /// `SpeechOutput.pitchShiftTail`). `onFinished` is called, on an arbitrary thread,
-    /// once the last buffer and the silence after it have played. `onFirstScheduled` is called,
-    /// on an arbitrary thread, once the first buffer is scheduled.
+    /// once the last buffer and the silence after it have played.
     init(
         text: String,
         player: AVAudioPlayerNode,
         format: AVAudioFormat,
         completion: AVAudioPlayerNodeCompletionCallbackType,
         trailingSilence: AVAudioFrameCount,
-        onFirstScheduled: (@Sendable () -> Void)? = nil,
         onFinished: @escaping @Sendable (SpeechPlayback) -> Void
     ) {
         self.text = text
         state = Mutex(State(player: player, format: format))
         self.completion = completion
         self.trailingSilence = trailingSilence
-        self.onFirstScheduled = onFirstScheduled
         self.onFinished = onFinished
     }
 
     /// Takes one synthesizer buffer.
     func receive(_ buffer: AVAudioBuffer) {
-        let scheduledFirst = state.withLock { state -> Bool in
-            guard !state.isCancelled, let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else { return false }
+        state.withLock { state in
+            guard !state.isCancelled, let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else { return }
             if state.converter?.inputFormat != pcm.format {
                 state.converter = AVAudioConverter(from: pcm.format, to: state.format)
                 state.converter?.primeMethod = .none
             }
-            guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return false }
+            guard let converter = state.converter, let converted = convert(pcm, with: converter) else { return }
             if state.isSynthesized {
                 // Arrived after the synthesizer said it was done; this buffer now ends the message.
-                let first = state.noteScheduling()
+                state.noteScheduling()
                 scheduleLast(converted, on: state.player, format: state.format)
-                return first
+                return
             }
-            var first = false
             if let previous = state.pending {
-                first = state.noteScheduling()
+                state.noteScheduling()
                 state.player.scheduleBuffer(previous)
             }
             state.pending = converted
-            return first
         }
-        if scheduledFirst { onFirstScheduled?() }
     }
 
     /// When the first buffer was scheduled on the player, in host time; nil until then. For the
@@ -391,16 +381,15 @@ final class SpeechPlayback: Sendable {
     /// once the last buffer has played. The synthesizer doesn't reliably send a zero-length
     /// buffer at the end: on macOS 27 the last buffer has one frame.
     func synthesisFinished() {
-        let (finishedNow, scheduledFirst) = state.withLock { state -> (Bool, Bool) in
-            guard !state.isCancelled, !state.isSynthesized else { return (false, false) }
+        let finishedNow = state.withLock { state -> Bool in
+            guard !state.isCancelled, !state.isSynthesized else { return false }
             state.isSynthesized = true
-            guard let last = state.pending else { return (true, false) }
+            guard let last = state.pending else { return true }
             state.pending = nil
-            let first = state.noteScheduling()
+            state.noteScheduling()
             scheduleLast(last, on: state.player, format: state.format)
-            return (false, first)
+            return false
         }
-        if scheduledFirst { onFirstScheduled?() }
         if finishedNow { onFinished(self) }
     }
 
