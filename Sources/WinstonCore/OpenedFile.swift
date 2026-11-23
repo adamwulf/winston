@@ -16,6 +16,11 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
     /// The file iOS handed over, in one of Winston's inboxes: removed once this one is sent or
     /// cancelled. Nil for a file of Adam's own, as the Mac hands over, which stays.
     let systemCopy: URL?
+    /// The folder the iOS share extension saved this file in, in the App Group (see
+    /// `AppModel.openSharedFiles()`), which holds only it. It goes once Winston's copy is made, so
+    /// the next activation doesn't open the file again, or on Cancel. Nil for a file opened any
+    /// other way.
+    var sharedFolder: URL?
     /// Winston's working copy, in a folder of its own in `AppModel.openedFileFolder`. Nil until
     /// it is made.
     var copy: URL?
@@ -25,11 +30,12 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
     /// Anything else goes as a document. Known once it is copied.
     public internal(set) var isPhoto = false
 
-    init(name: String, sequence: Int, source: URL, inboxes: [URL]) {
+    init(name: String, sequence: Int, source: URL, inboxes: [URL], sharedFolder: URL? = nil) {
         self.name = name
         self.sequence = sequence
         self.source = source
         systemCopy = inboxes.contains { Self.isFile(source, in: $0) } ? source : nil
+        self.sharedFolder = sharedFolder
     }
 
     /// Whether Winston's copy is made, so it can be sent.
@@ -64,10 +70,12 @@ public struct OpenedFile: Identifiable, Equatable, Sendable {
         return Copied(copy: copy, isPhoto: await PhotoFiles.isStillImage(at: copy))
     }
 
-    /// Removes Winston's copy and the file iOS handed over, once the file is sent or won't be.
+    /// Removes Winston's copy, the file iOS handed over, and the share extension's folder if it is
+    /// still there, once the file is sent or won't be.
     func removeFiles() {
         copy.map(DocumentFiles.removeCopy)
         systemCopy.map(Self.remove)
+        sharedFolder.map(Self.remove)
     }
 
     /// Removes a file Winston made or was handed. A failure is only logged.

@@ -3,7 +3,7 @@
 ## Why it's off
 
 `4fe9021` (Add Telegram APNs registration) signed `App/Config/iOS.entitlements` into the
-iOS app. That file holds `aps-environment` (`production` for Release). The App ID
+iOS app. Back then that file held `aps-environment` (`production` for Release). The App ID
 `com.milestonemade.winston` doesn't have the Push Notifications capability, so no
 provisioning profile includes `aps-environment`:
 
@@ -13,10 +13,11 @@ provisioning profile includes `aps-environment`:
   Provisioning Profile: *" doesn't include the aps-environment entitlement.` The only
   local profile is the wildcard, and a wildcard App ID can't have Push.
 
-For now `App/Config/Shared.xcconfig` leaves out `CODE_SIGN_ENTITLEMENTS`, so builds have
-no entitlements file. The APNs code still builds and runs: iOS turns down the token
-request, `didFailToRegisterForRemoteNotificationsWithError` marks registration failed,
-and Settings → Notifications shows "Couldn't connect" with Retry.
+Push was turned off by signing in no entitlements file. Now the iOS app signs in
+`App/Config/iOS.entitlements` again, for its App Group only (see README → Share extension),
+and the file leaves out `aps-environment`. Step 4 puts it back. The APNs code still builds
+and runs: iOS turns down the token request, `didFailToRegisterForRemoteNotificationsWithError`
+marks registration failed, and Settings → Notifications shows "Couldn't connect" with Retry.
 
 ## Steps
 
@@ -56,12 +57,16 @@ iOS push notifications → Provider and signing setup, step 2:
 
 ### 4. Repository: sign the entitlement back in
 
-1. In `App/Config/Shared.xcconfig`, replace the "Push is off" comment with:
+1. The iOS app target already signs in `App/Config/iOS.entitlements`
+   (`CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]` and `[sdk=iphonesimulator*]` in the project
+   file). Add to its dict, beside the App Group:
 
    ```
-   CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*] = Config/iOS.entitlements
-   CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*] = Config/iOS.entitlements
+   <key>aps-environment</key>
+   <string>$(PUSH_ENVIRONMENT)</string>
    ```
+
+   Then remove the "Push is off" comment from `App/Config/Shared.xcconfig`.
 
 2. In `README.md`, remove the "Push is off for now" note at the top of iOS push
    notifications and the "Turning push back on" section. Reword Provider and signing

@@ -11,7 +11,33 @@
 		A10000000000000000000024 /* VoiceLoop in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000022 /* VoiceLoop */; };
 		A10000000000000000000026 /* WinstonLogging in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000025 /* WinstonLogging */; };
 		A10000000000000000000028 /* WinstonCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000027 /* WinstonCore */; };
+		A1000000000000000000004A /* ShareOutbox in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000049 /* ShareOutbox */; };
+		A1000000000000000000004B /* WinstonShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A10000000000000000000041 /* WinstonShare.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1000000000000000000004D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000A /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000045;
+			remoteInfo = WinstonShare;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1000000000000000000004C /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				A1000000000000000000004B /* WinstonShare.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		A10000000000000000000005 /* Winston.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Winston.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -19,12 +45,22 @@
 		A10000000000000000000007 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000008 /* Secrets.example.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.example.xcconfig; sourceTree = "<group>"; };
 		A10000000000000000000009 /* Winston.xctestplan */ = {isa = PBXFileReference; lastKnownFileType = text; path = Winston.xctestplan; sourceTree = "<group>"; };
+		A10000000000000000000041 /* WinstonShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WinstonShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000042 /* WinstonShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "WinstonShare-Info.plist"; sourceTree = "<group>"; };
+		A10000000000000000000043 /* WinstonShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WinstonShare.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000044 /* iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iOS.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000052 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A10000000000000000000004 /* Winston */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Winston;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000040 /* WinstonShare */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WinstonShare;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -41,6 +77,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000047 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1000000000000000000004A /* ShareOutbox in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -48,6 +92,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000004 /* Winston */,
+				A10000000000000000000040 /* WinstonShare */,
 				A10000000000000000000003 /* Config */,
 				A10000000000000000000009 /* Winston.xctestplan */,
 				A10000000000000000000002 /* Products */,
@@ -58,6 +103,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000005 /* Winston.app */,
+				A10000000000000000000041 /* WinstonShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -66,8 +112,12 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000006 /* Shared.xcconfig */,
+				A10000000000000000000052 /* App.xcconfig */,
 				A10000000000000000000008 /* Secrets.example.xcconfig */,
 				A10000000000000000000007 /* Info.plist */,
+				A10000000000000000000044 /* iOS.entitlements */,
+				A10000000000000000000042 /* WinstonShare-Info.plist */,
+				A10000000000000000000043 /* WinstonShare.entitlements */,
 			);
 			path = Config;
 			sourceTree = "<group>";
@@ -82,10 +132,12 @@
 				A10000000000000000000011 /* Sources */,
 				A10000000000000000000012 /* Frameworks */,
 				A10000000000000000000013 /* Resources */,
+				A1000000000000000000004C /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1000000000000000000004E /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000004 /* Winston */,
@@ -101,6 +153,29 @@
 			productReference = A10000000000000000000005 /* Winston.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A10000000000000000000045 /* WinstonShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1000000000000000000004F /* Build configuration list for PBXNativeTarget "WinstonShare" */;
+			buildPhases = (
+				A10000000000000000000046 /* Sources */,
+				A10000000000000000000047 /* Frameworks */,
+				A10000000000000000000048 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A10000000000000000000040 /* WinstonShare */,
+			);
+			name = WinstonShare;
+			packageProductDependencies = (
+				A10000000000000000000049 /* ShareOutbox */,
+			);
+			productName = WinstonShare;
+			productReference = A10000000000000000000041 /* WinstonShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -112,6 +187,9 @@
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					A10000000000000000000010 = {
+						CreatedOnToolsVersion = 27.2;
+					};
+					A10000000000000000000045 = {
 						CreatedOnToolsVersion = 27.2;
 					};
 				};
@@ -134,12 +212,20 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000010 /* Winston */,
+				A10000000000000000000045 /* WinstonShare */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A10000000000000000000013 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A10000000000000000000048 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -156,7 +242,23 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A10000000000000000000046 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1000000000000000000004E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			platformFilter = ios;
+			target = A10000000000000000000045 /* WinstonShare */;
+			targetProxy = A1000000000000000000004D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000031 /* Debug */ = {
@@ -214,10 +316,12 @@
 		};
 		A10000000000000000000034 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A10000000000000000000006 /* Shared.xcconfig */;
+			baseConfigurationReference = A10000000000000000000052 /* App.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Config/iOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = T68Z94627S;
 				ENABLE_APP_SANDBOX = YES;
@@ -242,6 +346,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
 				SUPPORTS_MACCATALYST = NO;
@@ -257,10 +362,12 @@
 		};
 		A10000000000000000000035 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = A10000000000000000000006 /* Shared.xcconfig */;
+			baseConfigurationReference = A10000000000000000000052 /* App.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Config/iOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = T68Z94627S;
 				ENABLE_APP_SANDBOX = YES;
@@ -285,8 +392,73 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = auto;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		A10000000000000000000050 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000006 /* Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/WinstonShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = T68Z94627S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/WinstonShare-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Winston;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000051 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000006 /* Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Config/WinstonShare.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = T68Z94627S;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Config/WinstonShare-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Winston;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.milestonemade.winston.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
@@ -319,6 +491,15 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		A1000000000000000000004F /* Build configuration list for PBXNativeTarget "WinstonShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000050 /* Debug */,
+				A10000000000000000000051 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
@@ -344,6 +525,10 @@
 		A10000000000000000000027 /* WinstonCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = WinstonCore;
+		};
+		A10000000000000000000049 /* ShareOutbox */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ShareOutbox;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

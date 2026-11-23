@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import LogSupport
 import Observation
+import ShareOutbox
 import TelegramLink
 import UniformTypeIdentifiers
 import VoiceLoop
@@ -90,6 +91,12 @@ public final class AppModel {
     /// Where Winston keeps its working copies of opened files, in the temporary directory: a folder
     /// of their own, which each launch clears of what an earlier run left.
     @ObservationIgnored private let openedFileFolder: URL
+    /// Where the iOS share extension saves files for Winston, in the App Group container (see
+    /// `openSharedFiles()`). Nil on the Mac, which has no share extension, in a build not signed
+    /// with the App Group, and in tests that don't pass one.
+    @ObservationIgnored private let shareOutbox: ShareOutbox?
+    /// The latest scan of the share outbox (see `openSharedFiles()`). Each waits for the one before.
+    @ObservationIgnored private var sharedFilesScan: Task<Void, Never>?
     /// Gives each opened file its place in the order they were opened.
     @ObservationIgnored private var nextOpenedFileSequence = 0
     /// The copies being made, by file (see `waitForOpenedFileCopies()`).
@@ -210,33 +217,36 @@ public final class AppModel {
     /// The observers of the app coming and going, removed with the model (the tests make many).
     @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
-    /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop, and
-    /// the standard user defaults.
+    /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop,
+    /// the standard user defaults, and on iOS the share extension's outbox in the App Group container.
     public convenience init() {
-        self.init(voiceLoop: VoiceLoop(), defaults: .standard)
+        self.init(voiceLoop: VoiceLoop(), defaults: .standard, shareOutbox: Self.appShareOutbox())
     }
 
     /// The app's model with a Telegram session if `Secrets.xcconfig` supplied credentials. Tests pass a voice
     /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone.
-    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults) {
+    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults, shareOutbox: ShareOutbox? = nil) {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
             voiceLoop: voiceLoop,
             defaults: defaults,
-            openedFileInboxes: Self.appOpenedFileInboxes
+            openedFileInboxes: Self.appOpenedFileInboxes,
+            shareOutbox: shareOutbox
         )
     }
 
     /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own,
-    /// a fake pronunciation suggester, and folders of their own as the inboxes for opened files.
-    /// `hasCredentials` defaults to whether there is a link; only previews have one without the other.
+    /// a fake pronunciation suggester, folders of their own as the inboxes for opened files, and a
+    /// share outbox in a folder of their own. `hasCredentials` defaults to whether there is a link;
+    /// only previews have one without the other.
     package init(
         link: TelegramLink?,
         voiceLoop: VoiceLoop,
         defaults: UserDefaults,
         hasCredentials: Bool? = nil,
         pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester(),
-        openedFileInboxes: [URL] = []
+        openedFileInboxes: [URL] = [],
+        shareOutbox: ShareOutbox? = nil
     ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
@@ -246,6 +256,7 @@ public final class AppModel {
         self.pronunciationSuggester = pronunciationSuggester
         self.openedFileInboxes = openedFileInboxes
         openedFileFolder = URL.temporaryDirectory.appending(path: "OpenedFiles", directoryHint: .isDirectory)
+        self.shareOutbox = shareOutbox
         selectedChatID = (defaults.object(forKey: StorageKey.selectedChatID) as? Int64).map(ChatID.init)
         pauseThreshold = defaults.object(forKey: StorageKey.pauseThreshold) as? Double ?? 1.2
         voiceIdentifier = defaults.string(forKey: StorageKey.voiceIdentifier)
@@ -379,6 +390,7 @@ public final class AppModel {
         ])
         isAppActive = true
         sendOnlineStatus()
+        openSharedFiles()
     }
 
     /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
@@ -469,6 +481,16 @@ public final class AppModel {
         return inboxes
         #else
         []
+        #endif
+    }
+
+    /// The share extension's outbox in the App Group container, on iOS only. The Mac app has no share
+    /// extension, and reading another app group's container there would make macOS ask Adam for access.
+    private static func appShareOutbox() -> ShareOutbox? {
+        #if os(iOS)
+        ShareOutbox.appGroup()
+        #else
+        nil
         #endif
     }
 
@@ -1016,12 +1038,57 @@ public final class AppModel {
     /// the agent sheet, and Winston copies it off the main actor (see `makeCopy(of:)`). The chat
     /// shown stays the same.
     public func openFile(at url: URL) {
+        openFile(at: url, sharedFolder: nil)
+    }
+
+    /// Opens the files the iOS share extension saved for Winston in the App Group (see
+    /// `ShareOutbox`), each as `openFile(at:)` opens one from Open in: it takes its place in the
+    /// agent sheet, which asks which agent it goes to. Each activation does, the one at launch
+    /// included: the extension can't open Winston. A file already opened, still being copied or
+    /// waiting for Try Again, isn't opened again. Once Winston's copy is made, or on Cancel, the
+    /// extension's goes. Also removes what an interrupted or cancelled save left, a day old or
+    /// more. The outbox is read off the main actor, one scan after another, so two activations
+    /// close together don't both open a file. Package for the tests, which call it as an
+    /// activation does (see `waitForSharedFiles()`).
+    package func openSharedFiles() {
+        guard let shareOutbox else { return }
+        let previous = sharedFilesScan
+        sharedFilesScan = Task {
+            await previous?.value
+            // Taken before the outbox is read: one cancelled meanwhile, its folder gone, isn't
+            // opened again from what the read found.
+            let alreadyOpened = Set(openedFiles.map(\.source))
+            let found = await shareOutbox.files()
+            // Checked here, on the main actor, where files are opened.
+            let waiting = found.filter { file in
+                !alreadyOpened.contains(file) && !openedFiles.contains { $0.source == file }
+            }
+            if !waiting.isEmpty {
+                Self.log.notice("shared files found", ["count": waiting.count])
+            }
+            for file in waiting {
+                openFile(at: file, sharedFolder: file.deletingLastPathComponent())
+            }
+            // A day, as for opened files' leftovers: a share sheet left open, its files waiting for
+            // Done, is in Staging too.
+            await shareOutbox.removeLeftovers(before: Date(timeIntervalSinceNow: -24 * 60 * 60))
+        }
+    }
+
+    /// Waits until the scans `openSharedFiles()` started are done, for the tests.
+    package func waitForSharedFiles() async {
+        await sharedFilesScan?.value
+    }
+
+    /// `openFile(at:)`, for a file in `sharedFolder` if the share extension saved it.
+    private func openFile(at url: URL, sharedFolder: URL?) {
         guard url.isFileURL else {
             Self.log.notice("opened URL ignored: not a file", ["scheme": url.scheme ?? "none"])
             return
         }
         Self.log.notice("file opened", [
             "type": Self.logType(of: url),
+            "shared": sharedFolder != nil,
             "authState": authState.logName,
             "chatsLoaded": chatsLoaded,
             "waiting": openedFiles.count,
@@ -1033,7 +1100,8 @@ public final class AppModel {
             name: url.lastPathComponent,
             sequence: nextOpenedFileSequence,
             source: url,
-            inboxes: openedFileInboxes
+            inboxes: openedFileInboxes,
+            sharedFolder: sharedFolder
         )
         nextOpenedFileSequence += 1
         openedFiles.append(file)
@@ -1074,6 +1142,13 @@ public final class AppModel {
             case .success(let copied):
                 openedFiles[index].copy = copied.copy
                 openedFiles[index].isPhoto = copied.isPhoto
+                if let shared = openedFiles[index].sharedFolder {
+                    // Winston's copy is made, so the share extension's is done with, and the next
+                    // activation won't open it again. If Winston ends before the file is sent, it is
+                    // gone, as a file from Open in is.
+                    OpenedFile.remove(shared)
+                    openedFiles[index].sharedFolder = nil
+                }
                 Self.log.notice("opened file copied", ["as": openedFiles[index].logKind, "waiting": openedFiles.count])
             case .failure(let error):
                 // Codes only: a file error's description names the file.
