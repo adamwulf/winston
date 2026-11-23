@@ -67,6 +67,10 @@ struct MessageList: View {
                 }
             }
         }
+        // Each chat gets its own scroll view, which opens at its newest message. One shared scroll
+        // view kept the last chat's offset on a switch, then the newest-message change above animated
+        // down from there.
+        .id(model.selectedChatID)
         #if os(iOS)
         // Here rather than on the document's row, which can scroll away, and be unloaded, while
         // the preview shows.
