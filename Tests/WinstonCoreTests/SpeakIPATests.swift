@@ -22,10 +22,11 @@ struct SpeakIPATests {
         ChatMessage(id: MessageID(id), chatID: ChatID(chat), isOutgoing: false, date: .now, text: text)
     }
 
-    /// Two chunks: a first sentence short enough for the small first chunk, and one too long to
-    /// join it.
-    private let twoChunks = "Hello there. "
-        + "The second sentence is long enough that it cannot fit in the first chunk with the greeting before it."
+    /// Two chunks, a sentence each: the first is long enough to be the first chunk, and the second
+    /// too long to join it. 9 words, then 15.
+    private let firstSentence = "This first sentence is long enough to stand alone."
+    private let secondSentence = "The second one follows it, with the words it has and the words it adds."
+    private var twoChunks: String { firstSentence + " " + secondSentence }
 
     @Test func aMessageIsSaidAChunkAtATimeWithTheModelsIPA() async throws {
         let harness = await harnessWithKokoro()
@@ -38,17 +39,14 @@ struct SpeakIPATests {
         #expect(speakIPA.phase(for: message) == .preparing)
         #expect(await eventually { speakIPA.phase(for: message) == nil })
         #expect(phases.values == [nil, .preparing, .speaking, nil])
-        #expect(harness.transcriber.chunks == [
-            "Hello there.",
-            "The second sentence is long enough that it cannot fit in the first chunk with the greeting before it.",
-        ])
+        #expect(harness.transcriber.chunks == [firstSentence, secondSentence])
         #expect(Set(harness.transcriber.requestNumbers).count == 1)
         // Every word went to Kokoro as a placeholder with its phonemes.
         let requests = harness.bed.kokoro.requests
         #expect(requests.count == 2)
         #expect(requests.allSatisfy { !$0.pronunciations.isEmpty && $0.pronunciations.values.allSatisfy { $0 == "ə" } })
-        #expect(requests.first?.pronunciations.count == 2)
-        #expect(!requests.contains { $0.text.contains("Hello") })
+        #expect(requests.first?.pronunciations.count == 9)
+        #expect(!requests.contains { $0.text.contains("sentence") })
         // All of it was said from the model's IPA: nothing to tell.
         #expect(speakIPA.note(for: message) == nil)
     }
@@ -106,7 +104,7 @@ struct SpeakIPATests {
         #expect(await eventually { harness.transcriber.cancelledRequests == [0] })
         harness.transcriber.releaseAnswers()
         #expect(await eventually { speakIPA.phase(for: second) == nil })
-        #expect(harness.transcriber.chunks == ["Hello there.", "Second message."])
+        #expect(harness.transcriber.chunks == [firstSentence, "Second message."])
         // The first message's late answer was dropped: only the second was said.
         #expect(harness.bed.kokoro.requests.count == 1)
     }
@@ -156,14 +154,14 @@ struct SpeakIPATests {
 
         #expect(await eventually { speakIPA.phase(for: message) == nil })
         let requests = harness.bed.kokoro.requests
-        #expect(requests.first == FakeKokoro.Request(text: "Hello there.", voice: "af_heart", speed: 1))
+        #expect(requests.first == FakeKokoro.Request(text: firstSentence, voice: "af_heart", speed: 1))
         #expect(requests.count == 2)
-        // 19 words, "the" and "it" twice each with the same placeholder.
-        #expect(requests.last?.pronunciations.count == 17)
+        // 15 words: "the" and "words" twice and "it" three times, each with one placeholder.
+        #expect(requests.last?.pronunciations.count == 11)
         // The model was still asked about the second chunk.
         #expect(harness.transcriber.chunks.count == 2)
         #expect(speakIPA.note(for: message)
-            == "19 of 21 words were said from Apple Intelligence's IPA; the rest as Kokoro reads them. The model declined part of the message.")
+            == "15 of 24 words were said from Apple Intelligence's IPA; the rest as Kokoro reads them. The model declined part of the message.")
     }
 
     @Test func aChunkWhoseIPAKokoroCantSayIsSaidAsWritten() async throws {
@@ -198,10 +196,7 @@ struct SpeakIPATests {
         #expect(harness.transcriber.cancelledRequests == [0])
         // Not asked again: a model that stalled once would likely stall again.
         #expect(harness.transcriber.chunks.count == 1)
-        #expect(harness.bed.kokoro.requests.map(\.text) == [
-            "Hello there.",
-            "The second sentence is long enough that it cannot fit in the first chunk with the greeting before it.",
-        ])
+        #expect(harness.bed.kokoro.requests.map(\.text) == [firstSentence, secondSentence])
         #expect(speakIPA.note(for: message)?.hasSuffix("Apple Intelligence didn't answer in time.") == true)
         harness.transcriber.releaseAnswers()
     }

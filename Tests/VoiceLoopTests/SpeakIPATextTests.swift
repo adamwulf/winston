@@ -68,15 +68,31 @@ import Testing
         #expect(SpeakIPAText.chunks(in: "Hello there. How are you?") == ["Hello there. How are you?"])
     }
 
-    @Test func theFirstChunkIsSmallSoItPlaysSoonAndTheRestPackWholeSentences() {
+    @Test func theFirstChunkIsSmallSoItPlaysSoonAndEachLaterOneGrowsByTheGrowthAtMost() {
         let first = "This first sentence is short."
+        // 55 characters each.
         let others = (1...6).map { "Sentence number \($0) goes on for a while longer than that." }
-        let chunks = SpeakIPAText.chunks(in: ([first] + others).joined(separator: " "), firstChunkLimit: 40, chunkLimit: 130)
-        #expect(chunks.first == first)
-        #expect(chunks.dropFirst().allSatisfy { $0.count <= 130 })
-        // Two sentences of 55 characters fit in 130 with the space between; three don't.
-        #expect(chunks.count == 4)
-        #expect(chunks.joined(separator: " ") == ([first] + others).joined(separator: " "))
+        let chunks = SpeakIPAText.chunks(
+            in: ([first] + others).joined(separator: " "),
+            firstChunkLimit: 40,
+            chunkLimit: 130,
+            chunkGrowth: 1.5
+        )
+        // At most 40 characters, then 60, 90, and 130 from then on: each ends with a sentence.
+        #expect(chunks == [
+            first,
+            others[0],
+            others[1],
+            others[2] + " " + others[3],
+            others[4] + " " + others[5],
+        ])
+    }
+
+    @Test func aShortFirstSentenceStartsTheFirstChunkRatherThanBeingIt() {
+        let text = "Done. I pushed the fix to the branch and reran every test, and all of them passed."
+        let chunks = SpeakIPAText.chunks(in: text)
+        // The strongest break in the second half of 80 characters: the comma.
+        #expect(chunks == ["Done. I pushed the fix to the branch and reran every test,", "and all of them passed."])
     }
 
     @Test func linesAreSentencesOfTheirOwnAndChunksCrossThem() {
@@ -87,9 +103,13 @@ import Testing
     @Test func aLongSentenceIsCutAfterClausePunctuationThenBetweenWords() {
         let sentence = "When the build finished, the tests ran; most of them passed quickly and quietly without trouble."
         let chunks = SpeakIPAText.chunks(in: sentence, firstChunkLimit: 30, chunkLimit: 30)
-        #expect(chunks.allSatisfy { $0.count <= 30 })
-        #expect(chunks.first == "When the build finished,")
-        #expect(chunks.joined(separator: " ") == sentence)
+        #expect(chunks == [
+            "When the build finished,",
+            // "ran;" comes before half of 30 characters: the latest word break instead.
+            "the tests ran; most of them",
+            "passed quickly and quietly",
+            "without trouble.",
+        ])
     }
 
     @Test func aWordLongerThanAChunkIsAChunkOfItsOwn() {

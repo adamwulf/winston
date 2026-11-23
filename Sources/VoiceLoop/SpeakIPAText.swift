@@ -6,12 +6,17 @@ import Foundation
 /// model's IPA for each word can take that word's place and the punctuation stays the message's.
 public enum SpeakIPAText {
     /// The most characters the first chunk has: it is all the model transcribes before the first
-    /// sound, about 2 s on a Mac for 14 words.
+    /// sound, about 3 s on a Mac for 13 words.
     public static let firstChunkLimit = 80
-    /// The most characters any later chunk has. The model writes about 14 tokens a word (the word,
-    /// its IPA, and the structure around them), so even on a 4,096-token context this leaves
-    /// plenty of room, and a chunk is written about as fast as it is said.
-    public static let chunkLimit = 240
+    /// The most characters any chunk has. The model writes about 15 tokens a word (the word, its
+    /// IPA, and the structure around them), so even on a 4,096-token context this leaves plenty
+    /// of room.
+    public static let chunkLimit = 200
+    /// How much longer each chunk may be than the one before, up to `chunkLimit`. On a Mac the
+    /// model writes about 0.24 s a word after about 0.75 s to start, and Kokoro says about 0.33 s
+    /// a word, so a chunk much longer than the one before is still being written when that one
+    /// has played, and leaves a silence: at 1.5 times, the silences were 0.5 to 1.5 s.
+    public static let chunkGrowth = 1.25
 
     /// `text` as words for the model to transcribe, one line per line of the message: markdown and
     /// code blocks dropped and links said as their text or "a link" (`SpokenText.speakable(_:)`),
@@ -37,35 +42,57 @@ public enum SpeakIPAText {
     }
 
     /// `normalized`, the text `normalized(_:)` gives, in chunks to transcribe one at a time, in
-    /// order: whole sentences where they fit, the first chunk at most `firstChunkLimit` characters
-    /// and the others at most `chunkLimit`. A sentence too long for a chunk is cut after a comma,
-    /// semicolon, colon or dash where it can be, and between words where it can't; the rest of a
-    /// first sentence cut to fit the first chunk starts the second. A single word longer than a
-    /// chunk is a chunk of its own.
+    /// order. The first has at most `firstChunkLimit` characters, so it plays soon, and each after
+    /// it at most `chunkGrowth` times as many as the one before, up to `chunkLimit`. A chunk takes
+    /// as many words as fit, then ends at the strongest break in its second half: the end of a
+    /// sentence (each line is one), then a comma, semicolon, colon or dash, then any word. So a
+    /// short first sentence, such as a heading, starts a chunk rather than being one, and a long
+    /// one is cut where a reader would pause. A word longer than a chunk is a chunk of its own.
     public static func chunks(
         in normalized: String,
         firstChunkLimit: Int = firstChunkLimit,
-        chunkLimit: Int = chunkLimit
+        chunkLimit: Int = chunkLimit,
+        chunkGrowth: Double = chunkGrowth
     ) -> [String] {
-        var pieces = KokoroText.sentences(in: normalized).flatMap { pieces(of: $0, limit: chunkLimit) }
-        if let first = pieces.first, first.count > firstChunkLimit {
-            pieces.replaceSubrange(0...0, with: Self.pieces(of: first, limit: firstChunkLimit))
-        }
-        var chunks: [String] = []
-        var current = ""
-        for piece in pieces {
-            let limit = chunks.isEmpty ? firstChunkLimit : chunkLimit
-            if current.isEmpty {
-                current = piece
-            } else if current.count + 1 + piece.count <= limit {
-                current += " " + piece
-            } else {
-                chunks.append(current)
-                current = piece
+        // Each word, with punctuation, and how strong a break comes after it.
+        var words: [(text: Substring, breakStrength: Int)] = []
+        for sentence in KokoroText.sentences(in: normalized) {
+            let sentenceWords = sentence.split(separator: " ")
+            for (index, word) in sentenceWords.enumerated() {
+                let strength = if index == sentenceWords.count - 1 {
+                    3
+                } else if let last = word.last, ",;:—–".contains(last) {
+                    2
+                } else {
+                    1
+                }
+                words.append((word, strength))
             }
         }
-        if !current.isEmpty {
-            chunks.append(current)
+        var chunks: [String] = []
+        var start = 0
+        while start < words.count {
+            let grown = Double(firstChunkLimit) * pow(chunkGrowth, Double(chunks.count))
+            let limit = grown < Double(chunkLimit) ? Int(grown) : chunkLimit
+            // Where each break would end the chunk, and how long it would be: at least one word.
+            var breaks: [(end: Int, length: Int)] = [(start + 1, words[start].text.count)]
+            while let last = breaks.last, last.end < words.count, last.length + 1 + words[last.end].text.count <= limit {
+                breaks.append((last.end + 1, last.length + 1 + words[last.end].text.count))
+            }
+            var end = breaks[breaks.count - 1].end
+            if end < words.count {
+                // The words run on: the strongest break in the second half, the latest of those.
+                var strongest = 0
+                for candidate in breaks where candidate.length * 2 >= limit {
+                    let strength = words[candidate.end - 1].breakStrength
+                    if strength >= strongest {
+                        strongest = strength
+                        end = candidate.end
+                    }
+                }
+            }
+            chunks.append(words[start..<end].map(\.text).joined(separator: " "))
+            start = end
         }
         return chunks
     }
@@ -304,9 +331,6 @@ public enum SpeakIPAText {
     /// A hyphen or dash, slash or underscore between two letters.
     private static let joinerBetweenLetters = pattern(#"(?<=\p{L})[-‐‑–/_]+(?=\p{L})"#)
 
-    /// Whitespace after a comma, semicolon, colon or dash: where a long sentence can be cut.
-    private static let clauseBreak = pattern(#"(?<=[,;:—–])\s+"#)
-
     /// `pattern` compiled. The patterns are fixed literals; a typo is a programmer error the tests
     /// catch.
     private static func pattern(_ pattern: String) -> NSRegularExpression {
@@ -324,47 +348,6 @@ public enum SpeakIPAText {
         let closers: Set<Character> = ["\"", "'", "”", "’", ")", "]", "}", "»"]
         guard let last = line.last(where: { !closers.contains($0) }) else { return false }
         return ".!?…:;".contains(last)
-    }
-
-    // MARK: - Chunking
-
-    /// `sentence` in pieces of at most `limit` characters: whole if it fits; otherwise cut after
-    /// clause punctuation, then between words. A word longer than `limit` is a piece of its own.
-    private static func pieces(of sentence: String, limit: Int) -> [String] {
-        guard sentence.count > limit else { return [sentence] }
-        var clauses: [String] = []
-        var start = sentence.startIndex
-        for match in clauseBreak.matches(in: sentence, range: NSRange(sentence.startIndex..., in: sentence)) {
-            guard let range = Range(match.range, in: sentence) else { continue }
-            clauses.append(String(sentence[start..<range.lowerBound]))
-            start = range.upperBound
-        }
-        clauses.append(String(sentence[start...]))
-        if clauses.count > 1 {
-            return packed(clauses.flatMap { pieces(of: $0, limit: limit) }, limit: limit)
-        }
-        let words = sentence.split(separator: " ").map(String.init)
-        return packed(words, limit: limit)
-    }
-
-    /// `parts` joined with spaces into as few pieces as fit in `limit` characters, in order.
-    private static func packed(_ parts: [String], limit: Int) -> [String] {
-        var pieces: [String] = []
-        var current = ""
-        for part in parts {
-            if current.isEmpty {
-                current = part
-            } else if current.count + 1 + part.count <= limit {
-                current += " " + part
-            } else {
-                pieces.append(current)
-                current = part
-            }
-        }
-        if !current.isEmpty {
-            pieces.append(current)
-        }
-        return pieces
     }
 
     // MARK: - Words
