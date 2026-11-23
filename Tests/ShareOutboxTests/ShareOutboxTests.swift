@@ -1,5 +1,6 @@
 import Foundation
 @testable import ShareOutbox
+import Synchronization
 import Testing
 import UniformTypeIdentifiers
 
@@ -48,6 +49,34 @@ private func exists(_ url: URL) -> Bool {
     FileManager.default.fileExists(atPath: url.path(percentEncoded: false))
 }
 
+/// A file presenter that holds each coordinated read of its file until `release()`, as an iCloud
+/// Drive file still downloading holds one, and says when one is waiting.
+private final class ReadHold: NSObject, NSFilePresenter, @unchecked Sendable {
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue = OperationQueue()
+    /// Yields once a coordinated read is waiting on this presenter.
+    let readWaiting = AsyncStream<Void>.makeStream()
+    private let readers = Mutex<[(@Sendable ((@Sendable () -> Void)?) -> Void)]>([])
+
+    init(on url: URL) {
+        presentedItemURL = url
+        super.init()
+        NSFileCoordinator.addFilePresenter(self)
+    }
+
+    func relinquishPresentedItem(toReader reader: @escaping @Sendable ((@Sendable () -> Void)?) -> Void) {
+        readers.withLock { $0.append(reader) }
+        readWaiting.continuation.yield()
+    }
+
+    func release() {
+        NSFileCoordinator.removeFilePresenter(self)
+        for reader in readers.withLock({ $0 }) {
+            reader(nil)
+        }
+    }
+}
+
 private func text(of url: URL) throws -> String {
     String(decoding: try Data(contentsOf: url), as: UTF8.self)
 }
@@ -65,7 +94,7 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
 }
 
 /// What the share extension copies, and what Winston sees of it.
-@Suite struct ShareOutboxStageTests {
+@Suite(.timeLimit(.minutes(1))) struct ShareOutboxStageTests {
     @Test func aFileIsCopiedUnderItsOwnNameAndWinstonSeesItOncePublished() async throws {
         let folder = TestFolder()
         let source = try folder.sourceFile("nightly logs.zip", "zip bytes")
@@ -224,6 +253,69 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         #expect(folder.contents(of: "Staging").isEmpty)
     }
 
+    @Test func afterCancelAFileURLThatArrivesIsNotCopiedNorItsContent() async throws {
+        let folder = TestFolder()
+        let outbox = folder.outbox
+        let source = try folder.sourceFile("big.zip", "zip bytes")
+        let loadStarted = AsyncStream<Void>.makeStream()
+        let started = loadStarted.continuation
+        let contentLoads = AsyncStream<Void>.makeStream()
+        let contentLoaded = contentLoads.continuation
+
+        let stage = Task {
+            // As an app slow to hand over its file, with the file's content to fall back on. Its
+            // URL arrives after Cancel.
+            let provider = NSItemProvider()
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier, visibility: .all) { completion in
+                started.yield()
+                DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(300)) {
+                    completion(source.dataRepresentation, nil)
+                }
+                return nil
+            }
+            provider.registerDataRepresentation(forTypeIdentifier: UTType.zip.identifier, visibility: .all) { completion in
+                contentLoaded.yield()
+                completion(Data("zip bytes".utf8), nil)
+                return nil
+            }
+            provider.suggestedName = source.lastPathComponent
+            return try await outbox.stage([provider])
+        }
+        for await _ in loadStarted.stream { break }
+        stage.cancel()
+
+        await #expect(throws: (any Error).self) {
+            try await stage.value
+        }
+        #expect(folder.contents(of: "Staging").isEmpty)
+        // It didn't fall back to the content.
+        contentLoaded.finish()
+        var contentLoadCount = 0
+        for await _ in contentLoads.stream { contentLoadCount += 1 }
+        #expect(contentLoadCount == 0)
+    }
+
+    @Test func cancellingStopsACoordinatedReadStillWaiting() async throws {
+        let folder = TestFolder()
+        let outbox = folder.outbox
+        let source = try folder.sourceFile("big.zip", "zip bytes")
+        // As an iCloud Drive file still downloading: a coordinated read waits for it.
+        let hold = ReadHold(on: source)
+        defer { hold.release() }
+
+        let stage = Task {
+            let provider = try #require(NSItemProvider(contentsOf: source))
+            return try await outbox.stage([provider])
+        }
+        for await _ in hold.readWaiting.stream { break }
+        stage.cancel()
+
+        await #expect(throws: (any Error).self) {
+            try await stage.value
+        }
+        #expect(folder.contents(of: "Staging").isEmpty)
+    }
+
     @Test func aBatchThatCannotBeReadNowIsKeptForTheNextLook() async throws {
         let folder = TestFolder()
         let saved = try await folder.share([try folder.fileProvider("notes.txt", "hello")])
@@ -327,7 +419,7 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
 }
 
 /// What an interrupted or cancelled share leaves behind.
-@Suite struct ShareOutboxLeftoverTests {
+@Suite(.timeLimit(.minutes(1))) struct ShareOutboxLeftoverTests {
     @Test func leftoversInStagingFromBeforeTheCutoffGoAndLaterOnesStay() async throws {
         let folder = TestFolder()
         let staging = folder.outbox.folder.appending(path: "Staging", directoryHint: .isDirectory)

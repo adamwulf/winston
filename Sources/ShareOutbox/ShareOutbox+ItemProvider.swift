@@ -129,11 +129,15 @@ extension ShareOutbox {
         let contentType = types.first(where: Self.isContent)
         if types.contains(where: { $0.conforms(to: .fileURL) }) {
             do {
-                return try await Self.copyFile(at: Self.loadFileURL(from: provider), into: folder)
+                let url = try await Self.loadFileURL(from: provider)
+                // Not after Cancel: a coordinated copy can download a whole iCloud Drive file.
+                try Task.checkCancellation()
+                return try await Self.copyFile(at: url, into: folder)
             } catch AddFailure.folder {
                 throw AddFailure.folder
             } catch {
-                guard contentType != nil else { throw error }
+                // A cancelled load isn't an unreadable file to fall back from.
+                guard contentType != nil, !Task.isCancelled else { throw error }
                 // Codes only: a file error's description names the file.
                 Self.log.warning("shared file URL unreadable; copying its content instead", error.logCodes())
             }
@@ -144,6 +148,8 @@ extension ShareOutbox {
 
     /// Copies the file at a shared file URL into `folder`, under its own name, off the caller's
     /// actor, as `DocumentFiles.copyForSending` does in the app: security scoped, and coordinated.
+    /// Cancelling the task cancels the coordinated read, as while an iCloud Drive file downloads.
+    /// The copy itself, a clone on APFS, isn't stopped once begun.
     @concurrent
     private static func copyFile(at url: URL, into folder: URL) async throws -> String {
         // False for a URL that isn't security scoped, which is still readable if it's the process's own.
@@ -155,17 +161,24 @@ extension ShareOutbox {
             throw AddFailure.folder
         }
         let name = safeFileName(url.lastPathComponent)
-        var coordinationError: NSError?
-        var copyError: (any Error)?
-        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { readableURL in
-            do {
-                try FileManager.default.copyItem(at: readableURL, to: folder.appending(path: name))
-            } catch {
-                copyError = error
+        let coordination = CoordinationCancellation()
+        try await withTaskCancellationHandler {
+            // Cancelled before the read began, it isn't started.
+            try Task.checkCancellation()
+            var coordinationError: NSError?
+            var copyError: (any Error)?
+            coordination.coordinator.coordinate(readingItemAt: url, options: [], error: &coordinationError) { readableURL in
+                do {
+                    try FileManager.default.copyItem(at: readableURL, to: folder.appending(path: name))
+                } catch {
+                    copyError = error
+                }
             }
-        }
-        if let error = coordinationError ?? copyError {
-            throw error
+            if let error = coordinationError ?? copyError {
+                throw error
+            }
+        } onCancel: {
+            coordination.cancel()
         }
         return name
     }
@@ -203,15 +216,22 @@ extension ShareOutbox {
         }
     }
 
+    /// The provider's file URL. Cancelling the task cancels the load, as an app handing the file
+    /// over can be slow to.
     private nonisolated(nonsending) static func loadFileURL(from provider: NSItemProvider) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadObject(ofClass: URL.self) { url, error in
-                if let url, url.isFileURL {
-                    continuation.resume(returning: url)
-                } else {
-                    continuation.resume(throwing: error ?? AddFailure.noFile)
-                }
+        let load = LoadCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                load.started(provider.loadObject(ofClass: URL.self) { url, error in
+                    if let url, url.isFileURL {
+                        continuation.resume(returning: url)
+                    } else {
+                        continuation.resume(throwing: error ?? AddFailure.noFile)
+                    }
+                })
             }
+        } onCancel: {
+            load.cancel()
         }
     }
 
@@ -219,6 +239,16 @@ extension ShareOutbox {
     private static func removeIfPresent(_ url: URL) {
         guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return }
         removeItem(at: url)
+    }
+}
+
+/// A coordinated read, for the task's cancellation to cancel. `NSFileCoordinator.cancel()` may be
+/// called from any thread, and stops a read still waiting, as for a download.
+private final class CoordinationCancellation: @unchecked Sendable {
+    let coordinator = NSFileCoordinator()
+
+    func cancel() {
+        coordinator.cancel()
     }
 }
 
