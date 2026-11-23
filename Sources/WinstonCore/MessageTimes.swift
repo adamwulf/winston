@@ -49,7 +49,8 @@ public struct MessageTimes {
         return shown
     }
 
-    /// The time under `message`'s bubble, for one that `messagesShowingTime(in:)` names.
+    /// The time for `message`'s bubble. Which bubbles show one is the caller's to say: on the Mac
+    /// those `messagesShowingTime(in:)` names, on iOS those `pulledCaption(for:)` gives one.
     public func caption(for message: ChatMessage) -> Caption {
         let text = text(for: message.date)
         return Caption(text: text, accessibilityLabel: "\(message.isOutgoing ? "Sent" : "Received") \(text)")

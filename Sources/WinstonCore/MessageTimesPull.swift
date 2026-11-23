@@ -22,8 +22,9 @@ public final class MessageTimesPull {
     /// past the edge of the list, and once the bubbles have slid all the way the widest time ends
     /// where the rows do.
     nonisolated public static let spacing: CGFloat = 16
-    /// The most of the list's width a time can take. A longer one wraps, as at the largest text
-    /// sizes, so the bubbles never slide more than about this far.
+    /// The most of the list's width a time can take. A longer one, as at the largest text sizes,
+    /// shrinks to fit (on one line, so it is never taller than its bubble), so the bubbles never
+    /// slide more than about this far.
     nonisolated public static let widestTimeFraction: CGFloat = 0.5
     /// The furthest the bubbles stretch past showing the widest time, however far the drag goes.
     nonisolated public static let maxStretch: CGFloat = 60
@@ -33,11 +34,9 @@ public final class MessageTimesPull {
     /// Whether the times show: from the start of a pull until the bubbles are back.
     public private(set) var showsTimes = false
 
-    /// The width of each time showing, by message.
+    /// The width of each time showing, by message. A pull's times show, and are measured, in the
+    /// layout right after it begins, before the drag moves on.
     @ObservationIgnored private var timeWidths: [MessageID: CGFloat] = [:]
-    /// The widest of them. Once none show it keeps the last widest, for the start of the next
-    /// pull, before that pull's times are measured.
-    @ObservationIgnored private var widestTime: CGFloat = 0
     /// Where the drag was, toward the leading edge, when the pull began. Nil between pulls.
     @ObservationIgnored private var start: CGFloat?
     /// How far the drag has gone toward the leading edge since the pull began.
@@ -133,22 +132,21 @@ public final class MessageTimesPull {
     /// The time beside message `id` shows `width` points wide, or changed width.
     public func timeMeasured(_ id: MessageID, width: CGFloat) {
         timeWidths[id] = width
-        widestTime = timeWidths.values.max() ?? 0
         updateSlide()
     }
 
     /// The time beside message `id` went away: the times hid, or its row was unloaded.
     public func timeHidden(_ id: MessageID) {
-        guard timeWidths.removeValue(forKey: id) != nil, let widest = timeWidths.values.max() else { return }
-        widestTime = widest
+        guard timeWidths.removeValue(forKey: id) != nil else { return }
         updateSlide()
     }
 
-    /// During a pull, slides the bubbles as far as the drag, or the widest time, says. Between
-    /// pulls `slide` stays where `release()` put it, so a time measured during the spring back
-    /// doesn't cut it short.
+    /// During a pull, slides the bubbles as far as the drag, or the widest time showing, says.
+    /// Between pulls `slide` stays where `release()` put it, so a time measured or hidden during the
+    /// spring back doesn't cut it short.
     private func updateSlide() {
         guard start != nil else { return }
+        let widestTime = timeWidths.values.max() ?? 0
         let slide = Self.slide(forPull: pulled, fullyRevealed: Self.fullyRevealed(widestTime: widestTime))
         if slide != self.slide { self.slide = slide }
     }

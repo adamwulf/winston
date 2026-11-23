@@ -131,16 +131,34 @@ struct MessageTimesPullTests {
         #expect(pull.slide == 0 && pull.showsTimes)
     }
 
-    @Test func theNextPullStartsFromTheLastWidestTimeUntilItsOwnAreMeasured() {
+    @Test(arguments: [[MessageID(1), MessageID(2)], [MessageID(2), MessageID(1)]])
+    func eachPullGoesByItsOwnTimesWhicheverOrderTheLastOnesHid(hideOrder: [MessageID]) {
         let pull = MessageTimesPull()
         pull.begin(at: 0)
-        pull.timeMeasured(MessageID(1), width: 80)
+        pull.timeMeasured(MessageID(1), width: 90)
+        pull.timeMeasured(MessageID(2), width: 40)
         pull.settled(after: pull.release())
-        // The times hide, and each goes away.
-        pull.timeHidden(MessageID(1))
+        for id in hideOrder {
+            pull.timeHidden(id)
+        }
+        // Until this pull's times are measured (in the layout right after it begins), nothing of
+        // the last pull's sets how far the bubbles go.
         pull.begin(at: 0)
         pull.move(to: 60)
+        #expect(pull.slide == MessageTimesPull.slide(forPull: 60, fullyRevealed: 0))
+        pull.timeMeasured(MessageID(3), width: 50)
         #expect(pull.slide == 60)
+    }
+
+    @Test func whenTheLastTimeShowingGoesAwayMidPullTheBubblesOnlyStretch() {
+        let pull = MessageTimesPull()
+        pull.begin(at: 0)
+        pull.timeMeasured(MessageID(1), width: 90)
+        pull.move(to: 80)
+        #expect(pull.slide == 80)
+        // Its row scrolls away, leaving only messages without a time.
+        pull.timeHidden(MessageID(1))
+        #expect(pull.slide == MessageTimesPull.slide(forPull: 80, fullyRevealed: 0))
     }
 
     @Test func aPullDuringTheSpringBackKeepsTheTimesShowing() {

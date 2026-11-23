@@ -306,7 +306,11 @@ private struct PulledTime: View {
                     Text(text)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
-                        // Its whole height: one that wraps can be taller than its row.
+                        // One line, shrunk to fit if it must: a caption line is shorter than any bubble,
+                        // so the times of neighboring rows never overlap, as wrapped ones could.
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.4)
+                        // Its line's height, which the zero-size point it hangs from doesn't give it.
                         .fixedSize(horizontal: false, vertical: true)
                         .onGeometryChange(for: CGFloat.self) { proxy in
                             proxy.size.width
@@ -316,7 +320,7 @@ private struct PulledTime: View {
                         .onDisappear {
                             pull.timeHidden(messageID)
                         }
-                        // A time longer than this wraps.
+                        // A time longer than this shrinks.
                         .containerRelativeFrame(.horizontal, alignment: .leading) { length, _ in
                             length * MessageTimesPull.widestTimeFraction
                         }
@@ -388,7 +392,9 @@ private struct PullGesture: UIGestureRecognizerRepresentable {
             pull.move(to: position)
         case .ended, .cancelled, .failed:
             var release = 0
-            withAnimation(.spring(duration: 0.35, bounce: MessageTimesPull.releaseBounce(reduceMotion: reduceMotion))) {
+            // Once the spring has wholly stopped, so the times don't go while the bubbles still move.
+            let spring = Animation.spring(duration: 0.35, bounce: MessageTimesPull.releaseBounce(reduceMotion: reduceMotion))
+            withAnimation(spring, completionCriteria: .removed) {
                 release = pull.release()
             } completion: {
                 pull.settled(after: release)
@@ -416,12 +422,15 @@ private struct PullGesture: UIGestureRecognizerRepresentable {
             )
         }
 
-        // The list's own pan, so it scrolls on while the bubbles are pulled aside.
+        // The list's own pan, so it scrolls on while the bubbles are pulled aside: a scroll view's pan, and
+        // the list's is the only scroll view under the touch. No other recognizer, such as the context
+        // menu's long press, runs alongside.
         func gestureRecognizer(
             _ recognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
         ) -> Bool {
-            other.view is UIScrollView
+            guard let scrollView = other.view as? UIScrollView else { return false }
+            return other === scrollView.panGestureRecognizer
         }
     }
 }

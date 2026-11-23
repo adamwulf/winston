@@ -181,7 +181,7 @@ struct MessageTimesTests {
 
     // MARK: - VoiceOver
 
-    @Test func voiceOverHearsEachPulledTimeWithItsBubble() {
+    @Test func aPulledTimeTellsVoiceOverWhoSentItAndWhen() {
         let today = Self.date(2026, 11, 22, 15, 42)
         let sent = Self.times().pulledCaption(for: Self.message(1, outgoing: true, at: today))
         #expect(sent?.accessibilityLabel == "Sent \(Self.times().text(for: today))")
