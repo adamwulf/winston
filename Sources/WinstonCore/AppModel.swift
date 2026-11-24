@@ -419,10 +419,10 @@ public final class AppModel {
 
     /// Merges the records in the sync store into this device's, at launch, each time the app comes
     /// back to the foreground, and each time another device's arrive: for each pronunciation the
-    /// record written last wins. The first merge
-    /// that brings in pronunciations this device hasn't seen also keeps one per word (see
-    /// `PronunciationSync.deduplicatedByWord`). Writes the result back to the store only if it
-    /// has other records than the store, order aside, so two devices stop once they agree.
+    /// record written last wins. The first merge that brings in pronunciations this device hasn't
+    /// seen also keeps one per word (see `PronunciationSync.deduplicatedByWord`). Writes the
+    /// result back to the store only if it has other records than the store, order aside, so two
+    /// devices stop once they agree.
     private func mergeSyncedPronunciations() {
         guard let pronunciationSyncStore else { return }
         var synced: [PronunciationRecord] = []
