@@ -100,6 +100,66 @@ struct RemoteMuteTests {
         loop.stop()
     }
 
+    @Test func theMuteButtonTogglesTheSameMuteAsTheAirPods() async throws {
+        let bed = VoiceTestBed()
+        let nowPlaying = FakeNowPlaying()
+        var environment = bed.environment
+        environment.makeNowPlaying = { nowPlaying }
+        environment.setInputMuted = { nowPlaying.inputMutes.append($0) }
+        let loop = VoiceLoop(environment: environment)
+        loop.playsSoundCues = false
+        try await loop.start()
+
+        loop.toggleInputMute()
+        #expect(loop.isInputMuted)
+        // A press of the stem unmutes what the button muted, and the other way round.
+        nowPlaying.press(.togglePlayPause)
+        #expect(!loop.isInputMuted)
+        nowPlaying.press(.pause)
+        loop.toggleInputMute()
+        #expect(!loop.isInputMuted)
+        loop.toggleInputMute()
+        #expect(loop.isInputMuted)
+        #expect(nowPlaying.inputMutes == [true, false, true, false, true])
+        #expect(nowPlaying.shownMuted == [false, true, false, true, false, true])
+
+        loop.stop()
+        #expect(!loop.isInputMuted)
+    }
+
+    @Test func theMuteButtonDoesNothingWhileVoiceModeIsOff() async throws {
+        let bed = VoiceTestBed()
+        let nowPlaying = FakeNowPlaying()
+        var environment = bed.environment
+        environment.makeNowPlaying = { nowPlaying }
+        environment.setInputMuted = { nowPlaying.inputMutes.append($0) }
+        let loop = VoiceLoop(environment: environment)
+        loop.playsSoundCues = false
+
+        loop.toggleInputMute()
+        #expect(!loop.isInputMuted)
+        try await loop.start()
+        loop.stop()
+        loop.toggleInputMute()
+        #expect(!loop.isInputMuted)
+        #expect(nowPlaying.inputMutes.isEmpty)
+        #expect(nowPlaying.shownMuted == [false])
+    }
+
+    @Test func aMuteTheSystemRefusesLeavesTheMicrophoneOn() async throws {
+        struct Refused: Error {}
+        let bed = VoiceTestBed()
+        var environment = bed.environment
+        environment.setInputMuted = { _ in throw Refused() }
+        let loop = VoiceLoop(environment: environment)
+        loop.playsSoundCues = false
+        try await loop.start()
+
+        loop.toggleInputMute()
+        #expect(!loop.isInputMuted)
+        loop.stop()
+    }
+
     @Test func theInstallLogNamesTheCommandsTakenAndLoggedAndWhichAreEnabled() {
         let context = VoiceLoop.registrationContext([
             RemoteCommandRegistration(name: "togglePlayPause", isEnabled: true, isHandled: true),

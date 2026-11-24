@@ -230,8 +230,9 @@ Inside it:
 ### Voice mode
 
 - The voice/text toggle switches modes. Voice mode replaces the text field
-  with a live transcript and a **Discard** button that drops the current
-  utterance before it's sent.
+  with a live transcript and a **mute** button (mic / mic.slash) that mutes
+  or unmutes the microphone, the same mute as a press of the AirPods stem.
+  (It replaced a Discard button that dropped the current utterance.)
 - **Background:** the app has the `audio` background mode. Once voice mode
   starts, it keeps listening, receiving replies and speaking them with the
   phone locked or another app in front. iOS shows the orange mic indicator.
@@ -378,8 +379,9 @@ Inside it:
    message. A coordinator instruction to confirm ambiguous actions is
    deferred (Q8).
 3. **Always-on mic picks up other people (low to medium).** Anything said near
-   the phone in voice mode gets sent. Voice mode is an explicit toggle, and
-   the live transcript plus the Discard button give Adam a chance to catch it.
+   the phone in voice mode gets sent. Voice mode is an explicit toggle, the
+   live transcript shows what was heard, and the mute button stops the mic
+   from hearing more.
 4. **Background audio has limits (low).** With the `audio` background mode,
    the session has to start in the foreground. Another app that takes the
    audio session (a phone call, Siri, music) can end it, and voice mode then
