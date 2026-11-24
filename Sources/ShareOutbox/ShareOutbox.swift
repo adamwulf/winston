@@ -8,10 +8,10 @@ import LogSupport
 /// from Open in: its Send to Agent sheet asks which agent it goes to (`AppModel.openSharedFiles()`).
 ///
 /// The extension copies the files it is handed into a batch folder in `Staging` as soon as it
-/// opens (`stage(_:)`), each in a folder of its own under its own name. Done moves the whole batch
-/// into `Outbox` in one rename (`publish(_:)`), so Winston never sees a file half copied, nor a
-/// share Adam hasn't confirmed; Cancel removes it (`discard(_:)`). What an interrupted or
-/// cancelled save leaves in `Staging` goes later (`removeLeftovers(before:)`).
+/// opens (`stage(_:)`), each in a folder of its own under its own name. Once they're all copied,
+/// it moves the whole batch into `Outbox` in one rename (`publish(_:)`), so Winston never sees a
+/// file half copied, nor a share Adam cancelled; Cancel removes it (`discard(_:)`). What an
+/// interrupted or cancelled save leaves in `Staging` goes later (`removeLeftovers(before:)`).
 ///
 /// The logs give counts only, never file names or contents.
 public struct ShareOutbox: Sendable {
@@ -22,7 +22,7 @@ public struct ShareOutbox: Sendable {
     /// app claims it.
     public static let urlScheme = "com.milestonemade.winston"
 
-    /// What the extension opens Winston with, once Done has saved the files.
+    /// What the extension opens Winston with, once it has saved the files.
     /// `AppModel.open(_:)` scans the outbox when it's handed this.
     public static let openURL = URL(string: "\(urlScheme)://share")
 
@@ -94,9 +94,9 @@ public struct ShareOutbox: Sendable {
     }
 
     /// Removes what saves left in `Staging` from before `cutoff`, as when iOS ended the extension
-    /// mid-copy, or after Cancel. Returns how many it removed, which it logs. A share waiting for
-    /// Done is in `Staging` too, so the cutoff is well before any sheet would still be open: if
-    /// one is, its Done says to share again.
+    /// mid-copy, or after Cancel. Returns how many it removed, which it logs. A share still being
+    /// copied is in `Staging` too, as while an iCloud Drive file downloads, so the cutoff is well
+    /// before any copy would still be under way.
     @concurrent
     @discardableResult
     public func removeLeftovers(before cutoff: Date) async -> Int {

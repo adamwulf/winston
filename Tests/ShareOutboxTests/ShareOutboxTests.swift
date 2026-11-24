@@ -29,7 +29,7 @@ private final class TestFolder {
         try #require(NSItemProvider(contentsOf: try sourceFile(name, text)))
     }
 
-    /// Stages and publishes, as the extension does when Adam taps Done.
+    /// Stages and publishes, as the extension does before it opens Winston.
     func share(_ providers: [NSItemProvider]) async throws -> [URL] {
         try outbox.publish(try await outbox.stage(providers))
     }
@@ -205,7 +205,7 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         let staged = try await folder.outbox.stage([provider])
 
         #expect(staged.count == 1)
-        // Not until Adam taps Done.
+        // Not until the extension hands it over.
         #expect(await folder.outbox.files().isEmpty)
         let published = try folder.outbox.publish(staged)
         #expect(published.map(\.lastPathComponent) == ["nightly logs.zip"])
@@ -512,6 +512,22 @@ private func contentProvider(_ data: Data, type: UTType, suggestedName: String?)
         #expect(ShareOutbox.canAdd(try folder.fileProvider("notes.txt", "hello")))
         #expect(ShareOutbox.canAdd(contentProvider(Data(), type: .heic, suggestedName: nil)))
         #expect(ShareOutbox.canAdd(NSItemProvider(object: try folder.sourceFile("a.zip", "a") as NSURL)))
+    }
+}
+
+/// The URL the extension opens Winston with once it has saved the files.
+@Suite struct ShareOpenURLTests {
+    @Test func theURLTheExtensionOpensIsInWinstonsScheme() throws {
+        let url = try #require(ShareOutbox.openURL)
+
+        #expect(ShareOutbox.isWinstonURL(url))
+        // A scheme matches whatever its case.
+        #expect(ShareOutbox.isWinstonURL(try #require(URL(string: "COM.MILESTONEMADE.WINSTON://share"))))
+    }
+
+    @Test func aFileOrAnotherAppsURLIsNotWinstons() throws {
+        #expect(!ShareOutbox.isWinstonURL(URL(filePath: "/tmp/notes.txt")))
+        #expect(!ShareOutbox.isWinstonURL(try #require(URL(string: "https://milestonemade.com/winston"))))
     }
 }
 

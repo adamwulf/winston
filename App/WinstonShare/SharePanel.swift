@@ -1,14 +1,13 @@
 import Observation
 import SwiftUI
 
-/// Where saving the shared files has got to, for `SharePanel`.
+/// Where saving the shared files has got to, for `SharePanel`. Once saved, the sheet closes and
+/// Winston opens, so there's no phase for that.
 @Observable
 final class ShareState {
     enum Phase: Equatable {
         /// Copying this many files into the App Group for Winston.
         case saving(count: Int)
-        /// Saved this many: Done opens Winston, which asks for the agent.
-        case saved(count: Int)
         /// Couldn't save them, and why. Nothing was saved.
         case failed(String)
         /// Nothing here can be saved, and why.
@@ -21,35 +20,21 @@ final class ShareState {
         self.phase = phase
     }
 
-    var isSaved: Bool {
-        if case .saved = phase { true } else { false }
-    }
-
     /// What VoiceOver says as the phase changes, as nothing else draws it there.
     var announcement: String? {
         switch phase {
         case .saving: nil
-        case .saved(let count): "\(Self.readyTitle(count)). \(Self.tapDone(count))"
         case .failed(let message), .unavailable(let message): message
         }
     }
-
-    static func readyTitle(_ count: Int) -> String {
-        count == 1 ? "Ready to Send" : "\(count) Files Ready to Send"
-    }
-
-    static func tapDone(_ count: Int) -> String {
-        "Tap Done to open Winston and choose the agent \(count == 1 ? "it goes" : "they go") to."
-    }
 }
 
-/// The share extension's sheet. It copies what was shared at once, then says to tap Done. Done
-/// hands the files to Winston and opens it, and its Send to Agent sheet asks which agent they go
-/// to, as for a file from Open in. Cancel, at any point, removes them, and Winston never sees
-/// them.
+/// The share extension's sheet, shown while it copies what was shared. Once copied, the files go
+/// to Winston and the sheet closes as Winston opens, and its Send to Agent sheet asks which agent
+/// they go to, as for a file from Open in. Cancel, while they copy, removes them, and Winston
+/// never sees them; after a failure, it closes the sheet.
 struct SharePanel: View {
     let state: ShareState
-    let done: () -> Void
     let cancel: () -> Void
 
     var body: some View {
@@ -62,10 +47,6 @@ struct SharePanel: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel", action: cancel)
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done", action: done)
-                            .disabled(!state.isSaved)
                     }
                 }
         }
@@ -81,12 +62,6 @@ struct SharePanel: View {
         switch state.phase {
         case .saving(let count):
             ProgressView(count == 1 ? "Preparing the file…" : "Preparing \(count) files…")
-        case .saved(let count):
-            ContentUnavailableView {
-                Label(ShareState.readyTitle(count), systemImage: "paperplane")
-            } description: {
-                Text(ShareState.tapDone(count))
-            }
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't Prepare", systemImage: "exclamationmark.triangle")
