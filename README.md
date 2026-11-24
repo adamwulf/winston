@@ -737,7 +737,9 @@ applied: `receiptToSetMutedMs`, `receiptToAppliedMs`, `eventToSetMutedMs` and
 `eventToAppliedMs`. The times from the timestamp are
 left out, with `eventTimestampOnUptime=false`, when the timestamp is 0 or less
 or more than a minute from the receipt: it can't be taken as on the uptime
-clock then, and a time from it could give the uptime away.
+clock then, and a time from it could give the uptime away. A tap of voice
+mode's mute button logs "input mute changed" with `source=button`, and no
+remote command lines.
 
 ### Getting them out
 

@@ -150,11 +150,12 @@ public final class VoiceLoop {
         access(keyPath: \.canTalk)
         return isPushToTalk && pipeline != nil
     }
-    /// Whether the microphone is muted from the AirPods: while voice mode runs, a press of the
-    /// stem (the Digital Crown on AirPods Max) mutes or unmutes it. iOS mutes the input itself,
-    /// with its own chime; on macOS the loop mutes it, through `microphoneGate`. Either way the
-    /// stop cue plays on mute and the start cue on unmute. What was said before a mute is sent
-    /// after the pause, as usual. Stopping voice mode unmutes it.
+    /// Whether the microphone is muted, from the AirPods or the app's mute button: while voice
+    /// mode runs, a press of the stem (the Digital Crown on AirPods Max) or `toggleInputMute()`
+    /// mutes or unmutes it. iOS mutes the input itself, with its own chime for the AirPods; on
+    /// macOS the loop mutes it, through `microphoneGate`. Either way the stop cue plays on mute
+    /// and the start cue on unmute, and not on a rebuilt engine while muted. What was said
+    /// before a mute is sent after the pause, as usual. Stopping voice mode unmutes it.
     ///
     /// The system makes the press a mute only during a call, so voice mode also takes it as a
     /// media remote command (play, pause or play/pause), which mutes or unmutes it the same way.
@@ -552,8 +553,8 @@ public final class VoiceLoop {
         }
         // Adam can talk now, also after a rebuild or an interruption. Does nothing if the engine
         // is being rebuilt; the rebuild's start plays it. With push-to-talk, he can talk only
-        // once he presses, which plays it then.
-        if !isPushToTalk {
+        // once he presses, which plays it then, and while muted only once he unmutes.
+        if !isPushToTalk && !isInputMuted {
             play(.listeningStarted)
         }
         // Replies carried over a rebuild, or queued while starting. Does nothing if the engine
@@ -693,6 +694,18 @@ public final class VoiceLoop {
             transcript.close(at: transcript.consumedThrough)
         }
         updateListeningState()
+    }
+
+    /// The app's mute button: mutes the microphone, or unmutes it if muted, the same way as a
+    /// press of the AirPods stem (see `isInputMuted`), cues included. Does nothing while voice
+    /// mode is off.
+    public func toggleInputMute() {
+        // Voice mode follows the mute from `start()` until `stop()`, which unmutes it.
+        guard inputMuteObserver != nil else {
+            Self.log.notice("mute button ignored; voice mode is off", ["platform": Self.platform])
+            return
+        }
+        toggleInputMute(source: "button")
     }
 
     /// Drops the utterance in progress without sending it.
@@ -1721,7 +1734,7 @@ public final class VoiceLoop {
 
     /// The AirPods mute changed: shows it, and plays the stop cue on mute and the start cue on
     /// unmute. On macOS the handler has muted or unmuted `microphoneGate` already. `source` says
-    /// what told the loop, `notification` or `remoteCommand`, for the logs.
+    /// what told the loop, `notification`, `remoteCommand` or `button`, for the logs.
     private func inputMuteChanged(_ isMuted: Bool, source: String) {
         var fields: [String: CustomStringConvertible] = [
             "muted": isMuted,
@@ -1741,7 +1754,7 @@ public final class VoiceLoop {
     /// Takes a press of the AirPods stem as a media remote command too, while voice mode runs.
     /// The system makes the press the input mute gesture above only during a call (a CallKit
     /// call on iOS); otherwise a press may come to the Now Playing app as play, pause or
-    /// play/pause. Each of them toggles the mute (`toggleInputMute()`). Voice mode shows as
+    /// play/pause. Each of them toggles the mute (`toggleInputMute(source:)`). Voice mode shows as
     /// playing, and as paused while muted, so the press after a mute may come as play.
     ///
     /// What can keep the commands from coming (from Apple's guidance; only a device can tell):
@@ -1809,7 +1822,7 @@ public final class VoiceLoop {
             Self.log.notice("remote command ignored; voice mode is off", fields)
             return
         }
-        let applied = toggleInputMute()
+        let applied = toggleInputMute(source: "remoteCommand")
         fields["mutedAfter"] = isInputMuted
         if let applied {
             // From receipt, and from the press (by its timestamp) if it can be measured, to
@@ -1823,20 +1836,25 @@ public final class VoiceLoop {
     /// `AVAudioApplication`, which mutes the input on iOS and calls the mute handler, which mutes
     /// `microphoneGate`, on macOS. Shows the change and plays its cue at once, since the mute
     /// notification may come late or not at all (iOS sends it only while the session records);
-    /// when it comes, it finds nothing changed, so the cue plays once.
+    /// when it comes, it finds nothing changed, so the cue plays once. `source` is for the logs.
     ///
     /// Returns the uptimes at which `setInputMuted` returned and `inputMuteChanged` had run, for
     /// the logs, or nil if muting failed.
-    private func toggleInputMute() -> (setMutedReturned: TimeInterval, muteChanged: TimeInterval)? {
+    @discardableResult
+    private func toggleInputMute(source: String) -> (setMutedReturned: TimeInterval, muteChanged: TimeInterval)? {
         let muted = !isInputMuted
         do {
             try environment.setInputMuted(muted)
         } catch {
-            Self.log.warning("toggling the input mute failed", error.logContext(["muted": "\(muted)", "platform": Self.platform]))
+            Self.log.warning("toggling the input mute failed", error.logContext([
+                "muted": "\(muted)",
+                "source": source,
+                "platform": Self.platform,
+            ]))
             return nil
         }
         let setMutedReturned = MediaDiagnostics.uptime()
-        inputMuteChanged(muted, source: "remoteCommand")
+        inputMuteChanged(muted, source: source)
         return (setMutedReturned, MediaDiagnostics.uptime())
     }
 

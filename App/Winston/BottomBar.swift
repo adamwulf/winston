@@ -8,8 +8,8 @@ import WinstonCore
 import WinstonLogging
 
 /// The bar under the messages: a text field with a + button for files and photos in text mode, or the
-/// live transcript in voice mode, with the voice/text toggle to their left in both. A long press on the
-/// toggle in text mode opens push-to-talk. (Double-tapping a message toggles 👍 on it.)
+/// live transcript with a mute button in voice mode, with the voice/text toggle to their left in both.
+/// A long press on the toggle in text mode opens push-to-talk. (Double-tapping a message toggles 👍 on it.)
 struct BottomBar: View {
     private static let log = Logger(label: "app.attach")
     @Environment(AppModel.self) private var model
@@ -235,10 +235,26 @@ struct BottomBar: View {
             }
         }
 
-        Button("Discard") {
-            model.voiceLoop.discardCurrentUtterance()
+        muteButton
+    }
+
+    /// Mutes or unmutes the microphone, as a press of the AirPods stem does. The symbol shows
+    /// whether it is on, red while muted, and the label says what a tap does.
+    private var muteButton: some View {
+        let isMuted = model.voiceLoop.isInputMuted
+        return Button(isMuted ? "Unmute" : "Mute", systemImage: isMuted ? "mic.slash" : "mic") {
+            model.voiceLoop.toggleInputMute()
         }
-        .disabled(!isListening)
+        .labelStyle(.iconOnly)
+        .contentTransition(.symbolEffect(.replace))
+        #if os(macOS)
+        // A Mac push button ignores the tint.
+        .foregroundStyle(isMuted ? Color.red : Color.primary)
+        #else
+        .tint(isMuted ? .red : nil)
+        #endif
+        // Not until listening has started, so the mute is never set before the audio session.
+        .disabled(model.voiceLoop.state == .off)
     }
 
     /// A space exactly two text lines tall and as wide as it can be, holding `content` at its
@@ -261,7 +277,7 @@ struct BottomBar: View {
     private var indicatorSymbol: String {
         switch model.voiceLoop.state {
         case .off: "mic.slash"
-        // Muted from the AirPods.
+        // Muted from the AirPods or the mute button.
         case .listening: model.voiceLoop.isInputMuted ? "mic.slash" : "waveform"
         case .speaking: "speaker.wave.2.fill"
         }
