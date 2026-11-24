@@ -49,6 +49,7 @@
 		A10000000000000000000042 /* WinstonShare-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "WinstonShare-Info.plist"; sourceTree = "<group>"; };
 		A10000000000000000000043 /* WinstonShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = WinstonShare.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000044 /* iOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iOS.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000053 /* macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = macOS.entitlements; sourceTree = "<group>"; };
 		A10000000000000000000052 /* App.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = App.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -116,6 +117,7 @@
 				A10000000000000000000008 /* Secrets.example.xcconfig */,
 				A10000000000000000000007 /* Info.plist */,
 				A10000000000000000000044 /* iOS.entitlements */,
+				A10000000000000000000053 /* macOS.entitlements */,
 				A10000000000000000000042 /* WinstonShare-Info.plist */,
 				A10000000000000000000043 /* WinstonShare.entitlements */,
 			);
@@ -322,6 +324,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = T68Z94627S;
 				ENABLE_APP_SANDBOX = YES;
@@ -368,6 +371,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphoneos*]" = Config/iOS.entitlements;
 				"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]" = Config/iOS.entitlements;
+				"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = T68Z94627S;
 				ENABLE_APP_SANDBOX = YES;

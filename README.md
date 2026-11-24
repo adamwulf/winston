@@ -182,7 +182,7 @@ xcodebuild -quiet -project App/Winston.xcodeproj -scheme Winston \
 
 ### What the tests run
 
-The tests run the real code. A test process can't have eight things, and each
+The tests run the real code. A test process can't have nine things, and each
 is reached through one seam. The seams are `package` declarations, so the app
 can't see them.
 
@@ -196,6 +196,7 @@ can't see them.
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
+| iCloud's key-value store | `PronunciationSyncStore`, as `pronunciationSyncStore` in `AppModel`'s package init (nil, no sync, unless a test passes one) | `FakePronunciationSyncStore`: one device's copy of the store, in memory, with every save it made; `receive(_:)` is another device's write arriving, and `arriveUnannounced(_:)` one that came while the app was away, which `refresh()` brings in |
 
 Everything else is the production code: the `TelegramLink` actor with its
 update decoding and mapping, the `VoiceLoop` with its pipeline, converter,
@@ -257,11 +258,13 @@ runs the tests on macOS and prints line coverage for every file in `Sources/`.
 [docs/coverage](docs/coverage/README.md) has the dated reports, how to make
 one, and the goals for coverage and tests.
 
-Five places stay uncovered on purpose, because they only call into the
+Six places stay uncovered on purpose, because they only call into the
 system:
 
 - `LiveVoiceEnvironment.swift`: the permission prompts, the speech model, the
   clock and the standard user defaults.
+- `ICloudPronunciationStore.swift`: iCloud's key-value store, which the tests
+  never touch (see [Pronunciation sync](#pronunciation-sync)).
 - `LiveKokoro.swift`: KokoroTTS, which downloads its model. Covered only when
   `KokoroRealModelTests` runs.
 - `OnDevicePronunciationSuggester.generatedPronunciations(for:request:started:)`: Apple's
@@ -613,7 +616,9 @@ word and phonemes for the whole run, so a reply queued before its pronunciation
 was changed or removed still says what it was queued with, as a Say As reply
 does.
 `AppModel` saves the pronunciations in the standard user defaults, under
-`pronunciations`; one saved before IPA existed is Say As.
+`pronunciations`, and syncs them between devices (see
+[Pronunciation sync](#pronunciation-sync)); one saved before IPA existed is
+Say As.
 
 An IPA row has a Suggest button (sparkles). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
@@ -690,6 +695,73 @@ again. Its guardrails declined "Nguyen" once and answered it the other times
 on writing until the token cap cut it off.
 `OnDevicePronunciationSuggesterRealModelTests` prints what the model suggests
 for a few words, when asked for (see [What the tests run](#what-the-tests-run)).
+
+## Pronunciation sync
+
+The pronunciations sync between Adam's devices that are signed in to the same
+Apple Account, through iCloud's key-value store (`NSUbiquitousKeyValueStore`,
+in `ICloudPronunciationStore`). The iOS and Mac apps share one bundle ID, so
+they share one store. [plans/pronunciation-sync.md](plans/pronunciation-sync.md)
+has the design and the steps that are left.
+
+- Each pronunciation is saved as a `PronunciationRecord`: the pronunciation
+  plus when it was last written (`updatedAt`) and whether it was removed
+  (`deleted`). A removed one is kept as a tombstone, with only its id. The same
+  JSON array is saved under `pronunciations` in the user defaults and in the
+  store.
+- For each id, the record written last wins (`PronunciationSync.merged`), a
+  removal included, so a removal stays removed. The order isn't synced.
+- An edit in settings stamps only the pronunciations it changed and writes the
+  records to the store. Another device's records are merged in at launch, when
+  the app comes back to the foreground (after asking the store for news), and
+  when the store says they changed. The result is written back only if it has
+  other records than the store (order aside), so two devices stop once they
+  agree.
+- A pronunciation saved before sync takes the time this device first launched
+  with sync (`pronunciationsFirstLaunch`) as its `updatedAt`. The first merge
+  that brings in another device's pronunciations keeps one per word, the one
+  written last (`PronunciationSync.deduplicatedByWord`), and sets
+  `pronunciationsMergedFromICloud`. Later merges don't dedupe, so a row being
+  typed on the other device isn't removed.
+- Tombstones are dropped after 90 days. A store over 1 MB, the most iCloud
+  keeps, is logged, as is a quota violation.
+- A store value this build can't read, perhaps saved by a newer build, is
+  logged and left out of the merge, which writes nothing over it. An edit on
+  this device still saves its records over it. The newer build then merges
+  that edit and writes its own records back, once per edit.
+
+The costs: device clocks decide close calls. A device that doesn't open
+Winston for more than 90 days can bring back a removed pronunciation. And while the second device is
+still on a build without sync, its old pronunciations get a later stamp than
+the first device's edits from that time: when it updates, the dedupe keeps its
+copy of a word the first device edited, and a word the first device removed
+comes back. Update both apps before editing pronunciations.
+
+It needs iCloud on the App ID and the
+`com.apple.developer.ubiquity-kvstore-identifier` entitlement
+(`$(TeamIdentifierPrefix)$(CFBundleIdentifier)`; no iCloud container). A build
+without signing (`CODE_SIGNING_ALLOWED=NO`) has no entitlement, and its store is
+expected to keep the records on the device only. Signed iOS and Mac builds both
+carry the entitlement. As with push, if the App ID doesn't have iCloud, signing
+and Xcode Cloud's App Store export fail on both platforms. For the Mac this is
+the first entitlement that needs its provisioning profile to grant it. The
+entitlement is in both `App/Config/iOS.entitlements` and
+`App/Config/macOS.entitlements`. The Mac signs in its own file
+(`CODE_SIGN_ENTITLEMENTS[sdk=macosx*]`), and its sandbox still comes from the
+`ENABLE_*` build settings. Xcode's Signing & Capabilities editor doesn't follow
+these per-platform files. Adding iCloud there made a new, unconditional
+`Winston/Winston.entitlements` that only the Mac used. Add an entitlement to
+both files by hand.
+
+Logs: `label=app.pronunciations` has `synced pronunciations changed` with the
+store's reason, `synced pronunciations over iCloud's quota`, and
+`iCloud key-value store unavailable; pronunciations stay on this device` when
+the store can't sync, as in a build without the entitlement. That one is
+logged at launch and each time the app comes back to the foreground, so on the
+Mac at every switch to Winston. `label=app.model` has `pronunciations merged`
+with counts, only for a merge that changed something here or wrote back,
+`synced pronunciations unreadable; not merged`, and
+`pronunciations too large to sync` with its size. No word is logged.
 
 ## Logging
 

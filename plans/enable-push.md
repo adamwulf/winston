@@ -14,8 +14,9 @@ provisioning profile includes `aps-environment`:
   local profile is the wildcard, and a wildcard App ID can't have Push.
 
 Push was turned off by signing in no entitlements file. Now the iOS app signs in
-`App/Config/iOS.entitlements` again, for its App Group only (see README → Share extension),
-and the file leaves out `aps-environment`. Step 4 puts it back. The APNs code still builds
+`App/Config/iOS.entitlements` again, for its App Group (see README → Share extension) and
+iCloud key-value storage (see README → Pronunciation sync), and the file leaves out
+`aps-environment`. Step 4 puts it back. The APNs code still builds
 and runs: iOS turns down the token request, `didFailToRegisterForRemoteNotificationsWithError`
 marks registration failed, and Settings → Notifications shows "Couldn't connect" with Retry.
 
