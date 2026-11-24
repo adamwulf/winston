@@ -429,8 +429,9 @@ never depends on it.
 - **Q3, listening with the screen locked:** yes. The `audio` background mode
   keeps voice mode listening, speaking and receiving replies with the phone
   locked.
-- **Q4, always listening:** as specified, with the Discard button. No
-  push-to-talk in v1; it was added later, beside hands-free voice mode.
+- **Q4, always listening:** as specified, with the Discard button (since
+  replaced by a mute button). No push-to-talk in v1; it was added later,
+  beside hands-free voice mode.
 - **Q5, Mac:** both iOS and Mac ship to TestFlight.
 - **Q6, minimum OS:** iOS 26 / macOS 26.
 - **Q7, signing team:** Adam will set it up after the first draft build. The

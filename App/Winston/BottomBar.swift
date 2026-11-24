@@ -247,9 +247,14 @@ struct BottomBar: View {
         }
         .labelStyle(.iconOnly)
         .contentTransition(.symbolEffect(.replace))
+        #if os(macOS)
+        // A Mac push button ignores the tint.
+        .foregroundStyle(isMuted ? Color.red : Color.primary)
+        #else
         .tint(isMuted ? .red : nil)
-        // There is nothing to mute until Adam resumes listening.
-        .disabled(model.voiceLoop.state == .off && !model.isStartingVoice)
+        #endif
+        // Not until listening has started, so the mute is never set before the audio session.
+        .disabled(model.voiceLoop.state == .off)
     }
 
     /// A space exactly two text lines tall and as wide as it can be, holding `content` at its

@@ -1344,6 +1344,28 @@ struct SoundCueTests {
         #expect(await eventually { bed.audio.engines.count == 2 && bed.recognizer.isStarted })
         #expect(await eventually { bed.audio.playedFrames > played })
     }
+
+    @Test func aMuteDuringARebuildLastsThroughItAndKeepsTheStartCueForTheUnmute() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await listeningLoopWithCues(on: bed)
+        defer { loop.stop() }
+        let played = bed.audio.playedFrames
+
+        // The settings change tears the engine down at once and builds the new one in a task.
+        loop.pausesOtherAudio = false
+        loop.toggleInputMute()
+        #expect(loop.isInputMuted)
+
+        #expect(await eventually { bed.audio.engines.count == 2 && bed.recognizer.isStarted })
+        #expect(loop.isInputMuted)
+        // No cue for the mute, with no engine to play it, and no start cue while muted.
+        #expect(await audioGoesBy(on: bed))
+        #expect(bed.audio.playedFrames == played)
+
+        loop.toggleInputMute()
+        #expect(!loop.isInputMuted)
+        #expect(await playsOnce(.listeningStarted, on: bed))
+    }
 }
 
 // MARK: - Audio devices changing
