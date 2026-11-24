@@ -158,6 +158,13 @@ expected to keep values only on this device, and step 5 checks that.
 
 ## Steps
 
+Status, 2026-11-23: steps 1 to 4 are done. Adam turned on iCloud with key-value storage in
+Xcode's Signing & Capabilities editor. That editor wrote only a new, unconditional
+`Winston/Winston.entitlements`, which only the Mac used. It was moved to
+`Config/macOS.entitlements` as step 3 says, and the key was added to `iOS.entitlements`.
+Signed Debug builds for macOS and iOS carry the entitlement. Step 5's App Store export and
+two-device checks are left.
+
 Do them in this order. As with push (see `plans/enable-push.md`), signing in an entitlement
 that the App ID doesn't have breaks signing and Xcode Cloud's App Store export. Xcode Cloud
 archives both iOS and macOS, so this affects both.
@@ -188,9 +195,11 @@ Only after step 2.
    ```
 
 2. The Mac build signs in no entitlements file today: its sandbox comes from the
-   `ENABLE_*` build settings. Add `App/Config/macOS.entitlements` holding only that key. Add
-   it to the Config group in the project, and set `"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" =
-   Config/macOS.entitlements` in the Winston target's Debug and Release configurations.
+   `ENABLE_*` build settings. Add `App/Config/macOS.entitlements` holding only that key
+   (and the empty `com.apple.developer.icloud-container-identifiers` that Xcode adds with
+   iCloud). Add it to the Config group in the project, and set
+   `"CODE_SIGN_ENTITLEMENTS[sdk=macosx*]" = Config/macOS.entitlements` in the Winston
+   target's Debug and Release configurations.
 
 ### 4. README
 

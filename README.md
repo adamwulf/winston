@@ -737,7 +737,14 @@ comes back. Update both apps before editing pronunciations.
 It needs iCloud on the App ID and the
 `com.apple.developer.ubiquity-kvstore-identifier` entitlement
 (`$(TeamIdentifierPrefix)$(CFBundleIdentifier)`; no iCloud container). Without
-them the store is expected to keep the records on the device only.
+them the store is expected to keep the records on the device only. The
+entitlement is in both `App/Config/iOS.entitlements` and
+`App/Config/macOS.entitlements`. The Mac signs in its own file
+(`CODE_SIGN_ENTITLEMENTS[sdk=macosx*]`), and its sandbox still comes from the
+`ENABLE_*` build settings. Xcode's Signing & Capabilities editor doesn't follow
+these per-platform files. Adding iCloud there made a new, unconditional
+`Winston/Winston.entitlements` that only the Mac used. Add an entitlement to
+both files by hand.
 
 Logs: `label=app.pronunciations` has `synced pronunciations changed` with the
 store's reason, and `synced pronunciations over iCloud's quota`.
