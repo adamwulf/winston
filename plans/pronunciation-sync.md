@@ -99,7 +99,7 @@ and because the dedupe is deterministic, both devices reach the same result.
 ### Pruning and size
 
 Tombstones older than 90 days are dropped whenever the records are saved or merged. One
-cost: a device that stays offline for longer than that can bring a removed entry back. With
+cost: a device that does not open Winston for longer than that can bring a removed entry back. With
 one user and few removals, a tombstone lasts long before 1 MB matters. Before writing to
 the store, the model logs an error if the data is over 1 MB, because a write over that size
 fails as a whole. Quota violations reported by the store's change notification are also
@@ -113,6 +113,8 @@ back when it has entries the store lacks:
 
 - At launch: merge the local records with the store's, save the result locally, and write
   it to the store if it differs.
+- When the app comes back to the foreground: ask the store for news (`refresh()`), then the
+  same. Apple's reference asks for `synchronize()` at launch and on return to the foreground.
 - On the store's external change notification for `pronunciations`: the same.
 
 "Differs" compares the merged records with the store's records, both pruned with the same
@@ -128,7 +130,7 @@ it, and the newer build would write back, so they would overwrite each other for
 ### Accepted costs
 
 - Device clocks decide close calls between edits.
-- A device offline for more than 90 days can bring back a removed entry (see Pruning).
+- A device that does not open Winston for more than 90 days can bring back a removed entry (see Pruning).
 - The settings order isn't synced.
 - The rollout window. Entries a device had before sync get its first-launch time, so the
   second device to update stamps its old entries later than anything the first device did in
@@ -140,15 +142,18 @@ it, and the newer build would write back, so they would overwrite each other for
 ### The seam
 
 A `package` protocol, `PronunciationSyncStore` (main actor): `data` (the synced value or
-nil), `save(_ data:)`, and `onExternalChange(_:)`, which runs a handler each time another
-device's value arrives. There are two implementations:
+nil), `save(_ data:)`, `refresh()`, and `onExternalChange(_:)`, which runs a handler each
+time another device's value arrives. There are two implementations:
 
-- `ICloudPronunciationStore` in WinstonCore wraps `NSUbiquitousKeyValueStore.default`. It
-  calls `synchronize()` once at init, and observes `didChangeExternallyNotification` on the
-  main queue for the `pronunciations` key, logging the change's reason. It only calls into
-  the system, so it is listed with the files that stay uncovered on purpose.
+- `ICloudPronunciationStore` in WinstonCore wraps `NSUbiquitousKeyValueStore.default`. Its
+  `refresh()` calls `synchronize()`, at init and from `AppModel.appDidBecomeActive()`, and
+  logs a warning when that returns false (no entitlement, say). It observes
+  `didChangeExternallyNotification` on the main queue for the `pronunciations` key, logging
+  the change's reason by name. It only calls into the system, so it is listed with the files
+  that stay uncovered on purpose.
 - `FakePronunciationSyncStore` in `Tests/WinstonCoreTests` is an in-memory value plus
-  `receive(_ data:)`, which stands for another device's write arriving.
+  `receive(_ data:)`, which stands for another device's write arriving and being announced.
+  `arriveUnannounced(_:)` stands for one that came while the app was away.
 
 `AppModel`'s package init takes `pronunciationSyncStore: (any PronunciationSyncStore)? = nil`.
 So does the convenience `init(voiceLoop:defaults:shareOutbox:)`, which the public `init()`

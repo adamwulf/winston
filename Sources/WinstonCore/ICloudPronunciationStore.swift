@@ -15,8 +15,7 @@ final class ICloudPronunciationStore: PronunciationSyncStore {
     private var observer: (any NSObjectProtocol)?
 
     init() {
-        // Asks for what the other devices saved since this one last looked.
-        store.synchronize()
+        refresh()
     }
 
     isolated deinit {
@@ -33,6 +32,13 @@ final class ICloudPronunciationStore: PronunciationSyncStore {
         store.set(data, forKey: Self.key)
     }
 
+    func refresh() {
+        // False without the entitlement, say.
+        if !store.synchronize() {
+            Self.log.warning("iCloud key-value store unavailable; pronunciations stay on this device")
+        }
+    }
+
     func onExternalChange(_ handler: @escaping @MainActor @Sendable () -> Void) {
         observer = NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
@@ -46,9 +52,21 @@ final class ICloudPronunciationStore: PronunciationSyncStore {
                     Self.log.error("synced pronunciations over iCloud's quota")
                 }
                 guard keys.contains(Self.key) else { return }
-                Self.log.info("synced pronunciations changed", ["reason": reason.map(String.init) ?? "none"])
+                Self.log.info("synced pronunciations changed", ["reason": Self.name(ofReason: reason)])
                 handler()
             }
+        }
+    }
+
+    /// The name of a change notification's reason, for the logs.
+    private static func name(ofReason reason: Int?) -> String {
+        switch reason {
+        case NSUbiquitousKeyValueStoreServerChange?: "serverChange"
+        case NSUbiquitousKeyValueStoreInitialSyncChange?: "initialSync"
+        case NSUbiquitousKeyValueStoreQuotaViolationChange?: "quotaViolation"
+        case NSUbiquitousKeyValueStoreAccountChange?: "accountChange"
+        case let reason?: "\(reason)"
+        case nil: "none"
         }
     }
 }

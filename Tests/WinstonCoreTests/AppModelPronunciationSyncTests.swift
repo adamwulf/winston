@@ -67,22 +67,23 @@ private final class Device {
 @Suite(.timeLimit(.minutes(1)))
 struct PronunciationSyncModelTests {
     @Test func anEditStampsOnlyThePronunciationThatChangedAndSyncsIt() throws {
-        let device = try Device()
-        let model = device.model
-        model.pronunciations = [
-            Pronunciation(word: "JSON", replacement: "Jason"),
-            Pronunciation(word: "Kokoro", replacement: "Ko ko ro"),
+        // Written a minute ago, so a new stamp is later.
+        let minuteAgo = Date() - 60
+        let before = [
+            PronunciationRecord(Pronunciation(word: "JSON", replacement: "Jason"), updatedAt: minuteAgo),
+            PronunciationRecord(Pronunciation(word: "Kokoro", replacement: "Ko ko ro"), updatedAt: minuteAgo),
         ]
-        let before = try device.syncedRecords()
+        let device = try Device(synced: try PronunciationRecord.encoded(before))
+        let model = device.model
 
         model.pronunciations[1].replacement = "Koh koh roh"
 
         let after = try device.syncedRecords()
         #expect(after.map(\.pronunciation) == model.pronunciations)
         #expect(after[0] == before[0])
-        #expect(after[1].updatedAt >= before[1].updatedAt)
+        #expect(after[1].updatedAt > minuteAgo + 30)
         #expect(try device.savedRecords() == after)
-        #expect(device.store.saves.count == 2)
+        #expect(device.store.saves.count == 1)
     }
 
     @Test func aRemovalSyncsATombstoneWithNothingButItsID() throws {
@@ -191,7 +192,8 @@ struct PronunciationSyncModelTests {
         #expect(device.model.pronunciations.map(\.word) == ["JSON", "API", "API"])
     }
 
-    @Test func anUnreadableSyncedValueIsNeitherMergedNorWrittenOver() throws {
+    @Test func anUnreadableSyncedValueIsLeftOutOfTheMergeAndNotWrittenOverByIt() throws {
+        // Saved by a newer build, with a mode this one doesn't know.
         let unreadable = Data(#"[{"id": "\#(UUID().uuidString)", "word": "JSON", "replacement": "Jason", "mode": "newer"}]"#.utf8)
         let saved = [Pronunciation(word: "Kokoro", replacement: "Ko ko ro")]
 
@@ -199,14 +201,29 @@ struct PronunciationSyncModelTests {
 
         #expect(device.model.pronunciations == saved)
         #expect(device.store.saves.isEmpty)
+        #expect(device.store.data == unreadable)
 
+        // An edit here still saves over it; the newer build would merge that and write back.
         device.model.pronunciations = []
-        let saves = device.store.saves.count
+        #expect(device.store.saves.count == 1)
         device.store.receive(unreadable)
 
         #expect(device.model.pronunciations.isEmpty)
-        #expect(device.store.saves.count == saves)
-        #expect(device.store.data == unreadable)
+        #expect(device.store.saves.count == 1)
+    }
+
+    @Test func comingBackToTheForegroundPicksUpWhatAnotherDeviceSavedMeanwhile() throws {
+        let device = try Device()
+        #expect(device.store.refreshes == 0)
+        let theirs = [PronunciationRecord(Pronunciation(word: "JSON", replacement: "Jason"), updatedAt: Date())]
+        device.store.arriveUnannounced(try PronunciationRecord.encoded(theirs))
+
+        device.model.appDidBecomeActive()
+
+        #expect(device.store.refreshes == 1)
+        #expect(device.model.pronunciations == theirs.map(\.pronunciation))
+        #expect(device.model.voiceLoop.pronunciations == theirs.map(\.pronunciation))
+        #expect(device.store.saves.isEmpty)
     }
 
     @Test func twoDevicesWithListsFromBeforeSyncAgreeAndStopWriting() throws {

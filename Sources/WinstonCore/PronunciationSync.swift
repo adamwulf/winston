@@ -72,8 +72,8 @@ package struct PronunciationRecord: Codable, Hashable, Sendable {
 /// How two devices' pronunciation records become one list: for each id, the record written
 /// last wins, tombstones included. Pure, so both devices reach the same records.
 package enum PronunciationSync {
-    /// How long a tombstone is kept, 90 days. A device offline for longer can bring its
-    /// pronunciation back.
+    /// How long a tombstone is kept, 90 days. A device that doesn't open Winston for longer can
+    /// bring its pronunciation back.
     package static let tombstoneLifetime: TimeInterval = 90 * 24 * 60 * 60
     /// The most iCloud's key-value store holds, 1 MB. A larger write fails as a whole.
     package static let storeLimit = 1_000_000
@@ -147,6 +147,9 @@ package protocol PronunciationSyncStore: AnyObject {
     var data: Data? { get }
     /// Saves `data` here, to sync to the other devices.
     func save(_ data: Data)
+    /// Asks for what the other devices saved since this one last looked: at launch, and each
+    /// time the app comes back to the foreground.
+    func refresh()
     /// Calls `handler` each time another device's records arrive, once `data` has them.
     func onExternalChange(_ handler: @escaping @MainActor @Sendable () -> Void)
 }

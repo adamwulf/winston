@@ -196,8 +196,8 @@ public final class AppModel {
             applyVoiceSettings()
         }
     }
-    /// Every pronunciation as saved and synced: `pronunciations`, in their order, each with when
-    /// it was last written, then tombstones for the ones removed.
+    /// Every pronunciation as saved and synced, each with when it was last written: the live ones
+    /// in `pronunciations`' order, and tombstones for the ones removed, anywhere among them.
     @ObservationIgnored private var pronunciationRecords: [PronunciationRecord]
     /// When this device first launched a build that syncs pronunciations: the time a
     /// pronunciation saved before then was last written.
@@ -417,8 +417,9 @@ public final class AppModel {
         savePronunciationRecords(syncing: true)
     }
 
-    /// Merges the records in the sync store into this device's, at launch and each time another
-    /// device's arrive: for each pronunciation the record written last wins. The first merge
+    /// Merges the records in the sync store into this device's, at launch, each time the app comes
+    /// back to the foreground, and each time another device's arrive: for each pronunciation the
+    /// record written last wins. The first merge
     /// that brings in pronunciations this device hasn't seen also keeps one per word (see
     /// `PronunciationSync.deduplicatedByWord`). Writes the result back to the store only if it
     /// has other records than the store, order aside, so two devices stop once they agree.
@@ -451,9 +452,8 @@ public final class AppModel {
             pronunciations = Self.livePronunciations(merged)
             isApplyingSyncedPronunciations = false
         }
-        if changedHere || storeDiffers {
-            savePronunciationRecords(syncing: storeDiffers)
-        }
+        guard changedHere || storeDiffers else { return }
+        savePronunciationRecords(syncing: storeDiffers)
         Self.log.info("pronunciations merged", [
             "pronunciations": pronunciations.count,
             "tombstones": merged.count - pronunciations.count,
@@ -529,6 +529,9 @@ public final class AppModel {
         isAppActive = true
         sendOnlineStatus()
         openSharedFiles()
+        // Another device may have changed them while this one was away.
+        pronunciationSyncStore?.refresh()
+        mergeSyncedPronunciations()
     }
 
     /// The app left the foreground. Package for the tests, as `appDidBecomeActive()` is.
