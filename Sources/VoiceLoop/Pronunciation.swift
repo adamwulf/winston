@@ -265,12 +265,12 @@ struct PronunciationReplacer {
 /// between, so KokoroTTS can split a long sentence between them rather than inside one, where
 /// it would guess at the pieces from their spelling. In a message the first starts with a capital
 /// where the word in the message does, since Kokoro's sentences are found by `NLTokenizer`, which
-/// reads a lowercase word after a full stop as the same sentence going on. `PronunciationReplacer`
-/// sets that capital: a word that matches whatever its case may be written otherwise than its
-/// pronunciation's. For the same reason, a word
-/// that ends with sentence punctuation (the "!" of "Yahoo!") has a second set of placeholders,
-/// which keep it after them, for where it ends a sentence (see `PronunciationReplacer`). A
-/// placeholder is found whatever its case, and Kokoro looks words up in lowercase.
+/// reads a lowercase word after a full stop as the same sentence going on. For the same reason, a
+/// word that ends with sentence punctuation (the "!" of "Yahoo!") has a second set of
+/// placeholders, which keep it after them, for where it ends a sentence (see
+/// `PronunciationReplacer`). `PronunciationReplacer` also sets the first's capital: a word that
+/// matches whatever its case may be written otherwise than its pronunciation's. A placeholder is
+/// found whatever its case, and Kokoro looks words up in lowercase.
 ///
 /// Placeholders are kept by word and phonemes, not by pronunciation, and never forgotten: a
 /// message queued before its pronunciation was changed or removed still says the word it was
