@@ -23,6 +23,10 @@ private enum StorageKey {
     static let speechPitch = "speechPitch"
     static let pausesOtherAudio = "pausesOtherAudio"
     static let pronunciations = "pronunciations"
+    /// When this device first launched a build that syncs pronunciations.
+    static let pronunciationsFirstLaunch = "pronunciationsFirstLaunch"
+    /// Set once a merge brought in another device's pronunciations, deduplicated by word.
+    static let pronunciationsMergedFromICloud = "pronunciationsMergedFromICloud"
 }
 
 /// Owns all app state: the Telegram session, the bot chats and their messages, and the voice loop.
@@ -183,17 +187,27 @@ public final class AppModel {
     }
     /// Words said differently, as `VoiceLoop.pronunciations`, in the order settings lists them: a Say As
     /// entry by every voice, an IPA entry by the Kokoro voices only (the system voices say its word as
-    /// written). Persisted.
+    /// written). Persisted, and synced between Adam's devices (see `pronunciationRecords`).
     public var pronunciations: [Pronunciation] {
         didSet {
-            do {
-                defaults.set(try JSONEncoder().encode(pronunciations), forKey: StorageKey.pronunciations)
-            } catch {
-                Self.log.error("saving pronunciations failed", error.logCodes())
+            if !isApplyingSyncedPronunciations {
+                recordPronunciationChanges()
             }
             applyVoiceSettings()
         }
     }
+    /// Every pronunciation as saved and synced: `pronunciations`, in their order, each with when
+    /// it was last written, then tombstones for the ones removed.
+    @ObservationIgnored private var pronunciationRecords: [PronunciationRecord]
+    /// When this device first launched a build that syncs pronunciations: the time a
+    /// pronunciation saved before then was last written.
+    @ObservationIgnored private let pronunciationsFirstLaunch: Date
+    /// Where the pronunciations sync between Adam's devices. Nil in tests that don't sync, and
+    /// in previews.
+    @ObservationIgnored private let pronunciationSyncStore: (any PronunciationSyncStore)?
+    /// True while records from another device are set as `pronunciations`, which then neither
+    /// stamps nor saves them.
+    @ObservationIgnored private var isApplyingSyncedPronunciations = false
     /// A user-facing error from the last action. The chat screen shows it in an alert.
     public var errorMessage: String?
 
@@ -218,27 +232,40 @@ public final class AppModel {
     @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
     /// The app's model: a Telegram session if `Secrets.xcconfig` supplied credentials, the real voice loop,
-    /// the standard user defaults, and on iOS the share extension's outbox in the App Group container.
+    /// the standard user defaults, on iOS the share extension's outbox in the App Group container, and
+    /// the pronunciations synced through iCloud.
     public convenience init() {
-        self.init(voiceLoop: VoiceLoop(), defaults: .standard, shareOutbox: Self.appShareOutbox())
+        self.init(
+            voiceLoop: VoiceLoop(),
+            defaults: .standard,
+            shareOutbox: Self.appShareOutbox(),
+            pronunciationSyncStore: ICloudPronunciationStore()
+        )
     }
 
     /// The app's model with a Telegram session if `Secrets.xcconfig` supplied credentials. Tests pass a voice
-    /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone.
-    package convenience init(voiceLoop: VoiceLoop, defaults: UserDefaults, shareOutbox: ShareOutbox? = nil) {
+    /// loop on a test bed and defaults of their own, so the real Kokoro model and settings are left alone,
+    /// and no sync store, so iCloud's is too.
+    package convenience init(
+        voiceLoop: VoiceLoop,
+        defaults: UserDefaults,
+        shareOutbox: ShareOutbox? = nil,
+        pronunciationSyncStore: (any PronunciationSyncStore)? = nil
+    ) {
         self.init(
             link: AppSecrets.load().map { TelegramLink(config: Self.telegramConfig($0)) },
             voiceLoop: voiceLoop,
             defaults: defaults,
             openedFileInboxes: Self.appOpenedFileInboxes,
-            shareOutbox: shareOutbox
+            shareOutbox: shareOutbox,
+            pronunciationSyncStore: pronunciationSyncStore
         )
     }
 
     /// Tests pass a link over a fake TDLib, a voice loop on offline audio, defaults of their own,
-    /// a fake pronunciation suggester, folders of their own as the inboxes for opened files, and a
-    /// share outbox in a folder of their own. `hasCredentials` defaults to whether there is a link;
-    /// only previews have one without the other.
+    /// a fake pronunciation suggester, folders of their own as the inboxes for opened files, a
+    /// share outbox in a folder of their own, and a fake sync store or none. `hasCredentials`
+    /// defaults to whether there is a link; only previews have one without the other.
     package init(
         link: TelegramLink?,
         voiceLoop: VoiceLoop,
@@ -246,7 +273,8 @@ public final class AppModel {
         hasCredentials: Bool? = nil,
         pronunciationSuggester: any PronunciationSuggester = OnDevicePronunciationSuggester(),
         openedFileInboxes: [URL] = [],
-        shareOutbox: ShareOutbox? = nil
+        shareOutbox: ShareOutbox? = nil,
+        pronunciationSyncStore: (any PronunciationSyncStore)? = nil
     ) {
         self.link = link
         pushRegistration = PushRegistration(link: link)
@@ -264,8 +292,17 @@ public final class AppModel {
         speechRate = defaults.object(forKey: StorageKey.speechRate) as? Float ?? VoiceLoop.defaultSpeechRate
         speechPitch = defaults.object(forKey: StorageKey.speechPitch) as? Float ?? VoiceLoop.defaultSpeechPitch
         pausesOtherAudio = defaults.object(forKey: StorageKey.pausesOtherAudio) as? Bool ?? true
-        pronunciations = Self.savedPronunciations(in: defaults)
+        pronunciationsFirstLaunch = Self.pronunciationsFirstLaunch(in: defaults)
+        pronunciationRecords = Self.savedPronunciationRecords(in: defaults, unstampedAt: pronunciationsFirstLaunch)
+        pronunciations = Self.livePronunciations(pronunciationRecords)
+        self.pronunciationSyncStore = pronunciationSyncStore
         applyVoiceSettings()
+        if let pronunciationSyncStore {
+            mergeSyncedPronunciations()
+            pronunciationSyncStore.onExternalChange { [weak self] in
+                self?.mergeSyncedPronunciations()
+            }
+        }
         // After the saved voice is set: a Kokoro voice keeps its model.
         voiceLoop.removeUnusedKokoroModel()
         observeAppActivation()
@@ -330,15 +367,116 @@ public final class AppModel {
         return saved.flatMap(KokoroModelVariant.init(rawValue:)) ?? VoiceLoop.defaultKokoroModelVariant
     }
 
-    /// The pronunciations saved in `defaults`, or none if there are none or they can't be read.
-    private static func savedPronunciations(in defaults: UserDefaults) -> [Pronunciation] {
+    /// The pronunciation records saved in `defaults`, or none if there are none or they can't be
+    /// read. One saved before sync was last written at `unstampedAt`.
+    private static func savedPronunciationRecords(in defaults: UserDefaults, unstampedAt: Date) -> [PronunciationRecord] {
         guard let data = defaults.data(forKey: StorageKey.pronunciations) else { return [] }
         do {
-            return try JSONDecoder().decode([Pronunciation].self, from: data)
+            return try PronunciationRecord.decoded(from: data, unstampedAt: unstampedAt)
         } catch {
             log.error("saved pronunciations unreadable; starting with none", error.logCodes())
             return []
         }
+    }
+
+    /// When this device first launched a build that syncs pronunciations: saved in `defaults` at
+    /// that launch, and kept.
+    private static func pronunciationsFirstLaunch(in defaults: UserDefaults) -> Date {
+        if let saved = defaults.object(forKey: StorageKey.pronunciationsFirstLaunch) as? Date {
+            return saved
+        }
+        let now = Date()
+        defaults.set(now, forKey: StorageKey.pronunciationsFirstLaunch)
+        return now
+    }
+
+    /// The pronunciations of `records` that aren't tombstones, in order.
+    private static func livePronunciations(_ records: [PronunciationRecord]) -> [Pronunciation] {
+        records.filter { !$0.deleted }.map(\.pronunciation)
+    }
+
+    /// Brings `pronunciationRecords` up to date with an edit in settings: a pronunciation that is
+    /// new or changed is stamped now, and one removed becomes a tombstone. Saves them, here and
+    /// to the sync store, if any record changed.
+    private func recordPronunciationChanges() {
+        let now = Date()
+        let recordsByID = Dictionary(pronunciationRecords.map { ($0.id, $0) }) { first, _ in first }
+        var records = pronunciations.map { pronunciation in
+            if let record = recordsByID[pronunciation.id], !record.deleted, record.pronunciation == pronunciation {
+                return record
+            }
+            return PronunciationRecord(pronunciation, updatedAt: now)
+        }
+        let liveIDs = Set(pronunciations.map(\.id))
+        for record in pronunciationRecords where !liveIDs.contains(record.id) {
+            records.append(record.deleted ? record : .tombstone(id: record.id, updatedAt: now))
+        }
+        records = PronunciationSync.pruned(records, now: now)
+        guard records != pronunciationRecords else { return }
+        pronunciationRecords = records
+        savePronunciationRecords(syncing: true)
+    }
+
+    /// Merges the records in the sync store into this device's, at launch and each time another
+    /// device's arrive: for each pronunciation the record written last wins. The first merge
+    /// that brings in pronunciations this device hasn't seen also keeps one per word (see
+    /// `PronunciationSync.deduplicatedByWord`). Writes the result back to the store only if it
+    /// has other records than the store, order aside, so two devices stop once they agree.
+    private func mergeSyncedPronunciations() {
+        guard let pronunciationSyncStore else { return }
+        var synced: [PronunciationRecord] = []
+        if let data = pronunciationSyncStore.data {
+            do {
+                synced = try PronunciationRecord.decoded(from: data, unstampedAt: pronunciationsFirstLaunch)
+            } catch {
+                // Perhaps saved by a newer build. Written over, it would only be written back.
+                Self.log.error("synced pronunciations unreadable; not merged", error.logCodes())
+                return
+            }
+        }
+        let now = Date()
+        var merged = PronunciationSync.merged(pronunciationRecords, synced)
+        let localIDs = Set(pronunciationRecords.map(\.id))
+        if !defaults.bool(forKey: StorageKey.pronunciationsMergedFromICloud),
+           synced.contains(where: { !localIDs.contains($0.id) }) {
+            merged = PronunciationSync.deduplicatedByWord(merged, now: now)
+            defaults.set(true, forKey: StorageKey.pronunciationsMergedFromICloud)
+        }
+        merged = PronunciationSync.pruned(merged, now: now)
+        let changedHere = merged != pronunciationRecords
+        let storeDiffers = Set(merged) != Set(PronunciationSync.pruned(synced, now: now))
+        if changedHere {
+            pronunciationRecords = merged
+            isApplyingSyncedPronunciations = true
+            pronunciations = Self.livePronunciations(merged)
+            isApplyingSyncedPronunciations = false
+        }
+        if changedHere || storeDiffers {
+            savePronunciationRecords(syncing: storeDiffers)
+        }
+        Self.log.info("pronunciations merged", [
+            "pronunciations": pronunciations.count,
+            "tombstones": merged.count - pronunciations.count,
+            "changedHere": changedHere,
+            "wroteBack": storeDiffers,
+        ])
+    }
+
+    /// Saves `pronunciationRecords` in the user defaults and, when `syncing`, to the sync store.
+    private func savePronunciationRecords(syncing: Bool) {
+        let data: Data
+        do {
+            data = try PronunciationRecord.encoded(pronunciationRecords)
+        } catch {
+            Self.log.error("saving pronunciations failed", error.logCodes())
+            return
+        }
+        defaults.set(data, forKey: StorageKey.pronunciations)
+        guard syncing, let pronunciationSyncStore else { return }
+        if data.count > PronunciationSync.storeLimit {
+            Self.log.error("pronunciations too large to sync", ["bytes": data.count])
+        }
+        pronunciationSyncStore.save(data)
     }
 
     /// Each activation, and each time the app leaves the foreground (to the background on iOS, or
