@@ -56,9 +56,14 @@ saved entry with no `updatedAt` (one from before sync) decodes with that time as
 - An entry with no record in the new list becomes a tombstone stamped `now`.
 - Tombstones that already exist stay.
 
-Then the records are saved to both copies. When the model applies records that came from
-sync, it sets `pronunciations` without stamping them. Stamping them would make another
-device's edits look like new local edits.
+The records are saved to both copies only if stamping changed one of them.
+
+Records that came from sync are applied through a separate path. It sets `pronunciations`
+with a flag on, so the `didSet` neither stamps nor writes anything. Stamping would make
+another device's edits look like new local edits. Writing to the store from there would
+send this device's order back to the other device, which differs from the order it wrote,
+and the two would trade writes forever. The sync path saves the local copy itself, and
+writes to the store only under the rule in "When to write back to the store".
 
 ### Merge
 
@@ -80,14 +85,16 @@ would leave a tombstone for every prefix typed ("J", "JS", "JSO").
 ### First sync: one dedupe by word
 
 Two devices that each had a list before sync have different ids for the same word. The
-first time a device merges records from the store (the first merge where the store holds
-any), it collapses live entries whose trimmed word is the same. The entry with the newest
-`updatedAt` stays, and a tie goes to the greater id string. Each of the others becomes a
-tombstone stamped `max(now, its updatedAt)`. The device then sets
-`pronunciationsMergedFromICloud` in UserDefaults, so later merges don't dedupe. Deduping on
-every merge could tombstone a row while it is being typed on the other device, as soon as
-its word happened to match another entry. The other device runs the same dedupe on its own
-first merge, and because the dedupe is deterministic, both devices reach the same result.
+first merge that brings in ids this device doesn't have yet collapses live entries whose
+trimmed word is the same. A store that holds only this device's own records doesn't count:
+before the entitlement is signed in, the store may keep this device's writes on the device,
+and an early dedupe would use up the flag on nothing. The entry with the newest `updatedAt`
+stays, and a tie goes to the greater id string. Each of the others becomes a tombstone
+stamped `max(now, its updatedAt)`. The device then sets `pronunciationsMergedFromICloud` in
+UserDefaults, so later merges don't dedupe. Deduping on every merge could tombstone a row
+while it is being typed on the other device, as soon as its word happened to match another
+entry. The other device runs the same dedupe on its own first merge that brings in new ids,
+and because the dedupe is deterministic, both devices reach the same result.
 
 ### Pruning and size
 
@@ -112,6 +119,24 @@ back when it has entries the store lacks:
 clock, as dictionaries keyed by id, so order is ignored. If order counted, the two devices'
 different orders would make them write back and forth forever.
 
+If the store's value can't be decoded, the device logs it and skips both the merge and the
+write. One realistic cause is a newer build on the other device that saved a mode this build
+doesn't know. Treating the value as empty would make this device write its own records over
+it, and the newer build would write back, so they would overwrite each other forever.
+(Unreadable local data is still dropped, as today.)
+
+### Accepted costs
+
+- Device clocks decide close calls between edits.
+- A device offline for more than 90 days can bring back a removed entry (see Pruning).
+- The settings order isn't synced.
+- The rollout window. Entries a device had before sync get its first-launch time, so the
+  second device to update stamps its old entries later than anything the first device did in
+  the meantime. Suppose the first device edits a word before the second one updates. The
+  first-sync dedupe then keeps the second device's older copy of that word. A word removed
+  on the first device in that window comes back from the second device's copy, which has
+  a different id. To avoid both, update both apps before editing pronunciations.
+
 ### The seam
 
 A `package` protocol, `PronunciationSyncStore` (main actor): `data` (the synced value or
@@ -126,8 +151,9 @@ device's value arrives. There are two implementations:
   `receive(_ data:)`, which stands for another device's write arriving.
 
 `AppModel`'s package init takes `pronunciationSyncStore: (any PronunciationSyncStore)? = nil`.
-Only the public `init()` passes `ICloudPronunciationStore()`, so tests and previews never touch
-the real store. Without the iCloud entitlement, as in an unsigned build, the real store is
+So does the convenience `init(voiceLoop:defaults:shareOutbox:)`, which the public `init()`
+goes through and which `AppModelWithoutSessionTests` uses. Only the public `init()` passes
+`ICloudPronunciationStore()`, so tests and previews never touch the real store. Without the iCloud entitlement, as in an unsigned build, the real store is
 expected to keep values only on this device, and step 5 checks that.
 
 ## Steps
@@ -169,8 +195,8 @@ Only after step 2.
 ### 4. README
 
 Add a short section on how pronunciations sync: what syncs, last write wins per entry,
-tombstones and their 90 days, the first-sync dedupe, and the entitlement and App ID
-capability. Add `ICloudPronunciationStore.swift` to the files that stay uncovered on purpose,
+tombstones and their 90 days, the first-sync dedupe, the accepted costs (with the advice to
+update both apps before editing pronunciations), and the entitlement and App ID capability. Add `ICloudPronunciationStore.swift` to the files that stay uncovered on purpose,
 and `PronunciationSyncStore` to the table of test seams.
 
 ### 5. Check it
@@ -178,8 +204,15 @@ and `PronunciationSyncStore` to the table of test seams.
 - Builds: `swift test`, and the unsigned iOS Simulator and macOS builds from README → Build
   and test. Run the unsigned Mac build and check that pronunciations still save and come
   back after a relaunch.
-- After step 3, the signed archive's entitlements, checked with `codesign -d --entitlements -`,
-  include `com.apple.developer.ubiquity-kvstore-identifier` for iOS and macOS.
+- After step 3, the signed archives' entitlements, checked with
+  `codesign -d --entitlements -`, include `com.apple.developer.ubiquity-kvstore-identifier`
+  for both iOS and macOS. The Mac app also still has `com.apple.security.app-sandbox` and
+  the other entitlements from the `ENABLE_*` settings, because this is the first time it
+  signs in an entitlements file.
+- After step 3, export both archives with `-exportArchive` and `method` =
+  `app-store-connect`, as in `plans/enable-push.md` step 5. That export is the step that
+  failed for push even though the archive succeeded. On the first Xcode Cloud build after
+  step 3, check that "Exporting for App Store Distribution" passes for both platforms.
 - On a Mac and an iPhone signed in to the same Apple Account: add, edit and remove an entry on
   each device, and check that each change reaches the other. iCloud can take up to a minute
   or so.
@@ -209,8 +242,12 @@ The merge, dedupe and pruning are pure functions. Their tests:
   stamp. A relaunch keeps the same first-launch time.
 - At launch, store records newer than the local ones replace the local ones, and the store is
   written only if the local records add something.
-- Another device's write reaches `pronunciations` and `voiceLoop.pronunciations`, isn't
-  restamped, and isn't written back when nothing local is newer.
+- Another device's write reaches `pronunciations` and `voiceLoop.pronunciations` and isn't
+  restamped. When nothing local is newer, the fake store records no save after it.
+- A relaunch whose store holds only this device's own records doesn't dedupe and doesn't set
+  `pronunciationsMergedFromICloud`. The first merge that brings in new ids does both.
+- A store value that can't be decoded leaves the local records as they are, and nothing is
+  written to the store.
 - Two models on two fake stores: after the test passes the stores' data back and forth, both
   have the same entries and stop writing. This holds when their orders differ, and for lists
   made before sync that share a word.
