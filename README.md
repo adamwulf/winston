@@ -596,9 +596,12 @@ letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
 `us_gold.json` and `us_silver.json`, the same files in both repositories.
 System voices get the text as written.
 
-Settings → Pronunciations lists words said differently: each word, matched with
-its case and only as a whole word, is replaced before anything else, so "JSON"
-said as "Jason" isn't spelled out. A word is either Say As, other text every
+Settings → Pronunciations lists words said differently: each word, matched only
+as a whole word, is replaced before anything else, so "JSON" said as "Jason"
+isn't spelled out. Each word's Match Case toggle (`Pronunciation.matchesCase`)
+says whether it matches only with its case, as every word did before the toggle
+and as a new one does, or whatever its case. Of two words that match the same
+text, the first in the list counts. A word is either Say As, other text every
 voice says in its place, or IPA, Kokoro phonemes in Kokoro's notation (IPA with
 capitals for the diphthongs A, I, O, W and Y, as in `kˈOkəɹO` for "Kokoro";
 KokoroTTS drops a symbol it doesn't have). IPA is for the Kokoro voices only:
@@ -607,7 +610,8 @@ IPA word becomes made-up placeholder words (`PhoneticPlaceholders`), one for
 each word of its phonemes so KokoroTTS can cut a long sentence between them, and
 each sentence goes to Kokoro with its placeholders' phonemes, which `LiveKokoro`
 adds to the loaded model with `addPronunciations` before rendering it. The
-system voices get the placeholders back as the word, as written. Where sentence
+system voices get the placeholders back as the word, as written in settings,
+even where a word that doesn't match case matched in another. Where sentence
 punctuation that ends the word ("Yahoo!") ends a sentence in the message, it
 stays after the placeholders, so the sentence still ends there; elsewhere ("Mr.
 Smith") the placeholders stand for all of the word. A space keeps placeholders
@@ -618,7 +622,7 @@ does.
 `AppModel` saves the pronunciations in the standard user defaults, under
 `pronunciations`, and syncs them between devices (see
 [Pronunciation sync](#pronunciation-sync)); one saved before IPA existed is
-Say As.
+Say As, and one saved before Match Case existed matches case.
 
 An IPA row has a Suggest button (sparkles). It lists a few ways to say the word,
 each with its phonemes, a respelling and a note, a play button, and Use, which
@@ -735,7 +739,10 @@ Winston for more than 90 days can bring back a removed pronunciation. And while 
 still on a build without sync, its old pronunciations get a later stamp than
 the first device's edits from that time: when it updates, the dedupe keeps its
 copy of a word the first device edited, and a word the first device removed
-comes back. Update both apps before editing pronunciations.
+comes back. Update both apps before editing pronunciations. A build from
+before Match Case saves every word as matching case, with the stamp it had;
+a tie goes to the record that doesn't match case, so that alone changes
+nothing, but editing a word on that build turns its Match Case back on.
 
 It needs iCloud on the App ID and the
 `com.apple.developer.ubiquity-kvstore-identifier` entitlement

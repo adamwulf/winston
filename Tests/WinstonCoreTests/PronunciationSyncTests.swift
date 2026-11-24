@@ -46,12 +46,14 @@ struct PronunciationMergeTests {
         // A removal wins a tie.
         #expect(PronunciationSync.merged([edit], [removal]) == [removal])
         #expect(PronunciationSync.merged([removal], [edit]) == [removal])
-        // Of two edits, the same one on either device, even when only whether they match case
-        // differs.
+        // Of two edits, the same one on either device.
         #expect(PronunciationSync.merged([edit], [otherEdit]) == PronunciationSync.merged([otherEdit], [edit]))
+        // Of two that differ only in whether they match case, the one that doesn't: a build from
+        // before the choice saves the other, with the same stamp.
         var caseless = edit
         caseless.pronunciation.matchesCase = false
-        #expect(PronunciationSync.merged([edit], [caseless]) == PronunciationSync.merged([caseless], [edit]))
+        #expect(PronunciationSync.merged([edit], [caseless]) == [caseless])
+        #expect(PronunciationSync.merged([caseless], [edit]) == [caseless])
     }
 
     @Test func aLaterChangeOfWhetherItMatchesCaseWins() {
