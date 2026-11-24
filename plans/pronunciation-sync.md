@@ -124,8 +124,10 @@ different orders would make them write back and forth forever.
 If the store's value can't be decoded, the device logs it and skips both the merge and the
 write. One realistic cause is a newer build on the other device that saved a mode this build
 doesn't know. Treating the value as empty would make this device write its own records over
-it, and the newer build would write back, so they would overwrite each other forever.
-(Unreadable local data is still dropped, as today.)
+it, and the newer build would write back, so they would overwrite each other forever. An
+edit on this device still saves its records over the value. The newer build then merges
+that edit and writes its own records back, once per edit, with no loop. (Unreadable local
+data is still dropped, as today.)
 
 ### Accepted costs
 
@@ -153,7 +155,8 @@ time another device's value arrives. There are two implementations:
   that stay uncovered on purpose.
 - `FakePronunciationSyncStore` in `Tests/WinstonCoreTests` is an in-memory value plus
   `receive(_ data:)`, which stands for another device's write arriving and being announced.
-  `arriveUnannounced(_:)` stands for one that came while the app was away.
+  `arriveUnannounced(_:)` stands for one that came while the app was away, which `refresh()`
+  brings in.
 
 `AppModel`'s package init takes `pronunciationSyncStore: (any PronunciationSyncStore)? = nil`.
 So does the convenience `init(voiceLoop:defaults:shareOutbox:)`, which the public `init()`
@@ -260,8 +263,10 @@ The merge, dedupe and pruning are pure functions. Their tests:
   restamped. When nothing local is newer, the fake store records no save after it.
 - A relaunch whose store holds only this device's own records doesn't dedupe and doesn't set
   `pronunciationsMergedFromICloud`. The first merge that brings in new ids does both.
-- A store value that can't be decoded leaves the local records as they are, and nothing is
-  written to the store.
+- A store value that can't be decoded leaves the local records as they are, and the merge
+  writes nothing to the store.
+- Coming back to the foreground asks the store for news, and picks up a value another
+  device saved while the app was away, with no notification.
 - Two models on two fake stores: after the test passes the stores' data back and forth, both
   have the same entries and stop writing. This holds when their orders differ, and for lists
   made before sync that share a word.

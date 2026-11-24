@@ -214,13 +214,12 @@ struct PronunciationSyncModelTests {
 
     @Test func comingBackToTheForegroundPicksUpWhatAnotherDeviceSavedMeanwhile() throws {
         let device = try Device()
-        #expect(device.store.refreshes == 0)
         let theirs = [PronunciationRecord(Pronunciation(word: "JSON", replacement: "Jason"), updatedAt: Date())]
+        // In the store only once the model asks for news.
         device.store.arriveUnannounced(try PronunciationRecord.encoded(theirs))
 
         device.model.appDidBecomeActive()
 
-        #expect(device.store.refreshes == 1)
         #expect(device.model.pronunciations == theirs.map(\.pronunciation))
         #expect(device.model.voiceLoop.pronunciations == theirs.map(\.pronunciation))
         #expect(device.store.saves.isEmpty)

@@ -196,7 +196,7 @@ can't see them.
 | A system language and installed voices it can change | `languageCode` and `systemVoices` in `VoiceEnvironment` | `VoiceTestBed`: American English and the Mac's own voices unless a test sets others, and a record of each time the loop lists the voices |
 | A day going by | `now` in `VoiceEnvironment` | `VoiceTestBed.now`: stands still until a test moves it |
 | The app's standard user defaults | `kokoroUnchosenSince` and `setKokoroUnchosenSince` in `VoiceEnvironment` | `VoiceTestBed.kokoroUnchosenSince`: kept in memory; a loop made later on the same bed sees it, as after a relaunch |
-| iCloud's key-value store | `PronunciationSyncStore`, as `pronunciationSyncStore` in `AppModel`'s package init (nil, no sync, unless a test passes one) | `FakePronunciationSyncStore`: one device's copy of the store, in memory, with every save it made and how often it was asked for news; `receive(_:)` is another device's write arriving, and `arriveUnannounced(_:)` one that came while the app was away |
+| iCloud's key-value store | `PronunciationSyncStore`, as `pronunciationSyncStore` in `AppModel`'s package init (nil, no sync, unless a test passes one) | `FakePronunciationSyncStore`: one device's copy of the store, in memory, with every save it made; `receive(_:)` is another device's write arriving, and `arriveUnannounced(_:)` one that came while the app was away, which `refresh()` brings in |
 
 Everything else is the production code: the `TelegramLink` actor with its
 update decoding and mapping, the `VoiceLoop` with its pipeline, converter,
@@ -754,10 +754,12 @@ these per-platform files. Adding iCloud there made a new, unconditional
 both files by hand.
 
 Logs: `label=app.pronunciations` has `synced pronunciations changed` with the
-store's reason, `synced pronunciations over iCloud's quota`, and, at launch,
+store's reason, `synced pronunciations over iCloud's quota`, and
 `iCloud key-value store unavailable; pronunciations stay on this device` when
-the store can't sync, as in a build without the entitlement.
-`label=app.model` has `pronunciations merged` with counts,
+the store can't sync, as in a build without the entitlement. That one is
+logged at launch and each time the app comes back to the foreground, so on the
+Mac at every switch to Winston. `label=app.model` has `pronunciations merged`
+with counts, only for a merge that changed something here or wrote back,
 `synced pronunciations unreadable; not merged`, and
 `pronunciations too large to sync` with its size. No word is logged.
 

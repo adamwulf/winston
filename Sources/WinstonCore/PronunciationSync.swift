@@ -147,8 +147,9 @@ package protocol PronunciationSyncStore: AnyObject {
     var data: Data? { get }
     /// Saves `data` here, to sync to the other devices.
     func save(_ data: Data)
-    /// Asks for what the other devices saved since this one last looked: at launch, and each
-    /// time the app comes back to the foreground.
+    /// Asks for what the other devices saved since this one last looked. The model calls it each
+    /// time the app comes back to the foreground; `ICloudPronunciationStore` also calls it as it
+    /// is made, at launch.
     func refresh()
     /// Calls `handler` each time another device's records arrive, once `data` has them.
     func onExternalChange(_ handler: @escaping @MainActor @Sendable () -> Void)
