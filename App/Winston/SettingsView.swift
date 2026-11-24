@@ -440,14 +440,15 @@ private struct PronunciationsSection: View {
         } header: {
             Text("Pronunciations")
         } footer: {
-            Text("Say As: each word is said the way you write it beside it, by every voice. Words match only with the same case, such as JSON said as Jason. IPA: Kokoro voices say the word with the phonemes you write, in Kokoro's symbols, such as kˈOkəɹO for Kokoro; symbols Kokoro doesn't know are dropped. Other voices say the word as written. With Apple Intelligence, the sparkles button suggests phonemes to try.")
+            Text("Say As: each word is said the way you write it beside it, by every voice, such as JSON said as Jason. With Match Case (Aa) on, a word matches only with the same case; with it off, JSON also matches json and Json. IPA: Kokoro voices say the word with the phonemes you write, in Kokoro's symbols, such as kˈOkəɹO for Kokoro; symbols Kokoro doesn't know are dropped. Other voices say the word as written. With Apple Intelligence, the sparkles button suggests phonemes to try.")
         }
     }
 }
 
-/// One pronunciation: the word, whether it is said as other text (Say As) or with Kokoro phonemes
-/// (IPA), and that text or those phonemes. Word and text are typed exactly as written, since the
-/// word matches only with the same case. Each side has a play button in the chosen voice: the
+/// One pronunciation: the word, whether it matches only with the same case (Match Case, on for a
+/// new one), whether it is said as other text (Say As) or with Kokoro phonemes (IPA), and that text
+/// or those phonemes. Word and text are typed exactly as written, since the word may match only
+/// with the same case. Each side has a play button in the chosen voice: the
 /// word's says it as written, so it can be compared with the other side's, which says the text as
 /// written, or the word with the phonemes (with a system voice, the word as written, as a reply
 /// would). An IPA row also has a Suggest button, which offers phonemes for the word (see
@@ -468,6 +469,12 @@ private struct PronunciationRow: View {
                 PlayButton(help: "Play Word", accessibilityLabel: "Play word", isEnabled: !isBlank(pronunciation.word)) {
                     play(pronunciation.word)
                 }
+                Toggle(isOn: $pronunciation.matchesCase) {
+                    Label("Match Case", systemImage: "textformat")
+                }
+                .toggleStyle(.button)
+                .labelStyle(.iconOnly)
+                .help("Match Case")
                 Picker("Pronunciation Type", selection: $pronunciation.mode) {
                     Text("Say As").tag(Pronunciation.Mode.respelling)
                     Text("IPA").tag(Pronunciation.Mode.phonetic)

@@ -86,6 +86,26 @@ struct PronunciationSyncModelTests {
         #expect(device.store.saves.count == 1)
     }
 
+    @Test func turningMatchCaseOffIsStampedAndSyncedAsAnEditAndReachesTheOtherDevice() throws {
+        let minuteAgo = Date() - 60
+        let before = [PronunciationRecord(Pronunciation(word: "JSON", replacement: "Jason"), updatedAt: minuteAgo)]
+        let mac = try Device(synced: try PronunciationRecord.encoded(before))
+        let iPhone = try Device(synced: mac.store.data)
+
+        mac.model.pronunciations[0].matchesCase = false
+
+        let after = try mac.syncedRecords()
+        #expect(after.map(\.pronunciation.matchesCase) == [false])
+        #expect(after[0].updatedAt > minuteAgo + 30)
+        #expect(mac.store.saves.count == 1)
+        #expect(mac.model.voiceLoop.pronunciations == mac.model.pronunciations)
+
+        iPhone.store.receive(mac.store.data)
+
+        #expect(iPhone.model.pronunciations == mac.model.pronunciations)
+        #expect(iPhone.model.voiceLoop.pronunciations.map(\.matchesCase) == [false])
+    }
+
     @Test func aRemovalSyncsATombstoneWithNothingButItsID() throws {
         let device = try Device()
         let model = device.model
