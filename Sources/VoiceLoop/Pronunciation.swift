@@ -20,31 +20,44 @@ public struct Pronunciation: Codable, Hashable, Identifiable, Sendable {
     }
 
     public var id: UUID
-    /// The word as written. It matches only with the same case, and only as a whole word: "API"
-    /// matches in "the API's docs", but not in "APIs" or "api". It can be several words.
+    /// The word as written. It matches only as a whole word: "API" matches in "the API's docs",
+    /// but not in "APIs". It can be several words.
     public var word: String
     /// What is said in its place: text for a respelling, phonemes for a phonetic pronunciation.
     public var replacement: String
     public var mode: Mode
+    /// Whether `word` matches only with the same case: "API" then matches "API" but not "api" or
+    /// "Api". Otherwise it matches whatever its case, and a system voice says a phonetic word it
+    /// matched in another case as `word` has it.
+    public var matchesCase: Bool
 
-    public init(id: UUID = UUID(), word: String = "", replacement: String = "", mode: Mode = .respelling) {
+    public init(
+        id: UUID = UUID(),
+        word: String = "",
+        replacement: String = "",
+        mode: Mode = .respelling,
+        matchesCase: Bool = true
+    ) {
         self.id = id
         self.word = word
         self.replacement = replacement
         self.mode = mode
+        self.matchesCase = matchesCase
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, word, replacement, mode
+        case id, word, replacement, mode, matchesCase
     }
 
-    /// One saved before there were phonetic pronunciations has no mode: it is a respelling.
+    /// One saved before there were phonetic pronunciations has no mode: it is a respelling. One
+    /// saved before there was a choice of case matches only with the same case.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         word = try container.decode(String.self, forKey: .word)
         replacement = try container.decode(String.self, forKey: .replacement)
         mode = try container.decodeIfPresent(Mode.self, forKey: .mode) ?? .respelling
+        matchesCase = try container.decodeIfPresent(Bool.self, forKey: .matchesCase) ?? true
     }
 }
 
@@ -63,42 +76,60 @@ struct PronunciationReplacer {
         case placeholders(plain: String, keepingPunctuation: String?)
     }
 
-    /// What goes in place of each word.
+    /// What goes in place of each word that matches only with the same case.
     private let replacements: [String: Replacement]
+    /// What goes in place of each word that matches whatever its case, by the word in lowercase.
+    private let caselessReplacements: [String: Replacement]
     /// Matches any of the words; nil when there are none.
     private let pattern: NSRegularExpression?
 
     /// Words and replacements are trimmed, and one left blank is skipped: it is still being
-    /// typed. Of two with the same word, the first counts, whatever their modes. A phonetic
-    /// pronunciation takes its placeholders from `placeholders`, and is skipped if it has none
-    /// there.
+    /// typed. Of two that match the same text, the first counts, whatever their modes: a word
+    /// that matches whatever its case, after one with the same word in another case that matches
+    /// only with it, still matches the other cases. A phonetic pronunciation takes its
+    /// placeholders from `placeholders`, and is skipped if it has none there.
     init(_ pronunciations: [Pronunciation], placeholders: PhoneticPlaceholders = PhoneticPlaceholders()) {
         var replacements: [String: Replacement] = [:]
+        var caselessReplacements: [String: Replacement] = [:]
+        // Each word as `pattern` matches it, with its length.
+        var alternatives: [(pattern: String, length: Int)] = []
         for pronunciation in pronunciations {
             let word = pronunciation.word.trimmingCharacters(in: .whitespacesAndNewlines)
             let replacement = pronunciation.replacement.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !word.isEmpty, !replacement.isEmpty, replacements[word] == nil else { continue }
+            let lowercased = word.lowercased()
+            guard !word.isEmpty, !replacement.isEmpty, caselessReplacements[lowercased] == nil,
+                  !pronunciation.matchesCase || replacements[word] == nil else { continue }
+            let value: Replacement
             switch pronunciation.mode {
             case .respelling:
-                replacements[word] = .text(replacement)
+                value = .text(replacement)
             case .phonetic:
                 guard let plain = placeholders.text(for: word, phonemes: replacement, keepingPunctuation: false) else {
                     continue
                 }
                 let kept = placeholders.text(for: word, phonemes: replacement, keepingPunctuation: true)
-                replacements[word] = .placeholders(plain: plain, keepingPunctuation: kept == plain ? nil : kept)
+                value = .placeholders(plain: plain, keepingPunctuation: kept == plain ? nil : kept)
+            }
+            let escaped = NSRegularExpression.escapedPattern(for: word)
+            if pronunciation.matchesCase {
+                replacements[word] = value
+                alternatives.append((escaped, word.count))
+            } else {
+                caselessReplacements[lowercased] = value
+                alternatives.append(("(?i:" + escaped + ")", word.count))
             }
         }
         self.replacements = replacements
-        guard !replacements.isEmpty else {
+        self.caselessReplacements = caselessReplacements
+        guard !alternatives.isEmpty else {
             pattern = nil
             return
         }
         // Longest first, so "New York City" wins over "New York". Not after or before a letter
         // or digit, so only whole words match.
-        let words = replacements.keys
-            .sorted { $0.count > $1.count }
-            .map(NSRegularExpression.escapedPattern(for:))
+        let words = alternatives
+            .sorted { $0.length > $1.length }
+            .map(\.pattern)
             .joined(separator: "|")
         do {
             pattern = try NSRegularExpression(pattern: #"(?<![\p{L}\p{N}])(?:"# + words + #")(?![\p{L}\p{N}])"#)
@@ -137,9 +168,9 @@ struct PronunciationReplacer {
 
         var cursor = text.startIndex
         for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-            guard let range = Range(match.range, in: text), let replacement = replacements[String(text[range])] else {
-                continue
-            }
+            guard let range = Range(match.range, in: text) else { continue }
+            let word = String(text[range])
+            guard let replacement = replacements[word] ?? caselessReplacements[word.lowercased()] else { continue }
             append(text[cursor..<range.lowerBound], isPlaceholders: false)
             switch replacement {
             case .text(let replacement):
@@ -153,6 +184,11 @@ struct PronunciationReplacer {
                         placeholders = keepingPunctuation
                     }
                 }
+                // The first starts with a capital where the word in `text` does, which for a
+                // word that matches whatever its case isn't always where its pronunciation's does.
+                let first = placeholders.prefix(1)
+                placeholders = (word.first?.isUppercase == true ? first.uppercased() : first.lowercased())
+                    + placeholders.dropFirst()
                 append(placeholders, isPlaceholders: true)
             }
             cursor = range.upperBound

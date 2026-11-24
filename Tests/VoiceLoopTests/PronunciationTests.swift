@@ -39,7 +39,43 @@ import Testing
     }
 }
 
-/// Saved pronunciations: each has a mode, and one saved before there were modes is a respelling.
+/// Pronunciations whose word matches whatever its case, beside ones that match only with the same
+/// case.
+@Suite struct CaselessPronunciationTests {
+    private func say(_ text: String, with pronunciations: [Pronunciation]) -> String {
+        PronunciationReplacer(pronunciations).replaced(in: text)
+    }
+
+    @Test func aWordThatDoesntMatchCaseIsReplacedInAnyCaseButStillOnlyWhole() {
+        let json = Pronunciation(word: "JSON", replacement: "Jason", matchesCase: false)
+
+        #expect(say("Use JSON, json or Json, not JSONs.", with: [json]) == "Use Jason, Jason or Jason, not JSONs.")
+        #expect(say("json's keys", with: [json]) == "Jason's keys")
+    }
+
+    @Test func eachWordMatchesCaseOrNotOnItsOwn() {
+        let city = Pronunciation(word: "New York City", replacement: "the city")
+        let state = Pronunciation(word: "New York", replacement: "NY", matchesCase: false)
+
+        // The longer word matches only with its case, so in lowercase the shorter one matches.
+        #expect(say("New York City, new york city", with: [city, state]) == "the city, NY city")
+    }
+
+    @Test func ofTwoThatMatchTheSameTextTheFirstCounts() {
+        let exact = Pronunciation(word: "API", replacement: "A P I")
+        let caseless = Pronunciation(word: "api", replacement: "app ee", matchesCase: false)
+
+        // The one that matches only "API" first: the other still matches the other cases.
+        #expect(say("API, api, Api", with: [exact, caseless]) == "A P I, app ee, app ee")
+        // The one that matches every case first: the other never counts, nor does another that
+        // matches every case.
+        let otherCaseless = Pronunciation(word: "Api", replacement: "ap ee", matchesCase: false)
+        #expect(say("API, api, Api", with: [caseless, exact, otherCaseless]) == "app ee, app ee, app ee")
+    }
+}
+
+/// Saved pronunciations: each has a mode and whether it matches case. One saved before there were
+/// modes is a respelling, and one saved before the choice of case matches case.
 @Suite struct PronunciationModeTests {
     @Test func oneSavedWithoutAModeIsARespelling() throws {
         let id = UUID()
@@ -63,6 +99,26 @@ import Testing
 
     @Test func aNewPronunciationIsARespelling() {
         #expect(Pronunciation().mode == .respelling)
+    }
+
+    @Test func aNewOrSavedBeforeTheChoicePronunciationMatchesCase() throws {
+        let saved = Data(#"[{"id": "\#(UUID().uuidString)", "word": "JSON", "replacement": "Jason", "mode": "respelling"}]"#.utf8)
+
+        let pronunciations = try JSONDecoder().decode([Pronunciation].self, from: saved)
+
+        #expect(pronunciations.map(\.matchesCase) == [true])
+        #expect(Pronunciation().matchesCase)
+    }
+
+    @Test func whetherItMatchesCaseIsSavedAndRead() throws {
+        let pronunciations = [
+            Pronunciation(word: "JSON", replacement: "Jason", matchesCase: false),
+            Pronunciation(word: "API", replacement: "A P I", matchesCase: true),
+        ]
+
+        let read = try JSONDecoder().decode([Pronunciation].self, from: JSONEncoder().encode(pronunciations))
+
+        #expect(read == pronunciations)
     }
 }
 
@@ -109,6 +165,20 @@ private func capitalP(_ number: Int) -> String {
         #expect(KokoroText.sentences(in: said) == ["Not \(p(1)).", "\(capitalP(0)) is next."])
         #expect(placeholders.phonemes(in: said) == [p(0): "kˈOkəɹO", p(1): "ˌIˌOˈɛs"])
         #expect(placeholders.written(said) == "Not iOS. Kokoro is next.")
+    }
+
+    @Test func aPhoneticWordThatDoesntMatchCaseTakesItsCapitalFromTheText() {
+        let kokoro = Pronunciation(word: "kokoro", replacement: "kˈOkəɹO", mode: .phonetic, matchesCase: false)
+        let ios = Pronunciation(word: "IOS", replacement: "ˌIˌOˈɛs", mode: .phonetic, matchesCase: false)
+        var placeholders = PhoneticPlaceholders()
+
+        let said = say("Not ios. Kokoro, KOKORO and kokoro on iOS.", with: [kokoro, ios], placeholders: &placeholders)
+
+        #expect(said == "Not \(p(1)). \(capitalP(0)), \(capitalP(0)) and \(p(0)) on \(p(1)).")
+        #expect(KokoroText.sentences(in: said) == ["Not \(p(1)).", "\(capitalP(0)), \(capitalP(0)) and \(p(0)) on \(p(1))."])
+        #expect(placeholders.phonemes(in: said) == [p(0): "kˈOkəɹO", p(1): "ˌIˌOˈɛs"])
+        // A system voice says each as its pronunciation has it.
+        #expect(placeholders.written(said) == "Not IOS. kokoro, kokoro and kokoro on IOS.")
     }
 
     @Test func eachPhonemeWordHasAPlaceholderOfItsOwnAndASystemVoiceGetsTheWordOnce() {

@@ -94,8 +94,8 @@ package enum PronunciationSync {
     }
 
     /// The one of two records of an id that wins: the one written later. Of two written at the
-    /// same time a tombstone wins, then the one greater by word, replacement and mode, so
-    /// either device picks the same one.
+    /// same time a tombstone wins, then the one greater by word, replacement, mode and whether it
+    /// matches case, so either device picks the same one.
     package static func newer(_ first: PronunciationRecord, _ second: PronunciationRecord) -> PronunciationRecord {
         if first.updatedAt != second.updatedAt {
             return first.updatedAt > second.updatedAt ? first : second
@@ -104,7 +104,8 @@ package enum PronunciationSync {
             return first.deleted ? first : second
         }
         let (a, b) = (first.pronunciation, second.pronunciation)
-        return (a.word, a.replacement, a.mode.rawValue) >= (b.word, b.replacement, b.mode.rawValue) ? first : second
+        return (a.word, a.replacement, a.mode.rawValue, a.matchesCase ? 1 : 0)
+            >= (b.word, b.replacement, b.mode.rawValue, b.matchesCase ? 1 : 0) ? first : second
     }
 
     /// `records` with one live pronunciation per word, for the first merge with another

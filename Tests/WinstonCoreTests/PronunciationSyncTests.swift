@@ -46,8 +46,22 @@ struct PronunciationMergeTests {
         // A removal wins a tie.
         #expect(PronunciationSync.merged([edit], [removal]) == [removal])
         #expect(PronunciationSync.merged([removal], [edit]) == [removal])
-        // Of two edits, the same one on either device.
+        // Of two edits, the same one on either device, even when only whether they match case
+        // differs.
         #expect(PronunciationSync.merged([edit], [otherEdit]) == PronunciationSync.merged([otherEdit], [edit]))
+        var caseless = edit
+        caseless.pronunciation.matchesCase = false
+        #expect(PronunciationSync.merged([edit], [caseless]) == PronunciationSync.merged([caseless], [edit]))
+    }
+
+    @Test func aLaterChangeOfWhetherItMatchesCaseWins() {
+        let id = UUID()
+        let older = live(id, "JSON", "Jason", at: 0)
+        var newer = live(id, "JSON", "Jason", at: 10)
+        newer.pronunciation.matchesCase = false
+
+        #expect(PronunciationSync.merged([older], [newer]) == [newer])
+        #expect(PronunciationSync.merged([newer], [older]) == [newer])
     }
 
     @Test func mergingGivesTheSameRecordsEitherWayRoundAndAgainOnItsOwnResult() {
@@ -146,12 +160,17 @@ struct PronunciationRecordCodingTests {
     @Test func recordsComeBackAsTheyWereSaved() throws {
         let records = [
             PronunciationRecord(Pronunciation(word: "Kokoro", replacement: "kˈOkəɹO", mode: .phonetic), updatedAt: start + 0.25),
+            PronunciationRecord(Pronunciation(word: "JSON", replacement: "Jason", matchesCase: false), updatedAt: start + 1),
             tombstone(UUID(), at: 3),
         ]
 
         let data = try PronunciationRecord.encoded(records)
 
         #expect(try PronunciationRecord.decoded(from: data, unstampedAt: .distantPast) == records)
+        // Flat: whether it matches case sits beside the record's own fields.
+        let objects = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        #expect(objects.map { $0["matchesCase"] as? Bool } == [true, false, true])
+        #expect(objects.map { $0["deleted"] as? Bool } == [false, false, true])
     }
 
     @Test func pronunciationsSavedBeforeSyncAreLiveAndTakeTheFirstLaunchTime() throws {
@@ -161,5 +180,19 @@ struct PronunciationRecordCodingTests {
         let records = try PronunciationRecord.decoded(from: data, unstampedAt: start)
 
         #expect(records == [live(id, "JSON", "Jason", at: 0)])
+    }
+
+    @Test func recordsSavedBeforeTheChoiceOfCaseMatchCase() throws {
+        let id = UUID()
+        // As JSONEncoder saves a date: seconds since the reference date.
+        let data = Data(#"""
+            [{"id": "\#(id.uuidString)", "word": "JSON", "replacement": "Jason", "mode": "respelling",
+              "updatedAt": \#(start.timeIntervalSinceReferenceDate), "deleted": false}]
+            """#.utf8)
+
+        let records = try PronunciationRecord.decoded(from: data, unstampedAt: .distantPast)
+
+        #expect(records == [live(id, "JSON", "Jason", at: 0)])
+        #expect(records.map(\.pronunciation.matchesCase) == [true])
     }
 }
