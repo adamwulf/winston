@@ -56,14 +56,17 @@ struct PronunciationMergeTests {
         #expect(PronunciationSync.merged([caseless], [edit]) == [caseless])
     }
 
-    @Test func aLaterChangeOfWhetherItMatchesCaseWins() {
+    @Test func aLaterChangeOfWhetherItMatchesCaseWinsEitherWay() {
         let id = UUID()
-        let older = live(id, "JSON", "Jason", at: 0)
-        var newer = live(id, "JSON", "Jason", at: 10)
-        newer.pronunciation.matchesCase = false
+        let on = live(id, "JSON", "Jason", at: 0)
+        var off = live(id, "JSON", "Jason", at: 10)
+        off.pronunciation.matchesCase = false
+        let onAgain = live(id, "JSON", "Jason", at: 20)
 
-        #expect(PronunciationSync.merged([older], [newer]) == [newer])
-        #expect(PronunciationSync.merged([newer], [older]) == [newer])
+        #expect(PronunciationSync.merged([on], [off]) == [off])
+        #expect(PronunciationSync.merged([off], [on]) == [off])
+        #expect(PronunciationSync.merged([off], [onAgain]) == [onAgain])
+        #expect(PronunciationSync.merged([onAgain], [off]) == [onAgain])
     }
 
     @Test func mergingGivesTheSameRecordsEitherWayRoundAndAgainOnItsOwnResult() {

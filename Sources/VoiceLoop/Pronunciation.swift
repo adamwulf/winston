@@ -264,8 +264,10 @@ struct PronunciationReplacer {
 /// A word said with some phonemes has a placeholder for each of the phonemes' words, a space
 /// between, so KokoroTTS can split a long sentence between them rather than inside one, where
 /// it would guess at the pieces from their spelling. In a message the first starts with a capital
-/// where the word does, since Kokoro's sentences are found by `NLTokenizer`, which reads a
-/// lowercase word after a full stop as the same sentence going on. For the same reason, a word
+/// where the word in the message does, since Kokoro's sentences are found by `NLTokenizer`, which
+/// reads a lowercase word after a full stop as the same sentence going on. `PronunciationReplacer`
+/// sets that capital: a word that matches whatever its case may be written otherwise than its
+/// pronunciation's. For the same reason, a word
 /// that ends with sentence punctuation (the "!" of "Yahoo!") has a second set of placeholders,
 /// which keep it after them, for where it ends a sentence (see `PronunciationReplacer`). A
 /// placeholder is found whatever its case, and Kokoro looks words up in lowercase.
@@ -286,9 +288,10 @@ struct PhoneticPlaceholders: Sendable {
         let keepsPunctuation: Bool
     }
 
-    /// What a message holds in place of each word said with some phonemes: the placeholders, a
-    /// space between, the first with the word's capital if it starts with one, and the sentence
-    /// punctuation the word ends with, if they keep it.
+    /// What a message holds in place of each word said with some phonemes, as written: the
+    /// placeholders, a space between, the first with the word's capital if it starts with one,
+    /// and the sentence punctuation the word ends with, if they keep it. `PronunciationReplacer`
+    /// gives the first the capital of the word in the message instead.
     private var texts: [Key: String] = [:]
     /// What a system voice says for each set of placeholders, by its first: the word, without the
     /// punctuation they keep, which follows them.
