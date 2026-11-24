@@ -27,8 +27,9 @@ public struct Pronunciation: Codable, Hashable, Identifiable, Sendable {
     public var replacement: String
     public var mode: Mode
     /// Whether `word` matches only with the same case: "API" then matches "API" but not "api" or
-    /// "Api". Otherwise it matches whatever its case, and a system voice says a phonetic word it
-    /// matched in another case as `word` has it.
+    /// "Api". Otherwise it matches whatever its case: a respelling starts with a capital where the
+    /// word it replaces does, and a system voice says a phonetic word it matched in another case
+    /// as `word` has it.
     public var matchesCase: Bool
 
     public init(
@@ -170,10 +171,17 @@ struct PronunciationReplacer {
         for match in pattern.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
             guard let range = Range(match.range, in: text) else { continue }
             let word = String(text[range])
+            let matchesCase = replacements[word] != nil
             guard let replacement = replacements[word] ?? caselessReplacements[word.lowercased()] else { continue }
             append(text[cursor..<range.lowerBound], isPlaceholders: false)
             switch replacement {
-            case .text(let replacement):
+            case .text(var replacement):
+                // A word that matches whatever its case may start a sentence in `text`, so its
+                // respelling starts with a capital where the word does, or Kokoro would read
+                // the two sentences as one. Its own capitals stay.
+                if !matchesCase, word.first?.isUppercase == true {
+                    replacement = replacement.prefix(1).uppercased() + replacement.dropFirst()
+                }
                 append(replacement, isPlaceholders: false)
             case .placeholders(let plain, let keepingPunctuation):
                 var placeholders = plain

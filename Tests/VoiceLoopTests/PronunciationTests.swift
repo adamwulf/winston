@@ -53,6 +53,19 @@ import Testing
         #expect(say("json's keys", with: [json]) == "Jason's keys")
     }
 
+    @Test func aRespellingThatDoesntMatchCaseStartsWithACapitalWhereItsWordDoesSoSentencesAreStillFound() {
+        let kubectl = Pronunciation(word: "kubectl", replacement: "cube control", matchesCase: false)
+        let api = Pronunciation(word: "api", replacement: "A P I", matchesCase: false)
+
+        let said = say("Install it first. Kubectl runs the cluster, and kubectl calls the api.", with: [kubectl, api])
+
+        #expect(said == "Install it first. Cube control runs the cluster, and cube control calls the A P I.")
+        #expect(KokoroText.sentences(in: said) == ["Install it first.", "Cube control runs the cluster, and cube control calls the A P I."])
+        // One that matches case is said as written.
+        let exact = Pronunciation(word: "Kubectl", replacement: "cube control")
+        #expect(say("First. Kubectl runs.", with: [exact]) == "First. cube control runs.")
+    }
+
     @Test func eachWordMatchesCaseOrNotOnItsOwn() {
         let city = Pronunciation(word: "New York City", replacement: "the city")
         let state = Pronunciation(word: "New York", replacement: "NY", matchesCase: false)
@@ -66,11 +79,11 @@ import Testing
         let caseless = Pronunciation(word: "api", replacement: "app ee", matchesCase: false)
 
         // The one that matches only "API" first: the other still matches the other cases.
-        #expect(say("API, api, Api", with: [exact, caseless]) == "A P I, app ee, app ee")
+        #expect(say("API, api, Api", with: [exact, caseless]) == "A P I, app ee, App ee")
         // The one that matches every case first: the other never counts, nor does another that
         // matches every case.
         let otherCaseless = Pronunciation(word: "Api", replacement: "ap ee", matchesCase: false)
-        #expect(say("API, api, Api", with: [caseless, exact, otherCaseless]) == "app ee, app ee, app ee")
+        #expect(say("API, api, Api", with: [caseless, exact, otherCaseless]) == "App ee, app ee, App ee")
     }
 }
 

@@ -600,8 +600,10 @@ Settings → Pronunciations lists words said differently: each word, matched onl
 as a whole word, is replaced before anything else, so "JSON" said as "Jason"
 isn't spelled out. Each word's Match Case toggle (`Pronunciation.matchesCase`)
 says whether it matches only with its case, as every word did before the toggle
-and as a new one does, or whatever its case. Of two words that match the same
-text, the first in the list counts. A word is either Say As, other text every
+and as a new one does, or whatever its case. Where a word that doesn't match
+case starts with a capital, its Say As text does too, so Kokoro still finds
+the sentence it starts. Of two words that match the same text, the first in
+the list counts. A word is either Say As, other text every
 voice says in its place, or IPA, Kokoro phonemes in Kokoro's notation (IPA with
 capitals for the diphthongs A, I, O, W and Y, as in `kˈOkəɹO` for "Kokoro";
 KokoroTTS drops a symbol it doesn't have). IPA is for the Kokoro voices only:
