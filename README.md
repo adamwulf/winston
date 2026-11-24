@@ -389,7 +389,8 @@ file from Open in:
    soon as the copy is done and the sheet is up, it hands the files to Winston,
    opens it with `com.milestonemade.winston://share` (the URL scheme
    `App/Config/Info.plist` registers), and closes, with nothing to tap; Cancel,
-   while it copies, removes them, and Winston never sees them. A folder,
+   while it copies, removes them, and Winston never sees them. The sheet can't
+   be swiped away, so a copy isn't left to be handed over anyway. A folder,
    nothing sendable (a web link alone) or a file it couldn't read says so, with
    Cancel. VoiceOver reads each of those. A share extension can't open its app
    through `NSExtensionContext` (only Today and iMessage extensions can), so the

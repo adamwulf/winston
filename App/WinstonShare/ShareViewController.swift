@@ -27,6 +27,9 @@ final class ShareViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Not swiped away: a copy still under way would then be handed over once it ends, as
+        // nothing would have cancelled it. Cancel is the way out.
+        isModalInPresentation = true
         let panel = UIHostingController(rootView: SharePanel(
             state: state,
             cancel: { [weak self] in
