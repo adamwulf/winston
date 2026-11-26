@@ -718,7 +718,7 @@ public final class VoiceLoop {
     }
 
     /// Queues `text` to be spoken after anything already queued. Strips markdown/code first, then
-    /// applies `pronunciations`, then splits compound words (`CompoundWords`).
+    /// applies `pronunciations`.
     ///
     /// Ignored while the loop is off, except that replies still queue while a resume after an
     /// interruption is pending (a failed foreground retry shows `.off`). Also queued while it is
@@ -727,14 +727,7 @@ public final class VoiceLoop {
     /// held or not yet sent.
     public func speak(_ text: String) {
         guard state != .off || isStarting || resumeAfterInterruption else { return }
-        enqueue(speech(for: text))
-    }
-
-    /// What is said for a message's `text`: markdown and code stripped, `pronunciations` applied,
-    /// and compound words such as "CorpusGraph" split into their words. Split last, so a
-    /// pronunciation still matches a compound as it is written.
-    private func speech(for text: String) -> String {
-        CompoundWords.split(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
+        enqueue(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
     }
 
     /// Queues `spoken`, text ready to say as it is, after anything already queued. Nothing if it
@@ -754,19 +747,20 @@ public final class VoiceLoop {
 
     /// Says `text` right away in the current voice, speed and pitch, for trying them in settings or
     /// hearing a message again, cutting off an earlier preview. Strips markdown/code first, then
-    /// applies `pronunciations` and splits compound words, as `speak(_:)` does. While the loop is running it also stops any
+    /// applies `pronunciations`, as `speak(_:)` does. While the loop is running it also stops any
     /// reply being spoken and drops queued ones, and it plays through the loop's engine, so echo
     /// cancellation (or half-duplex) keeps it out of the transcript. Otherwise it plays straight
     /// to the speaker on an engine of its own. Like a reply, it uses the system voice for a Kokoro
     /// voice whose model isn't ready.
     public func preview(_ text: String) {
-        preview(spoken: speech(for: text))
+        preview(spoken: pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
     }
 
     /// Says `text` exactly as written, as `preview(_:)` otherwise does, for hearing a pronunciation
     /// in settings: neither markdown stripping nor `pronunciations` change it, just as nothing
     /// changes a replacement once it is in place. Otherwise a swap, such as "cat" said as "dog"
-    /// and "dog" as "cat", would play the wrong word.
+    /// and "dog" as "cat", would play the wrong word. Its compound words are still split, as
+    /// every voice splits them (`CompoundWords`), so it sounds as it would in a message.
     public func preview(asWritten text: String) {
         preview(spoken: text)
     }
@@ -2054,7 +2048,8 @@ public final class VoiceLoop {
         let acronyms = KokoroAcronyms(dictionaryWords: kokoroModel.dictionaryWords)
         return Task {
             // Kokoro can't pronounce digits, or acronyms its dictionary doesn't have. Only its
-            // text is changed: the system voice gets the sentences as written.
+            // text is changed: the system voice gets the sentences as written, and splits their
+            // compound words itself.
             let numbers = KokoroNumbers()
             for (index, sentence) in sentences.enumerated() {
                 guard !Task.isCancelled else { return }
@@ -2065,9 +2060,10 @@ public final class VoiceLoop {
                 }
                 let samples: [Float]
                 do {
-                    // Numbers first: their rules read the words around them as written. Both
-                    // leave placeholders as they are.
-                    let spoken = acronyms.spelledOut(numbers.spelledOut(sentence))
+                    // Compound words split, as every voice has them, then numbers: their rules
+                    // read the words around them as written. All three leave placeholders as
+                    // they are.
+                    let spoken = acronyms.spelledOut(numbers.spelledOut(CompoundWords.split(sentence)))
                     // Read as the sentence starts: placeholders are only ever added, never
                     // changed, so those queued with it are all there.
                     samples = try await engine.synthesize(
@@ -2197,9 +2193,10 @@ public final class VoiceLoop {
     private static let halfDuplexEchoMargin = CMTime(value: 3, timescale: 10)
 
     /// `text` in the chosen voice and speed, for the system voice: every system voice utterance is
-    /// made here. Phonetic pronunciations are for Kokoro, so each placeholder is said as its word.
+    /// made here. Phonetic pronunciations are for Kokoro, so each placeholder is said as its word,
+    /// and then compound words are split, that word's too.
     private func makeUtterance(_ text: String) -> AVSpeechUtterance {
-        let written = phoneticPlaceholders.written(text)
+        let written = CompoundWords.split(phoneticPlaceholders.written(text))
         environment.systemVoiceWillSay(written)
         let utterance = AVSpeechUtterance(string: written)
         utterance.voice = voice()

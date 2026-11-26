@@ -249,6 +249,21 @@ struct KokoroSpeakingTests {
         ))
     }
 
+    @Test func aSystemVoiceSplitsCompoundWordsInRepliesIPAWordsAndPronunciationPreviews() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "CorpusGraph", replacement: "kˈɔɹpəs ɡɹˈæf", mode: .phonetic)]
+
+        loop.speak("The CorpusGraph uses URLSession.")
+        // The system voice is given the reply as it starts; it needn't be heard.
+        loop.stopSpeaking()
+        loop.preview(asWritten: "MuseApplication")
+        loop.stopPreview()
+
+        #expect(bed.systemVoiceTexts == ["The Corpus Graph uses URL Session.", "Muse Application"])
+    }
+
     @Test func aSystemVoiceSaysIPAWordsAsWritten() async throws {
         let bed = VoiceTestBed()
         let loop = try await startedLoop(on: bed)

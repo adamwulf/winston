@@ -12,8 +12,12 @@ import Foundation
 ///
 /// Only a word that starts with a capital is split: "iPhone", "macOS" and "eBay" stay as they
 /// are, as do words in capitals ("NASA") and ordinary words. So does a word that would leave a
-/// letter by itself, which is more likely an abbreviation than words: "PhD", "GHz", "OAuth",
-/// "LaTeX". A word with a letter or digit outside ASCII stays as it is too.
+/// letter by itself, or a letter and the "s" that ends the word, which is more likely an
+/// abbreviation than words: "PhD", "PhDs", "GHz", "OAuth", "LaTeX". A word with a letter or digit
+/// outside ASCII stays as it is too.
+///
+/// Every voice is given its text split, just before it says it, so a pronunciation still matches
+/// a compound as it is written.
 enum CompoundWords {
     /// `text` with its compound words split into their words, a space between.
     static func split(_ text: String) -> String {
@@ -33,7 +37,11 @@ enum CompoundWords {
             start = index
         }
         words.append(String(letters[start...]))
-        guard !words.contains(where: { $0.count == 1 }) else { return [String(word)] }
+        guard words.count > 1 else { return words }
+        let last = words[words.count - 1]
+        guard !words.contains(where: { $0.count == 1 }), !(last.count == 2 && last.hasSuffix("s")) else {
+            return [String(word)]
+        }
         return words
     }
 

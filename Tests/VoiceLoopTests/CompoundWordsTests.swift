@@ -25,8 +25,8 @@ import Testing
     @Test func anSThatEndsTheWordMakesAnAcronymPlural() {
         #expect(say("APIs and URLs") == "APIs and URLs")
         #expect(say("MyAPIs") == "My APIs")
-        // Not at the end, it starts a word.
-        #expect(say("UISwitch") == "UI Switch")
+        // An "s" that doesn't end the word starts one with the capital before it.
+        #expect(say("AVAsset") == "AV Asset")
     }
 
     @Test func aCapitalAfterADigitStartsAWord() {
@@ -57,6 +57,8 @@ import Testing
     @Test func aWordThatWouldLeaveALetterByItselfStays() {
         let text = "a PhD, 3 GHz, OAuth and LaTeX"
         #expect(say(text) == text)
+        // Or a letter and the "s" that ends the word.
+        #expect(say("PhDs and NaNs") == "PhDs and NaNs")
     }
 
     @Test func aWordWithALetterOutsideASCIIStays() {
