@@ -718,7 +718,7 @@ public final class VoiceLoop {
     }
 
     /// Queues `text` to be spoken after anything already queued. Strips markdown/code first, then
-    /// applies `pronunciations`.
+    /// applies `pronunciations`, then splits compound words (`CompoundWords`).
     ///
     /// Ignored while the loop is off, except that replies still queue while a resume after an
     /// interruption is pending (a failed foreground retry shows `.off`). Also queued while it is
@@ -727,7 +727,14 @@ public final class VoiceLoop {
     /// held or not yet sent.
     public func speak(_ text: String) {
         guard state != .off || isStarting || resumeAfterInterruption else { return }
-        enqueue(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
+        enqueue(speech(for: text))
+    }
+
+    /// What is said for a message's `text`: markdown and code stripped, `pronunciations` applied,
+    /// and compound words such as "CorpusGraph" split into their words. Split last, so a
+    /// pronunciation still matches a compound as it is written.
+    private func speech(for text: String) -> String {
+        CompoundWords.split(pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
     }
 
     /// Queues `spoken`, text ready to say as it is, after anything already queued. Nothing if it
@@ -747,13 +754,13 @@ public final class VoiceLoop {
 
     /// Says `text` right away in the current voice, speed and pitch, for trying them in settings or
     /// hearing a message again, cutting off an earlier preview. Strips markdown/code first, then
-    /// applies `pronunciations`, as `speak(_:)` does. While the loop is running it also stops any
+    /// applies `pronunciations` and splits compound words, as `speak(_:)` does. While the loop is running it also stops any
     /// reply being spoken and drops queued ones, and it plays through the loop's engine, so echo
     /// cancellation (or half-duplex) keeps it out of the transcript. Otherwise it plays straight
     /// to the speaker on an engine of its own. Like a reply, it uses the system voice for a Kokoro
     /// voice whose model isn't ready.
     public func preview(_ text: String) {
-        preview(spoken: pronunciationReplacer.replaced(in: SpokenText.speakable(text)))
+        preview(spoken: speech(for: text))
     }
 
     /// Says `text` exactly as written, as `preview(_:)` otherwise does, for hearing a pronunciation

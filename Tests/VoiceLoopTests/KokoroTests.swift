@@ -189,6 +189,18 @@ struct KokoroSpeakingTests {
         #expect(bed.kokoro.requests.map(\.text) == ["The Jason is valid, and so is the X M L.", "Not json."])
     }
 
+    @Test func compoundWordsAreSplitAfterPronunciationsAreSaid() async throws {
+        let bed = VoiceTestBed()
+        bed.kokoro.dictionary = ["the", "uses"]
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+        loop.pronunciations = [Pronunciation(word: "MuseApplication", replacement: "Muse app")]
+
+        _ = await framesPlayed(saying: "The CorpusGraph uses URLSession. MuseApplication too.", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests.map(\.text) == ["The Corpus Graph uses U R L Session.", "Muse app too."])
+    }
+
     @Test func kokoroIsGivenAnIPAWordAsAPlaceholderWithItsPhonemes() async throws {
         let bed = VoiceTestBed()
         bed.kokoro.dictionary = ["reads"]
