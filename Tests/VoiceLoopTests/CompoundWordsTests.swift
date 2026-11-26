@@ -57,8 +57,9 @@ import Testing
     @Test func aWordThatWouldLeaveALetterByItselfStays() {
         let text = "a PhD, 3 GHz, OAuth and LaTeX"
         #expect(say(text) == text)
-        // Or a letter and the "s" that ends the word.
+        // Or, in a short word, a letter and the "s" that ends the word.
         #expect(say("PhDs and NaNs") == "PhDs and NaNs")
+        #expect(say("SaveAs and ContactUs") == "Save As and Contact Us")
     }
 
     @Test func aWordWithALetterOutsideASCIIStays() {
