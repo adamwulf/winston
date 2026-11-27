@@ -201,6 +201,16 @@ struct KokoroSpeakingTests {
         #expect(bed.kokoro.requests.map(\.text) == ["The Corpus Graph uses U R L Session.", "Muse app too."])
     }
 
+    @Test func kokoroIsGivenDashesAsSpacesButNumbersStillReadTheirOwn() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await loopSpeakingWithKokoro(on: bed)
+        defer { loop.stop() }
+
+        _ = await framesPlayed(saying: "A well-known fix—finally. It took 3-5 days.", by: loop, on: bed)
+
+        #expect(bed.kokoro.requests.map(\.text) == ["A well known fix finally.", "It took three to five days."])
+    }
+
     @Test func kokoroIsGivenAnIPAWordAsAPlaceholderWithItsPhonemes() async throws {
         let bed = VoiceTestBed()
         bed.kokoro.dictionary = ["reads"]
@@ -262,6 +272,18 @@ struct KokoroSpeakingTests {
         loop.stopPreview()
 
         #expect(bed.systemVoiceTexts == ["The Corpus Graph uses URL Session.", "Muse Application"])
+    }
+
+    @Test func aSystemVoiceIsGivenDashesAsSpaces() async throws {
+        let bed = VoiceTestBed()
+        let loop = try await startedLoop(on: bed)
+        defer { loop.stop() }
+
+        loop.speak("A well-known fix—finally, in 3-5 days.")
+        // The system voice is given the reply as it starts; it needn't be heard.
+        loop.stopSpeaking()
+
+        #expect(bed.systemVoiceTexts == ["A well known fix finally, in 3-5 days."])
     }
 
     @Test func aSystemVoiceSaysIPAWordsAsWritten() async throws {
