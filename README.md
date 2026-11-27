@@ -600,9 +600,10 @@ which every voice has changed. Compound words are split into their words
 as "URL Session". Only a word that starts with a capital is split, so "iPhone"
 and "macOS" stay as they are. Hyphens, en dashes and em dashes are spaces
 (`SpokenDashes`), so a voice pauses a moment at each: "well-known" is said as
-"well known". A hyphen or en dash next to a number ("-5", "1-5", "-$20",
+"well known". A lone hyphen or en dash next to a number ("-5", "1-5", "-$20",
 "$80k–$120k") stays, since it may be a minus sign, a range or a phone number,
-which a system voice reads itself and `KokoroNumbers` reads for Kokoro. Both
+which a system voice reads itself and `KokoroNumbers` reads for Kokoro; two
+together ("a while--3 hours") stand for an em dash and are spaces. Both
 changes are made just before a voice is given the text, so the message as
 shown and sent keeps them.
 
