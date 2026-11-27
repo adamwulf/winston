@@ -483,7 +483,8 @@ struct PronunciationPreviewTests {
 
         #expect(model.voiceLoop.state == .speaking)
         #expect(await eventually { model.voiceLoop.state == .listening(partial: "") })
-        #expect(harness.bed.kokoro.requests.map(\.text) == ["*Ko*-ko-ro", "*Ko*-ko-ro"])
+        // Its hyphens are spaces, as every voice has them (`SpokenDashes`).
+        #expect(harness.bed.kokoro.requests.map(\.text) == ["*Ko* ko ro", "*Ko* ko ro"])
     }
 
     @Test func theWordIsSaidTrimmedAndAsWrittenNotReplacedByItsOwnPronunciation() async throws {
