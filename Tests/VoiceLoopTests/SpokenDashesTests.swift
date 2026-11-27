@@ -18,4 +18,8 @@ import Testing
         // A sign with no digit after it starts no number.
         #expect(SpokenDashes.spaced("pay-$ later, it-.") == "pay $ later, it .")
     }
+
+    @Test func dashesTogetherAreSpacesEvenNextToANumber() {
+        #expect(SpokenDashes.spaced("a while--3 hours, the total--$45") == "a while  3 hours, the total  $45")
+    }
 }

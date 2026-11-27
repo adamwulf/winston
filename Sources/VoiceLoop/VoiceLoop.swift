@@ -2063,7 +2063,7 @@ public final class VoiceLoop {
                 do {
                     // Compound words split and dashes spaced, as every voice has them, then
                     // numbers: their rules read the words around them as written, and the
-                    // dashes next to digits, which stay for them. All four leave placeholders as
+                    // dashes next to numbers, which stay for them. All four leave placeholders as
                     // they are.
                     let spoken = acronyms.spelledOut(
                         numbers.spelledOut(SpokenDashes.spaced(CompoundWords.split(sentence)))
