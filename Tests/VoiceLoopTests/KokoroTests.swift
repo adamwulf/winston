@@ -206,9 +206,12 @@ struct KokoroSpeakingTests {
         let loop = try await loopSpeakingWithKokoro(on: bed)
         defer { loop.stop() }
 
-        _ = await framesPlayed(saying: "A well-known fix—finally. It took 3-5 days.", by: loop, on: bed)
+        _ = await framesPlayed(saying: "A well-known fix—finally. It took 3-5 days and cost $80k–$120k.", by: loop, on: bed)
 
-        #expect(bed.kokoro.requests.map(\.text) == ["A well known fix finally.", "It took three to five days."])
+        #expect(bed.kokoro.requests.map(\.text) == [
+            "A well known fix finally.",
+            "It took three to five days and cost eighty thousand dollars to one hundred twenty thousand dollars.",
+        ])
     }
 
     @Test func kokoroIsGivenAnIPAWordAsAPlaceholderWithItsPhonemes() async throws {

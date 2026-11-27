@@ -10,9 +10,12 @@ import Testing
         #expect(SpokenDashes.spaced("wait - what") == "wait   what")
     }
 
-    @Test func aHyphenOrEnDashNextToADigitStays() {
+    @Test func aHyphenOrEnDashNextToANumberStays() {
         #expect(SpokenDashes.spaced("-5 to 1-5, call 555-1234") == "-5 to 1-5, call 555-1234")
         #expect(SpokenDashes.spaced("COVID-19 and pages 3–7") == "COVID-19 and pages 3–7")
+        #expect(SpokenDashes.spaced("-$20, $80k–$120k, -.5, '80s-'90s") == "-$20, $80k–$120k, -.5, '80s-'90s")
         #expect(SpokenDashes.spaced("2020—2021") == "2020 2021")
+        // A sign with no digit after it starts no number.
+        #expect(SpokenDashes.spaced("pay-$ later, it-.") == "pay $ later, it .")
     }
 }

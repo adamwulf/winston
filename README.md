@@ -594,15 +594,16 @@ letter at a time (`KokoroAcronyms`). An acronym the dictionary has as a word
 ("NASA"), or a word in capitals for emphasis ("NOT"), stays as it is.
 `LiveKokoro` reads the dictionary's words from the loaded model's folder:
 `us_gold.json` and `us_silver.json`, the same files in both repositories.
-System voices get the text as written, but for compound words: every voice is
-given those split into their words (`CompoundWords`), so "CorpusGraph" is said
-as "Corpus Graph" and "URLSession" as "URL Session". Only a word that starts
-with a capital is split, so "iPhone" and "macOS" stay as they are. Every voice
-is also given hyphens, en dashes and em dashes as spaces (`SpokenDashes`), so
-it pauses a moment at each: "well-known" is said as "well known". A hyphen or
-en dash next to a digit stays, since it may be a minus sign, a range or a phone
-number, which a system voice reads itself and `KokoroNumbers` reads for Kokoro.
-Both changes are made just before a voice is given the text, so the message as
+System voices get the text as written, but for compound words and dashes,
+which every voice has changed. Compound words are split into their words
+(`CompoundWords`), so "CorpusGraph" is said as "Corpus Graph" and "URLSession"
+as "URL Session". Only a word that starts with a capital is split, so "iPhone"
+and "macOS" stay as they are. Hyphens, en dashes and em dashes are spaces
+(`SpokenDashes`), so a voice pauses a moment at each: "well-known" is said as
+"well known". A hyphen or en dash next to a number ("-5", "1-5", "-$20",
+"$80k–$120k") stays, since it may be a minus sign, a range or a phone number,
+which a system voice reads itself and `KokoroNumbers` reads for Kokoro. Both
+changes are made just before a voice is given the text, so the message as
 shown and sent keeps them.
 
 Settings → Pronunciations lists words said differently: each word, matched only
